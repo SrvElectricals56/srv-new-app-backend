@@ -16,6 +16,8 @@ enum AdminRole {
 enum UserRole {
   dealer
   electrician
+  user
+  counterboy
 }
 
 enum MemberTier {
@@ -190,6 +192,7 @@ model Dealer {
   darkMode           Boolean     @default(false)
   pushEnabled        Boolean     @default(true)
   electricians       Electrician[]
+  counterboys        CounterBoy[]
 
   @@map("dealers")
 }
@@ -640,4 +643,78 @@ model UserQrCode {
   updatedAt   DateTime @updatedAt
 
   @@map("user_qr_codes")
+}
+
+model AppUser {
+  id                 String     @id @default(uuid())
+  name               String
+  phone              String     @unique
+  userCode           String     @unique
+  email              String?
+  profileImage       String?
+  city               String?
+  state              String?
+  district           String?
+  pincode            String?
+  address            String?
+  tier               MemberTier @default(Silver)
+  totalPoints        Int        @default(0)
+  walletBalance      Int        @default(0)
+  totalRedemptions   Int        @default(0)
+  status             UserStatus @default(pending)
+  bankLinked         Boolean    @default(false)
+  upiId              String?
+  bankAccount        String?
+  ifsc               String?
+  bankName           String?
+  accountHolderName  String?
+  kycStatus          KYCStatus  @default(not_submitted)
+  aadharNumber       String?
+  panNumber          String?
+  aadharDocument     String?
+  panDocument        String?
+  kycRejectionReason String?
+  passwordHash       String?
+  language           String?
+  darkMode           Boolean    @default(false)
+  pushEnabled        Boolean    @default(true)
+  lastActivityAt     DateTime?
+  joinedDate         DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  @@map("app_users")
+}
+
+model CounterBoy {
+  id                 String     @id @default(uuid())
+  name               String
+  phone              String     @unique
+  counterboyCode     String     @unique
+  email              String?
+  profileImage       String?
+  city               String?
+  state              String?
+  district           String?
+  pincode            String?
+  address            String?
+  dealerId           String?
+  dealer             Dealer?    @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  totalScans         Int        @default(0)
+  totalPoints        Int        @default(0)
+  status             UserStatus @default(pending)
+  kycStatus          KYCStatus  @default(not_submitted)
+  aadharNumber       String?
+  panNumber          String?
+  aadharDocument     String?
+  panDocument        String?
+  kycRejectionReason String?
+  passwordHash       String?
+  language           String?
+  darkMode           Boolean    @default(false)
+  pushEnabled        Boolean    @default(true)
+  lastActivityAt     DateTime?
+  joinedDate         DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  @@map("counterboys")
 }

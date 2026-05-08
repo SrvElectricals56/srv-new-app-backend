@@ -16,6 +16,8 @@ import { Scan } from '../../database/entities/scan.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
@@ -45,6 +47,10 @@ export class MobileService {
     private electricianRepository: Repository<Electrician>,
     @InjectRepository(Dealer)
     private dealerRepository: Repository<Dealer>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterBoyRepository: Repository<CounterBoy>,
     @InjectRepository(Redemption)
     private redemptionRepository: Repository<Redemption>,
     @InjectRepository(Settings)
@@ -53,6 +59,67 @@ export class MobileService {
     private supportTicketRepository: Repository<SupportTicket>,
     private readonly tierService: TierService,
   ) {}
+
+  private normalizeRole(role: string): UserRole {
+    switch (role) {
+      case UserRole.ELECTRICIAN:
+      case UserRole.DEALER:
+      case UserRole.USER:
+      case UserRole.COUNTERBOY:
+        return role;
+      default:
+        return UserRole.DEALER;
+    }
+  }
+
+  private async getUserByRole(userId: string, role: string) {
+    switch (this.normalizeRole(role)) {
+      case UserRole.ELECTRICIAN:
+        return this.electricianRepository.findOne({ where: { id: userId } });
+      case UserRole.DEALER:
+        return this.dealerRepository.findOne({ where: { id: userId } });
+      case UserRole.USER:
+        return this.appUserRepository.findOne({ where: { id: userId } });
+      case UserRole.COUNTERBOY:
+        return this.counterBoyRepository.findOne({ where: { id: userId } });
+    }
+  }
+
+  private async updateUserByRole(userId: string, role: string, data: Record<string, any>) {
+    switch (this.normalizeRole(role)) {
+      case UserRole.ELECTRICIAN:
+        return this.electricianRepository.update(userId, data);
+      case UserRole.DEALER:
+        return this.dealerRepository.update(userId, data);
+      case UserRole.USER:
+        return this.appUserRepository.update(userId, data);
+      case UserRole.COUNTERBOY:
+        return this.counterBoyRepository.update(userId, data);
+    }
+  }
+
+  private async findReceiverByPhone(phone: string) {
+    const electrician = await this.electricianRepository.findOne({ where: { phone } });
+    if (electrician) return { user: electrician, role: UserRole.ELECTRICIAN };
+
+    const dealer = await this.dealerRepository.findOne({ where: { phone } });
+    if (dealer) return { user: dealer, role: UserRole.DEALER };
+
+    const appUser = await this.appUserRepository.findOne({ where: { phone } });
+    if (appUser) return { user: appUser, role: UserRole.USER };
+
+    const counterBoy = await this.counterBoyRepository.findOne({ where: { phone } });
+    if (counterBoy) return { user: counterBoy, role: UserRole.COUNTERBOY };
+
+    return null;
+  }
+
+  private getReferralCode(user: any, role: UserRole, userId: string) {
+    if (role === UserRole.ELECTRICIAN) return user?.electricianCode ?? userId.slice(0, 8).toUpperCase();
+    if (role === UserRole.DEALER) return user?.dealerCode ?? userId.slice(0, 8).toUpperCase();
+    if (role === UserRole.USER) return user?.userCode ?? userId.slice(0, 8).toUpperCase();
+    return user?.counterboyCode ?? userId.slice(0, 8).toUpperCase();
+  }
 
   // ── Products ───────────────────────────────────────────────────────────────
 
@@ -164,6 +231,7 @@ export class MobileService {
       referralEnabled: map['referralEnabled'] !== 'false',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
+      catalogPdfUrl: map['catalogPdfUrl'] ?? null,
     };
   }
 
@@ -334,17 +402,9 @@ export class MobileService {
     if (existingScan) throw new ConflictException('This QR code has already been scanned by you');
 
     const points = qr.product.points;
-    const userRole = role === 'electrician' ? UserRole.ELECTRICIAN : UserRole.DEALER;
-
-    let user: any;
-    let userName: string;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { id: userId } });
-      userName = user?.name ?? 'Unknown';
-    } else {
-      user = await this.dealerRepository.findOne({ where: { id: userId } });
-      userName = user?.name ?? 'Unknown';
-    }
+    const userRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, role);
+    const userName = user?.name ?? 'Unknown';
 
     const scan = this.scanRepository.create({
       userId,
@@ -369,27 +429,31 @@ export class MobileService {
       totalScanned: (qr.product.totalScanned ?? 0) + 1,
     });
 
-    if (role === 'electrician' && user) {
-      const newPoints = (user.totalPoints ?? 0) + points;
-      const newScans = (user.totalScans ?? 0) + 1;
-      const newWallet = (user.walletBalance ?? 0) + points;
-      const newTier = this.tierService.calculateElectricianTier(newPoints);
-
-      await this.electricianRepository.update(userId, {
+    if (user) {
+      const userRecord = user as any;
+      const newPoints = (userRecord.totalPoints ?? 0) + points;
+      const newScans = (userRecord.totalScans ?? 0) + 1;
+      const newWallet = (userRecord.walletBalance ?? 0) + points;
+      const updateData: Record<string, any> = {
         totalPoints: newPoints,
         totalScans: newScans,
         walletBalance: newWallet,
-        tier: newTier as any,
         lastActivityAt: new Date(),
-      });
+      };
+
+      if (userRole === UserRole.ELECTRICIAN || userRole === UserRole.COUNTERBOY || userRole === UserRole.USER) {
+        updateData.tier = this.tierService.calculateElectricianTier(newPoints) as any;
+      }
+
+      await this.updateUserByRole(userId, role, updateData);
 
       const walletTx = this.walletRepository.create({
         userId,
-        userRole: UserRole.ELECTRICIAN,
+        userRole,
         type: 'credit' as any,
         source: 'scan' as any,
         amount: points,
-        balanceBefore: user.walletBalance ?? 0,
+        balanceBefore: userRecord.walletBalance ?? 0,
         balanceAfter: newWallet,
         description: `Scan: ${qr.product.name}`,
         referenceId: scan.id,
@@ -426,13 +490,8 @@ export class MobileService {
 
   async getWallet(userId: string, role: string, page: number = 1, limit: number = 20) {
     const skip = (page - 1) * limit;
-
-    let user: any;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { id: userId } });
-    } else {
-      user = await this.dealerRepository.findOne({ where: { id: userId } });
-    }
+    const normalizedRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, role);
 
     const [transactions, total] = await this.walletRepository.findAndCount({
       where: { userId },
@@ -442,9 +501,9 @@ export class MobileService {
     });
 
     return {
-      balance: user?.walletBalance ?? 0,
-      totalPoints: role === 'electrician' ? (user?.totalPoints ?? 0) : 0,
-      totalScans: role === 'electrician' ? (user?.totalScans ?? 0) : 0,
+      balance: (user as any)?.walletBalance ?? 0,
+      totalPoints: normalizedRole === UserRole.DEALER ? 0 : ((user as any)?.totalPoints ?? 0),
+      totalScans: (user as any)?.totalScans ?? 0,
       transactions: {
         data: transactions,
         total,
@@ -467,11 +526,7 @@ export class MobileService {
     };
     if (data.upiId) updateData.upiId = data.upiId;
 
-    if (role === 'electrician') {
-      await this.electricianRepository.update(userId, updateData);
-    } else {
-      await this.dealerRepository.update(userId, updateData);
-    }
+    await this.updateUserByRole(userId, role, updateData);
     return { message: 'Bank account saved successfully' };
   }
 
@@ -482,12 +537,8 @@ export class MobileService {
     });
     if (!product) throw new NotFoundException('Reward scheme not found');
 
-    let user: any;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { id: userId } });
-    } else {
-      user = await this.dealerRepository.findOne({ where: { id: userId } });
-    }
+    const normalizedRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, role);
     if (!user) throw new NotFoundException('User not found');
 
     const pointsRequired = product.points ?? 0;
@@ -495,11 +546,10 @@ export class MobileService {
       throw new BadRequestException('Insufficient points for this redemption');
     }
 
-    const userRole = role === 'electrician' ? UserRole.ELECTRICIAN : UserRole.DEALER;
     const redemption = this.redemptionRepository.create({
       userId,
       userName: user.name,
-      role: userRole,
+      role: normalizedRole,
       type: 'gift',
       points: pointsRequired,
       amount: product.mrp ?? 0,
@@ -515,44 +565,28 @@ export class MobileService {
   }
 
   async transferPoints(userId: string, role: string, data: { receiverPhone: string; points: number }) {
-    let sender: any;
-    if (role === 'electrician') {
-      sender = await this.electricianRepository.findOne({ where: { id: userId } });
-    } else {
-      sender = await this.dealerRepository.findOne({ where: { id: userId } });
-    }
+    const normalizedRole = this.normalizeRole(role);
+    const sender = await this.getUserByRole(userId, role);
     if (!sender) throw new NotFoundException('Sender not found');
     if ((sender.walletBalance ?? 0) < data.points) {
       throw new BadRequestException('Insufficient balance');
     }
 
-    // Find receiver
-    const receiver = await this.electricianRepository.findOne({ where: { phone: data.receiverPhone } })
-      ?? await this.dealerRepository.findOne({ where: { phone: data.receiverPhone } });
-    if (!receiver) throw new NotFoundException('Receiver not found');
+    const receiverData = await this.findReceiverByPhone(data.receiverPhone);
+    if (!receiverData) throw new NotFoundException('Receiver not found');
+    const receiver = receiverData.user;
 
     // Deduct from sender
     const senderNewBalance = (sender.walletBalance ?? 0) - data.points;
-    if (role === 'electrician') {
-      await this.electricianRepository.update(userId, { walletBalance: senderNewBalance });
-    } else {
-      await this.dealerRepository.update(userId, { walletBalance: senderNewBalance });
-    }
+    await this.updateUserByRole(userId, role, { walletBalance: senderNewBalance });
 
-    // Credit to receiver (determine receiver role)
-    const receiverIsElectrician = await this.electricianRepository.findOne({ where: { phone: data.receiverPhone } });
     const receiverNewBalance = (receiver.walletBalance ?? 0) + data.points;
-    if (receiverIsElectrician) {
-      await this.electricianRepository.update(receiver.id, { walletBalance: receiverNewBalance });
-    } else {
-      await this.dealerRepository.update(receiver.id, { walletBalance: receiverNewBalance });
-    }
+    await this.updateUserByRole(receiver.id, receiverData.role, { walletBalance: receiverNewBalance });
 
     // Log transactions
-    const userRole = role === 'electrician' ? UserRole.ELECTRICIAN : UserRole.DEALER;
     await this.walletRepository.save(this.walletRepository.create({
       userId,
-      userRole,
+      userRole: normalizedRole,
       type: TransactionType.DEBIT,
       source: TransactionSource.TRANSFER,
       amount: data.points,
@@ -692,14 +726,8 @@ export class MobileService {
   async createSupportTicket(userId: string, role: string, data: {
     subject: string; comment: string; photoUrl?: string;
   }) {
-    let user: any;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { id: userId } });
-    } else {
-      user = await this.dealerRepository.findOne({ where: { id: userId } });
-    }
-
-    const userRole = role === 'electrician' ? UserRole.ELECTRICIAN : UserRole.DEALER;
+    const user = await this.getUserByRole(userId, role);
+    const userRole = this.normalizeRole(role);
     const ticket = this.supportTicketRepository.create({
       userId,
       userName: user?.name ?? 'Unknown',
@@ -717,16 +745,9 @@ export class MobileService {
   // ── Referral ───────────────────────────────────────────────────────────────
 
   async getReferral(userId: string, role: string) {
-    let user: any;
-    let code: string;
-
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { id: userId } });
-      code = user?.electricianCode ?? userId.slice(0, 8).toUpperCase();
-    } else {
-      user = await this.dealerRepository.findOne({ where: { id: userId } });
-      code = user?.dealerCode ?? userId.slice(0, 8).toUpperCase();
-    }
+    const normalizedRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, role);
+    const code = this.getReferralCode(user, normalizedRole, userId);
 
     return {
       code,

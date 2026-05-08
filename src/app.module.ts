@@ -9,6 +9,8 @@ import { Admin } from './database/entities/admin.entity';
 import { Banner } from './database/entities/banner.entity';
 import { Dealer } from './database/entities/dealer.entity';
 import { Electrician } from './database/entities/electrician.entity';
+import { AppUser } from './database/entities/app-user.entity';
+import { CounterBoy } from './database/entities/counterboy.entity';
 import { Notification } from './database/entities/notification.entity';
 import { Offer } from './database/entities/offer.entity';
 import { PointsConfig } from './database/entities/points-config.entity';
@@ -22,6 +24,7 @@ import { Testimonial } from './database/entities/testimonial.entity';
 import { Wallet } from './database/entities/wallet.entity';
 import { GiftOrder } from './database/entities/gift-order.entity';
 import { ProductCategory } from './database/entities/product-category.entity';
+import { Play } from './database/entities/play.entity';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -47,6 +50,9 @@ import { MobileAuthModule } from './modules/mobile-auth/mobile-auth.module';
 import { MobileModule } from './modules/mobile/mobile.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { ProductCategoryModule } from './modules/product-category/product-category.module';
+import { AppUserModule } from './modules/app-user/app-user.module';
+import { CounterBoyModule } from './modules/counterboy/counterboy.module';
+import { PlayModule } from './modules/play/play.module';
 
 @Module({
   imports: [
@@ -67,9 +73,9 @@ import { ProductCategoryModule } from './modules/product-category/product-catego
         password: configService.get<string>('DB_PASSWORD', ''),
         database: configService.get<string>('DB_DATABASE', 'srv_admin'),
         entities: [
-          Admin, Banner, Dealer, Electrician, Notification, Offer,
-          PointsConfig, Product, QrCode, Redemption, Scan, Settings,
-          SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory,
+          Admin, Banner, Dealer, Electrician, AppUser, CounterBoy,
+          Notification, Offer, PointsConfig, Product, QrCode, Redemption,
+          Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play,
         ],
         synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
         logging: configService.get<string>('DB_LOGGING') === 'true',
@@ -118,6 +124,9 @@ import { ProductCategoryModule } from './modules/product-category/product-catego
     MobileModule,
     UploadModule,
     ProductCategoryModule,
+    AppUserModule,
+    CounterBoyModule,
+    PlayModule,
   ],
 })
 export class AppModule {}

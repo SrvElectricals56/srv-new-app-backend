@@ -6,6 +6,8 @@ import { DebitWalletDto } from './dto/debit-wallet.dto';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TransactionType, TransactionSource, UserRole } from '../../common/enums';
 
 @Injectable()
@@ -17,6 +19,10 @@ export class WalletService {
     private electricianRepository: Repository<Electrician>,
     @InjectRepository(Dealer)
     private dealerRepository: Repository<Dealer>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterBoyRepository: Repository<CounterBoy>,
   ) {}
 
   async getTransactions(
@@ -149,37 +155,57 @@ export class WalletService {
   }
 
   private async getUser(userId: string, userRole: UserRole) {
-    if (userRole === UserRole.ELECTRICIAN) {
-      const electrician = await this.electricianRepository.findOne({ where: { id: userId } });
-      if (!electrician) {
-        throw new NotFoundException('Electrician not found');
+    switch (userRole) {
+      case UserRole.ELECTRICIAN: {
+        const electrician = await this.electricianRepository.findOne({ where: { id: userId } });
+        if (!electrician) throw new NotFoundException('Electrician not found');
+        return electrician;
       }
-      return electrician;
-    } else {
-      const dealer = await this.dealerRepository.findOne({ where: { id: userId } });
-      if (!dealer) {
-        throw new NotFoundException('Dealer not found');
+      case UserRole.DEALER: {
+        const dealer = await this.dealerRepository.findOne({ where: { id: userId } });
+        if (!dealer) throw new NotFoundException('Dealer not found');
+        return dealer;
       }
-      return dealer;
+      case UserRole.USER: {
+        const user = await this.appUserRepository.findOne({ where: { id: userId } });
+        if (!user) throw new NotFoundException('User not found');
+        return user;
+      }
+      case UserRole.COUNTERBOY: {
+        const counterBoy = await this.counterBoyRepository.findOne({ where: { id: userId } });
+        if (!counterBoy) throw new NotFoundException('Counter boy not found');
+        return counterBoy;
+      }
+      default:
+        throw new NotFoundException('User not found');
     }
   }
 
   private async updateUserBalance(userId: string, userRole: UserRole, newBalance: number, pointsDelta?: number) {
-    if (userRole === UserRole.ELECTRICIAN) {
-      const updateData: any = { walletBalance: newBalance };
-      if (pointsDelta !== undefined) {
-        // Also update totalPoints to keep them in sync
-        const electrician = await this.electricianRepository.findOne({ where: { id: userId } });
-        if (electrician) {
-          const newPoints = Math.max(0, (electrician.totalPoints ?? 0) + pointsDelta);
-          updateData.totalPoints = newPoints;
-          // Recalculate tier based on new points
-          updateData.tier = this.calculateTier(newPoints);
-        }
+    const updateData: any = { walletBalance: newBalance };
+
+    if (pointsDelta !== undefined && userRole !== UserRole.DEALER) {
+      const user = await this.getUser(userId, userRole);
+      const newPoints = Math.max(0, ((user as any).totalPoints ?? 0) + pointsDelta);
+      updateData.totalPoints = newPoints;
+      if ('tier' in user) {
+        updateData.tier = this.calculateTier(newPoints);
       }
-      await this.electricianRepository.update(userId, updateData);
-    } else {
-      await this.dealerRepository.update(userId, { walletBalance: newBalance });
+    }
+
+    switch (userRole) {
+      case UserRole.ELECTRICIAN:
+        await this.electricianRepository.update(userId, updateData);
+        return;
+      case UserRole.DEALER:
+        await this.dealerRepository.update(userId, { walletBalance: newBalance });
+        return;
+      case UserRole.USER:
+        await this.appUserRepository.update(userId, updateData);
+        return;
+      case UserRole.COUNTERBOY:
+        await this.counterBoyRepository.update(userId, updateData);
+        return;
     }
   }
 

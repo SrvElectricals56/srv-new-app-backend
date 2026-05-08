@@ -13,6 +13,8 @@ import { Scan } from '../../database/entities/scan.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
@@ -22,7 +24,7 @@ import { TierModule } from '../../common/services/tier.module';
   imports: [
     TypeOrmModule.forFeature([
       Product, Banner, Notification, Offer, Testimonial,
-      QrCode, Scan, Wallet, Electrician, Dealer, Redemption,
+      QrCode, Scan, Wallet, Electrician, Dealer, AppUser, CounterBoy, Redemption,
       Settings, SupportTicket,
     ]),
     MobileAuthModule,

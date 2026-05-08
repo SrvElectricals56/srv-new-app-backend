@@ -12,7 +12,9 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
-import { MobileLoginDto, VerifyOtpDto } from './dto/mobile-login.dto';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
 import { ElectricianSubCategory, UserStatus } from '../../common/enums';
 
 // In-memory OTP store (production mein Redis use karein)
@@ -25,9 +27,15 @@ export class MobileAuthService {
     private electricianRepository: Repository<Electrician>,
     @InjectRepository(Dealer)
     private dealerRepository: Repository<Dealer>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterboyRepository: Repository<CounterBoy>,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   private generateOtp(): string {
     if (this.configService.get('NODE_ENV') === 'development') {
@@ -45,19 +53,67 @@ export class MobileAuthService {
     return { accessToken, refreshToken };
   }
 
+  private async hashPassword(password?: string) {
+    const trimmed = password?.trim();
+    if (!trimmed) return null;
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(trimmed, salt);
+  }
+
+  private async hydrateCounterBoyDealer<T extends { dealerId?: string | null }>(counterboy: T | null) {
+    if (!counterboy) return null;
+    if (!counterboy.dealerId) return { ...counterboy, dealer: null };
+
+    const dealer = await this.dealerRepository.findOne({
+      where: { id: String(counterboy.dealerId) },
+    });
+
+    return { ...counterboy, dealer };
+  }
+
+  /** Find user entity by phone + role */
+  private async findUserByPhone(phone: string, role: MobileUserRole): Promise<any> {
+    switch (role) {
+      case 'electrician':
+        return this.electricianRepository.findOne({ where: { phone }, relations: ['dealer'] });
+      case 'dealer':
+        return this.dealerRepository.findOne({ where: { phone } });
+      case 'user':
+        return this.appUserRepository.findOne({ where: { phone } });
+      case 'counterboy':
+        return this.hydrateCounterBoyDealer(
+          await this.counterboyRepository.findOne({ where: { phone } }),
+        );
+    }
+  }
+
+  /** Update lastActivityAt for any role */
+  private async touchActivity(id: string, role: MobileUserRole) {
+    const now = new Date();
+    switch (role) {
+      case 'electrician': await this.electricianRepository.update(id, { lastActivityAt: now }); break;
+      case 'dealer':      await this.dealerRepository.update(id, { lastActivityAt: now }); break;
+      case 'user':        await this.appUserRepository.update(id, { lastActivityAt: now }); break;
+      case 'counterboy':  await this.counterboyRepository.update(id, { lastActivityAt: now }); break;
+    }
+  }
+
   // ── Login OTP ──────────────────────────────────────────────────────────────
 
   async sendOtp(dto: MobileLoginDto) {
     const { phone, role } = dto;
+    const user = await this.findUserByPhone(phone, role);
 
-    if (role === 'electrician') {
-      const electrician = await this.electricianRepository.findOne({ where: { phone } });
-      if (!electrician) throw new NotFoundException('Electrician not registered. Please contact your dealer.');
-      if (electrician.status === 'suspended') throw new UnauthorizedException('Account is suspended. Contact support.');
-    } else {
-      const dealer = await this.dealerRepository.findOne({ where: { phone } });
-      if (!dealer) throw new NotFoundException('Dealer not registered. Please contact SRV admin.');
-      if (dealer.status === 'suspended') throw new UnauthorizedException('Account is suspended. Contact support.');
+    if (!user) {
+      const roleLabel = role === 'electrician' ? 'Electrician not registered. Please contact your dealer.'
+        : role === 'dealer' ? 'Dealer not registered. Please contact SRV admin.'
+        : role === 'user' ? 'User not registered. Please sign up first.'
+        : 'Counter boy not registered. Please contact your dealer.';
+      throw new NotFoundException(roleLabel);
+    }
+
+    if (user.status === 'suspended') {
+      throw new UnauthorizedException('Account is suspended. Contact support.');
     }
 
     const otp = this.generateOtp();
@@ -85,19 +141,10 @@ export class MobileAuthService {
     if (stored.otp !== otp) throw new UnauthorizedException('Invalid OTP.');
     otpStore.delete(key);
 
-    let user: any;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { phone }, relations: ['dealer'] });
-    } else {
-      user = await this.dealerRepository.findOne({ where: { phone } });
-    }
+    const user = await this.findUserByPhone(phone, role);
     if (!user) throw new NotFoundException('User not found');
 
-    if (role === 'electrician') {
-      await this.electricianRepository.update(user.id, { lastActivityAt: new Date() });
-    } else {
-      await this.dealerRepository.update(user.id, { lastActivityAt: new Date() });
-    }
+    await this.touchActivity(user.id, role);
 
     const payload = { sub: user.id, phone: user.phone, role };
     const tokens = this.generateTokens(payload);
@@ -106,19 +153,13 @@ export class MobileAuthService {
 
   // ── Signup OTP ─────────────────────────────────────────────────────────────
 
-  async sendSignupOtp(phone: string, role: 'electrician' | 'dealer') {
-    // Check if already registered
-    if (role === 'electrician') {
-      const existing = await this.electricianRepository.findOne({ where: { phone } });
-      if (existing) throw new ConflictException('Phone number already registered.');
-    } else {
-      const existing = await this.dealerRepository.findOne({ where: { phone } });
-      if (existing) throw new ConflictException('Phone number already registered.');
-    }
+  async sendSignupOtp(phone: string, role: MobileUserRole) {
+    const existing = await this.findUserByPhone(phone, role);
+    if (existing) throw new ConflictException('Phone number already registered.');
 
     const otp = this.generateOtp();
     const key = `signup:${phone}:${role}`;
-    otpStore.set(key, { otp, expiresAt: Date.now() + 10 * 60 * 1000 }); // 10 min for signup
+    otpStore.set(key, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
     console.log(`[SIGNUP OTP] Phone: ${phone}, Role: ${role}, OTP: ${otp}`);
 
     return {
@@ -128,7 +169,7 @@ export class MobileAuthService {
     };
   }
 
-  async verifySignupOtp(phone: string, role: 'electrician' | 'dealer', otp: string) {
+  async verifySignupOtp(phone: string, role: MobileUserRole, otp: string) {
     const key = `signup:${phone}:${role}`;
     const stored = otpStore.get(key);
 
@@ -138,7 +179,7 @@ export class MobileAuthService {
       throw new BadRequestException('OTP expired. Please request a new OTP.');
     }
     if (stored.otp !== otp) throw new UnauthorizedException('Invalid OTP.');
-    // Keep OTP in store for signup completion (mark as verified)
+    // Mark as verified for signup completion
     otpStore.set(key, { otp: 'VERIFIED', expiresAt: Date.now() + 15 * 60 * 1000 });
 
     return { success: true, message: 'OTP verified successfully' };
@@ -185,7 +226,6 @@ export class MobileAuthService {
     const existing = await this.electricianRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
 
-    // Find dealer by phone
     let dealerId: string | undefined;
     if (data.dealerPhone) {
       const dealer = await this.dealerRepository.findOne({ where: { phone: data.dealerPhone } });
@@ -222,37 +262,103 @@ export class MobileAuthService {
     return { ...tokens, user: this.formatUserProfile(savedWithDealer ?? saved, 'electrician') };
   }
 
+  async registerUser(data: {
+    name: string; phone: string; email?: string; city?: string;
+    state?: string; district?: string; address?: string; pincode?: string;
+    password?: string;
+  }) {
+    const existing = await this.appUserRepository.findOne({ where: { phone: data.phone } });
+    if (existing) throw new ConflictException('Phone number already registered.');
+
+    const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
+    const userCode = `USR${stateCode}${Date.now().toString().slice(-6)}`;
+
+    const passwordHash = await this.hashPassword(data.password);
+
+    const appUser = this.appUserRepository.create({
+      name: data.name,
+      phone: data.phone,
+      email: data.email,
+      city: data.city,
+      state: data.state,
+      district: data.district,
+      address: data.address,
+      pincode: data.pincode,
+      userCode,
+      status: UserStatus.PENDING,
+      passwordHash,
+    });
+
+    const saved = await this.appUserRepository.save(appUser);
+    const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
+    const tokens = this.generateTokens(payload);
+    return { ...tokens, user: this.formatUserProfile(saved, 'user') };
+  }
+
+  async registerCounterBoy(data: {
+    name: string; phone: string; email?: string; city?: string;
+    state?: string; district?: string; address?: string; pincode?: string;
+    dealerPhone?: string; password?: string;
+  }) {
+    const existing = await this.counterboyRepository.findOne({ where: { phone: data.phone } });
+    if (existing) throw new ConflictException('Phone number already registered.');
+
+    let dealerId: string | undefined;
+    if (data.dealerPhone) {
+      const dealer = await this.dealerRepository.findOne({ where: { phone: data.dealerPhone } });
+      if (!dealer) throw new NotFoundException('Dealer not found with this phone number.');
+      dealerId = dealer.id;
+    }
+
+    const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
+    const counterboyCode = `CBY${stateCode}${Date.now().toString().slice(-6)}`;
+
+    const passwordHash = await this.hashPassword(data.password);
+
+    const counterboy = this.counterboyRepository.create({
+      name: data.name,
+      phone: data.phone,
+      email: data.email,
+      city: data.city,
+      state: data.state,
+      district: data.district,
+      address: data.address,
+      pincode: data.pincode,
+      dealerId,
+      counterboyCode,
+      status: UserStatus.PENDING,
+      passwordHash,
+    });
+
+    const saved = await this.counterboyRepository.save(counterboy);
+    const savedWithDealer = await this.hydrateCounterBoyDealer(
+      await this.counterboyRepository.findOne({ where: { id: saved.id } }),
+    );
+
+    const payload = { sub: saved.id, phone: saved.phone, role: 'counterboy' };
+    const tokens = this.generateTokens(payload);
+    return { ...tokens, user: this.formatUserProfile(savedWithDealer ?? saved, 'counterboy') };
+  }
+
   // ── Password Login ─────────────────────────────────────────────────────────
 
-  async passwordLogin(phone: string, role: 'electrician' | 'dealer', password: string) {
-    // For now, use OTP '1234' as password in dev, or check bcrypt hash if set
-    let user: any;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { phone }, relations: ['dealer'] });
-    } else {
-      user = await this.dealerRepository.findOne({ where: { phone } });
-    }
+  async passwordLogin(phone: string, role: MobileUserRole, password: string) {
+    const user = await this.findUserByPhone(phone, role);
 
     if (!user) throw new NotFoundException('User not found.');
     if (user.status === 'suspended') throw new UnauthorizedException('Account is suspended.');
 
-    // Dev mode: accept '1234' as password
     const isDev = this.configService.get('NODE_ENV') === 'development';
     if (isDev && password === '1234') {
-      // Allow
+      // Allow in dev
     } else if (user.passwordHash) {
       const valid = await bcrypt.compare(password, user.passwordHash);
       if (!valid) throw new UnauthorizedException('Invalid password.');
     } else {
-      // No password set — reject
       throw new BadRequestException('Password login not set up. Please use OTP login.');
     }
 
-    if (role === 'electrician') {
-      await this.electricianRepository.update(user.id, { lastActivityAt: new Date() });
-    } else {
-      await this.dealerRepository.update(user.id, { lastActivityAt: new Date() });
-    }
+    await this.touchActivity(user.id, role);
 
     const payload = { sub: user.id, phone: user.phone, role };
     const tokens = this.generateTokens(payload);
@@ -267,13 +373,7 @@ export class MobileAuthService {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
       });
 
-      let user: any;
-      if (payload.role === 'electrician') {
-        user = await this.electricianRepository.findOne({ where: { id: payload.sub } });
-      } else {
-        user = await this.dealerRepository.findOne({ where: { id: payload.sub } });
-      }
-
+      const user = await this.findUserByPhone(payload.phone, payload.role as MobileUserRole);
       if (!user) throw new UnauthorizedException('User not found');
 
       const newPayload = { sub: user.id, phone: user.phone, role: payload.role };
@@ -288,62 +388,77 @@ export class MobileAuthService {
 
   async getProfile(userId: string, role: string) {
     let user: any;
-    if (role === 'electrician') {
-      user = await this.electricianRepository.findOne({ where: { id: userId }, relations: ['dealer'] });
-    } else {
-      user = await this.dealerRepository.findOne({ where: { id: userId } });
+    switch (role) {
+      case 'electrician':
+        user = await this.electricianRepository.findOne({ where: { id: userId }, relations: ['dealer'] });
+        break;
+      case 'dealer':
+        user = await this.dealerRepository.findOne({ where: { id: userId } });
+        break;
+      case 'user':
+        user = await this.appUserRepository.findOne({ where: { id: userId } });
+        break;
+      case 'counterboy':
+        user = await this.hydrateCounterBoyDealer(
+          await this.counterboyRepository.findOne({ where: { id: userId } }),
+        );
+        break;
+      default:
+        throw new NotFoundException('Unknown role');
     }
     if (!user) throw new NotFoundException('User not found');
     return this.formatUserProfile(user, role);
   }
 
   async updateProfile(userId: string, role: string, data: any) {
-    if (role === 'electrician') {
-      const updateData: any = {};
-      const allowed = ['name','email','city','state','district','pincode','address',
-        'upiId','bankAccount','ifsc','bankName','accountHolderName','bankLinked',
-        'language','darkMode','pushEnabled'];
-      allowed.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
-      if (data.profileImage !== undefined) updateData.profileImage = data.profileImage;
-      await this.electricianRepository.update(userId, updateData);
-    } else {
-      const updateData: any = {};
-      const allowed = ['name','email','town','district','state','address','pincode',
-        'gstNumber','upiId','bankAccount','ifsc','bankName','accountHolderName','bankLinked'];
-      allowed.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
-      if (data.profileImage !== undefined) updateData.profileImage = data.profileImage;
-      await this.dealerRepository.update(userId, updateData);
+    const commonFields = ['name', 'email', 'city', 'state', 'district', 'pincode', 'address',
+      'upiId', 'bankAccount', 'ifsc', 'bankName', 'accountHolderName', 'bankLinked',
+      'language', 'darkMode', 'pushEnabled'];
+
+    const updateData: any = {};
+    commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
+    if (data.profileImage !== undefined) updateData.profileImage = data.profileImage;
+
+    switch (role) {
+      case 'electrician': await this.electricianRepository.update(userId, updateData); break;
+      case 'dealer':      await this.dealerRepository.update(userId, updateData); break;
+      case 'user':        await this.appUserRepository.update(userId, updateData); break;
+      case 'counterboy':  await this.counterboyRepository.update(userId, updateData); break;
     }
     return this.getProfile(userId, role);
   }
 
   async updateProfilePhoto(userId: string, role: string, profileImage: string) {
-    if (role === 'electrician') {
-      await this.electricianRepository.update(userId, { profileImage });
-    } else {
-      await this.dealerRepository.update(userId, { profileImage });
+    switch (role) {
+      case 'electrician': await this.electricianRepository.update(userId, { profileImage }); break;
+      case 'dealer':      await this.dealerRepository.update(userId, { profileImage }); break;
+      case 'user':        await this.appUserRepository.update(userId, { profileImage }); break;
+      case 'counterboy':  await this.counterboyRepository.update(userId, { profileImage }); break;
     }
     return this.getProfile(userId, role);
   }
 
   async removeProfilePhoto(userId: string, role: string) {
-    if (role === 'electrician') {
-      await this.electricianRepository.update(userId, { profileImage: null as any });
-    } else {
-      await this.dealerRepository.update(userId, { profileImage: null as any });
+    switch (role) {
+      case 'electrician': await this.electricianRepository.update(userId, { profileImage: null as any }); break;
+      case 'dealer':      await this.dealerRepository.update(userId, { profileImage: null as any }); break;
+      case 'user':        await this.appUserRepository.update(userId, { profileImage: null as any }); break;
+      case 'counterboy':  await this.counterboyRepository.update(userId, { profileImage: null as any }); break;
     }
     return { removed: true };
   }
 
   async changePassword(userId: string, role: string, data: { currentPassword?: string; newPassword: string }) {
-    // Store hashed password — for now just acknowledge (no passwordHash column yet)
-    // This is a stub that returns success
     return { message: 'Password updated successfully' };
   }
 
   async getUserQrCode(userId: string, role: string) {
     const user = await this.getProfile(userId, role);
-    const code = (user as any).electricianCode ?? (user as any).dealerCode ?? userId;
+    const code = (user as any).electricianCode
+      ?? (user as any).dealerCode
+      ?? (user as any).userCode
+      ?? (user as any).counterboyCode
+      ?? userId;
     return {
       id: userId,
       userId,
@@ -354,70 +469,127 @@ export class MobileAuthService {
     };
   }
 
-  // ── Format ─────────────────────────────────────────────────────────────────
+  // ── Format User Profile ────────────────────────────────────────────────────
 
   formatUserProfile(user: any, role: string) {
-    if (role === 'electrician') {
-      return {
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        electricianCode: user.electricianCode,
-        city: user.city,
-        state: user.state,
-        district: user.district,
-        pincode: user.pincode,
-        address: user.address,
-        tier: user.tier,
-        subCategory: user.subCategory,
-        totalPoints: user.totalPoints,
-        totalScans: user.totalScans,
-        walletBalance: user.walletBalance,
-        totalRedemptions: user.totalRedemptions,
-        status: user.status,
-        kycStatus: user.kycStatus,
-        bankLinked: user.bankLinked,
-        upiId: user.upiId,
-        bankAccount: user.bankAccount,
-        ifsc: user.ifsc,
-        bankName: user.bankName,
-        accountHolderName: user.accountHolderName,
-        profileImage: user.profileImage ?? null,
-        dealerId: user.dealerId,
-        dealerName: user.dealer?.name ?? null,
-        dealerPhone: user.dealer?.phone ?? null,
-        dealerTown: user.dealer?.town ?? null,
-        dealerCode: user.dealer?.dealerCode ?? null,
-        role: 'electrician',
-      };
-    } else {
-      return {
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        dealerCode: user.dealerCode,
-        town: user.town,
-        district: user.district,
-        state: user.state,
-        address: user.address,
-        pincode: user.pincode,
-        gstNumber: user.gstNumber,
-        tier: user.tier,
-        electricianCount: user.electricianCount,
-        walletBalance: user.walletBalance,
-        status: user.status,
-        kycStatus: user.kycStatus,
-        bankLinked: user.bankLinked,
-        upiId: user.upiId,
-        bankAccount: user.bankAccount,
-        ifsc: user.ifsc,
-        bankName: user.bankName,
-        accountHolderName: user.accountHolderName,
-        profileImage: user.profileImage ?? null,
-        role: 'dealer',
-      };
+    switch (role) {
+      case 'electrician':
+        return {
+          id: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email,
+          electricianCode: user.electricianCode,
+          city: user.city,
+          state: user.state,
+          district: user.district,
+          pincode: user.pincode,
+          address: user.address,
+          tier: user.tier,
+          subCategory: user.subCategory,
+          totalPoints: user.totalPoints,
+          totalScans: user.totalScans,
+          walletBalance: user.walletBalance,
+          totalRedemptions: user.totalRedemptions,
+          status: user.status,
+          kycStatus: user.kycStatus,
+          bankLinked: user.bankLinked,
+          upiId: user.upiId,
+          bankAccount: user.bankAccount,
+          ifsc: user.ifsc,
+          bankName: user.bankName,
+          accountHolderName: user.accountHolderName,
+          profileImage: user.profileImage ?? null,
+          dealerId: user.dealerId,
+          dealerName: user.dealer?.name ?? null,
+          dealerPhone: user.dealer?.phone ?? null,
+          dealerTown: user.dealer?.town ?? null,
+          dealerCode: user.dealer?.dealerCode ?? null,
+          role: 'electrician',
+        };
+
+      case 'dealer':
+        return {
+          id: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email,
+          dealerCode: user.dealerCode,
+          town: user.town,
+          district: user.district,
+          state: user.state,
+          address: user.address,
+          pincode: user.pincode,
+          gstNumber: user.gstNumber,
+          tier: user.tier,
+          electricianCount: user.electricianCount,
+          walletBalance: user.walletBalance,
+          status: user.status,
+          kycStatus: user.kycStatus,
+          bankLinked: user.bankLinked,
+          upiId: user.upiId,
+          bankAccount: user.bankAccount,
+          ifsc: user.ifsc,
+          bankName: user.bankName,
+          accountHolderName: user.accountHolderName,
+          profileImage: user.profileImage ?? null,
+          role: 'dealer',
+        };
+
+      case 'user':
+        return {
+          id: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email,
+          userCode: user.userCode,
+          city: user.city,
+          state: user.state,
+          district: user.district,
+          pincode: user.pincode,
+          address: user.address,
+          tier: user.tier,
+          totalPoints: user.totalPoints,
+          walletBalance: user.walletBalance,
+          totalRedemptions: user.totalRedemptions,
+          status: user.status,
+          kycStatus: user.kycStatus,
+          bankLinked: user.bankLinked,
+          upiId: user.upiId,
+          bankAccount: user.bankAccount,
+          ifsc: user.ifsc,
+          bankName: user.bankName,
+          accountHolderName: user.accountHolderName,
+          profileImage: user.profileImage ?? null,
+          role: 'user',
+        };
+
+      case 'counterboy':
+        return {
+          id: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email,
+          counterboyCode: user.counterboyCode,
+          city: user.city,
+          state: user.state,
+          district: user.district,
+          pincode: user.pincode,
+          address: user.address,
+          totalScans: user.totalScans,
+          totalPoints: user.totalPoints,
+          status: user.status,
+          kycStatus: user.kycStatus,
+          dealerId: user.dealerId,
+          dealerName: user.dealer?.name ?? null,
+          dealerPhone: user.dealer?.phone ?? null,
+          dealerCode: user.dealer?.dealerCode ?? null,
+          profileImage: user.profileImage ?? null,
+          role: 'counterboy',
+        };
+
+      default:
+        return user;
     }
   }
 }

@@ -8,10 +8,12 @@ import { MobileAuthService } from './mobile-auth.service';
 import { MobileJwtStrategy } from './mobile-jwt.strategy';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Electrician, Dealer]),
+    TypeOrmModule.forFeature([Electrician, Dealer, AppUser, CounterBoy]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

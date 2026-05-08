@@ -7,6 +7,8 @@ export enum AdminRole {
 export enum UserRole {
   DEALER = 'dealer',
   ELECTRICIAN = 'electrician',
+  USER = 'user',
+  COUNTERBOY = 'counterboy',
 }
 
 export enum MemberTier {
