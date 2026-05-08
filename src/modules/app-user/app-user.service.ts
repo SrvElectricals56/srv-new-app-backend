@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { UserStatus } from '../../common/enums';
 
@@ -19,6 +20,13 @@ export class AppUserService {
     }
 
     throw new BadRequestException('Unable to generate unique customer code');
+  }
+
+  private async hashPassword(password?: string) {
+    const trimmed = password?.trim();
+    if (!trimmed) return null;
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(trimmed, salt);
   }
 
   async create(data: Partial<AppUser>) {
@@ -41,6 +49,8 @@ export class AppUserService {
       }
     }
 
+    const passwordHash = await this.hashPassword((data as Partial<AppUser> & { password?: string }).password);
+
     const payload: Partial<AppUser> = {
       ...data,
       name: data.name.trim(),
@@ -54,7 +64,10 @@ export class AppUserService {
       walletBalance: Number(data.walletBalance ?? 0),
       totalRedemptions: Number(data.totalRedemptions ?? 0),
       bankLinked: Boolean(data.bankLinked),
+      passwordHash: passwordHash ?? undefined,
     };
+
+    delete (payload as Partial<AppUser> & { password?: string }).password;
 
     const entity = this.appUserRepository.create(payload);
 
@@ -109,7 +122,11 @@ export class AppUserService {
 
   async update(id: string, data: Partial<AppUser>) {
     await this.findOne(id);
-    await this.appUserRepository.update(id, data);
+    const passwordHash = await this.hashPassword((data as Partial<AppUser> & { password?: string }).password);
+    const payload = { ...data } as Partial<AppUser> & { password?: string };
+    delete payload.password;
+    if (passwordHash) payload.passwordHash = passwordHash;
+    await this.appUserRepository.update(id, payload);
     return this.findOne(id);
   }
 

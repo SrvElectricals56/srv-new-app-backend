@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { UserStatus } from '../../common/enums';
@@ -28,6 +29,13 @@ export class CounterBoyService {
     }
 
     throw new BadRequestException('Unable to generate unique counter boy code');
+  }
+
+  private async hashPassword(password?: string) {
+    const trimmed = password?.trim();
+    if (!trimmed) return null;
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(trimmed, salt);
   }
 
   private serialize(counterboy: CounterBoy, dealer?: Partial<Dealer> | null) {
@@ -128,6 +136,8 @@ export class CounterBoyService {
       }
     }
 
+    const passwordHash = await this.hashPassword((data as Partial<CounterBoy> & { password?: string }).password);
+
     const payload: Partial<CounterBoy> = {
       ...data,
       name: data.name.trim(),
@@ -143,7 +153,10 @@ export class CounterBoyService {
       walletBalance: Number(data.walletBalance ?? 0),
       totalRedemptions: Number(data.totalRedemptions ?? 0),
       bankLinked: Boolean(data.bankLinked),
+      passwordHash: passwordHash ?? undefined,
     };
+
+    delete (payload as Partial<CounterBoy> & { password?: string }).password;
 
     const entity = this.counterboyRepository.create(payload);
 
@@ -159,7 +172,11 @@ export class CounterBoyService {
 
   async update(id: string, data: Partial<CounterBoy>) {
     await this.findOnePlain(id);
-    await this.counterboyRepository.update(id, data);
+    const passwordHash = await this.hashPassword((data as Partial<CounterBoy> & { password?: string }).password);
+    const payload = { ...data } as Partial<CounterBoy> & { password?: string };
+    delete payload.password;
+    if (passwordHash) payload.passwordHash = passwordHash;
+    await this.counterboyRepository.update(id, payload);
     return this.findOne(id);
   }
 
