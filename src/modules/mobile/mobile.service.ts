@@ -168,11 +168,38 @@ export class MobileService {
   // ── Banners ────────────────────────────────────────────────────────────────
 
   async getBanners(role?: string) {
-    const banners = await this.bannerRepository.find({
+    const allBanners = await this.bannerRepository.find({
       where: { isActive: true },
       order: { displayOrder: 'ASC', order: 'ASC' },
     });
-    return { data: banners };
+
+    // Normalize role for matching (backend uses lowercase: 'user', 'counterboy')
+    // Admin panel uses: 'Customer', 'CounterBoy', 'All', 'Electrician', 'Dealer'
+    const roleAliasMap: Record<string, string[]> = {
+      user:        ['Customer', 'customer', 'user', 'All', 'Both'],
+      counterboy:  ['CounterBoy', 'counterboy', 'All', 'Both'],
+      electrician: ['Electrician', 'electrician', 'All', 'Both'],
+      dealer:      ['Dealer', 'dealer', 'All', 'Both'],
+    };
+    const matchValues = role ? (roleAliasMap[role] ?? [role, 'All', 'Both']) : [];
+
+    const filtered = allBanners.filter((banner) => {
+      // Must be active status
+      if (banner.status && banner.status !== 'active') return false;
+      // Must have imageUrl
+      if (!banner.imageUrl) return false;
+      // If no targetRole set → show to everyone
+      if (!banner.targetRole || banner.targetRole.length === 0) return true;
+      // 'All' or 'Both' in targetRole → show to everyone
+      if (banner.targetRole.includes('All') || banner.targetRole.includes('Both')) return true;
+      // If role provided, check if any alias matches
+      if (role && matchValues.length > 0) {
+        return banner.targetRole.some(r => matchValues.includes(r));
+      }
+      return false;
+    });
+
+    return { data: filtered };
   }
 
   // ── Notifications ──────────────────────────────────────────────────────────

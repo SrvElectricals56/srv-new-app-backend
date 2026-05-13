@@ -349,13 +349,23 @@ export class MobileAuthService {
     if (user.status === 'suspended') throw new UnauthorizedException('Account is suspended.');
 
     const isDev = this.configService.get('NODE_ENV') === 'development';
+
+    // If no password provided and no passwordHash set → allow login (OTP-registered users)
+    if (!password?.trim()) {
+      await this.touchActivity(user.id, role);
+      const payload = { sub: user.id, phone: user.phone, role };
+      const tokens = this.generateTokens(payload);
+      return { ...tokens, user: this.formatUserProfile(user, role) };
+    }
+
     if (isDev && password === '1234') {
-      // Allow in dev
+      // Allow dev shortcut
     } else if (user.passwordHash) {
       const valid = await bcrypt.compare(password, user.passwordHash);
       if (!valid) throw new UnauthorizedException('Invalid password.');
     } else {
-      throw new BadRequestException('Password login not set up. Please use OTP login.');
+      // No passwordHash set — treat any password attempt as invalid, suggest OTP
+      throw new BadRequestException('No password set for this account. Please use OTP login or leave password empty.');
     }
 
     await this.touchActivity(user.id, role);

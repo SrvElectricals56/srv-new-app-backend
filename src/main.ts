@@ -113,11 +113,23 @@ async function bootstrap() {
     res.redirect('/api/docs');
   });
 
+  // Health check endpoint
+  expressApp.get('/health', (_req: any, res: any) => {
+    res.status(200).json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: configService.get('NODE_ENV'),
+      version: '1.0.0'
+    });
+  });
+
   // Serve uploaded files as static assets
   expressApp.use('/uploads', require('express').static(join(process.cwd(), 'uploads')));
 
-  const port = configService.get('PORT') || 3000;
-  await app.listen(port);
+  const port = configService.get('PORT') || 3001;
+  const host = configService.get('HOST') || '0.0.0.0'; // Bind to all interfaces
+  await app.listen(port, host);
 
   console.log(`
   ╔═══════════════════════════════════════════════════════════╗
@@ -125,6 +137,7 @@ async function bootstrap() {
   ║   🚀 SRV Electricals Admin Backend API                   ║
   ║                                                           ║
   ║   Server running on: http://localhost:${port}              ║
+  ║   Network access: http://192.168.31.125:${port}           ║
   ║   API Docs: http://localhost:${port}/api/docs             ║
   ║   Environment: ${configService.get('NODE_ENV')}                      ║
   ║                                                           ║
