@@ -244,6 +244,14 @@ export class MobileService {
     const rows = await this.settingsRepository.find({ order: { key: 'ASC' } });
     const map: Record<string, string> = {};
     rows.forEach(r => { map[r.key] = r.value; });
+    let rolePageControls: Record<string, Record<string, boolean>> | null = null;
+    if (map['rolePageControls']) {
+      try {
+        rolePageControls = JSON.parse(map['rolePageControls']);
+      } catch {
+        rolePageControls = null;
+      }
+    }
     return {
       maintenanceMode: map['maintenanceMode'] === 'true',
       maintenanceMessage: map['maintenanceMessage'] ?? 'App is under maintenance. Please try again later.',
@@ -256,9 +264,14 @@ export class MobileService {
       scanEnabled: map['scanEnabled'] !== 'false',
       giftsEnabled: map['giftsEnabled'] !== 'false',
       referralEnabled: map['referralEnabled'] !== 'false',
+      testimonialsEnabled: map['testimonialsEnabled'] !== 'false',
+      playEnabled: map['playEnabled'] !== 'false',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
-      catalogPdfUrl: map['catalogPdfUrl'] ?? null,
+      generalCatalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
+      dealerCatalogPdfUrl: map['dealerCatalogPdfUrl'] ?? null,
+      catalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
+      rolePageControls,
     };
   }
 
