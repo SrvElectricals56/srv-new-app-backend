@@ -57,6 +57,13 @@ export class ElectricianController {
     );
   }
 
+  @Post('import')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Bulk import electricians (upsert by phone)' })
+  importMany(@Body('records') records: any[]) {
+    return this.electricianService.importMany(records);
+  }
+
   @Get('distinct-states')
   @ApiOperation({ summary: 'Get all distinct electrician states for filter dropdown' })
   getDistinctStates() {

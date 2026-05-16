@@ -22,6 +22,13 @@ export class CounterBoyController {
     return this.counterboyService.create(body);
   }
 
+  @Post('import')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Bulk import counter boys (upsert by phone)' })
+  importMany(@Body('records') records: any[]) {
+    return this.counterboyService.importMany(records);
+  }
+
   @Get()
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get all counter boys' })

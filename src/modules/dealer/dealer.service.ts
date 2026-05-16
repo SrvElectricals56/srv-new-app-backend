@@ -165,6 +165,114 @@ export class DealerService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  private mapImportColumns(record: any) {
+    const map: Record<string, string> = {
+      'STATE': 'state',
+      'DISTRICT': 'district',
+      'DEALER NAME': 'contactPerson',
+      'SHOP/BUSINESS NAME': 'name',
+      'SHOP BUSINESS NAME': 'name',
+      'DEALER ADDRESS': 'address',
+      'GST/PAN NUMBER': 'gstNumber',
+      'GST PAN NUMBER': 'gstNumber',
+      'PHONE NO.': 'phone',
+      'PHONE NO': 'phone',
+      'SALES MAN NAME': 'salesManName',
+      'TOWN': 'town',
+      'TOWN CODE': 'townCode',
+      'ELECTRICIAN LIST': 'electricianList',
+      'LIST CODE': 'listCode',
+      'RTO CODE': 'rtoCode',
+      'DEALER CODE': 'dealerCode',
+    };
+
+    const normalize = (k: string) =>
+      k.toUpperCase().trim().replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ');
+
+    const mapped: any = {};
+
+    for (const [key, value] of Object.entries(record)) {
+      const normalized = normalize(key);
+      const dbField = map[normalized] || null;
+
+      if (dbField) {
+        mapped[dbField] = value;
+      }
+    }
+
+    // Fallback: use DEALER NAME as name if SHOP/BUSINESS NAME is empty
+    if (!String(mapped.name ?? '').trim() && String(mapped.contactPerson ?? '').trim()) {
+      mapped.name = mapped.contactPerson;
+    }
+
+    return mapped;
+  }
+
+  async importMany(records: any[]) {
+    let created = 0, updated = 0, failed = 0, errors: string[] = [];
+
+    for (const record of records) {
+      let mapped: any;
+      try {
+        mapped = this.mapImportColumns(record);
+
+        if (!String(mapped.name ?? '').trim() || !String(mapped.phone ?? '').trim()) {
+          failed++;
+          errors.push(`Row missing SHOP/BUSINESS NAME or PHONE NO.: ${JSON.stringify(record)}`);
+          continue;
+        }
+
+        const rawPhone = String(mapped.phone).trim();
+        const phone = rawPhone.replace(/\D/g, '').slice(0, 10);
+
+        if (!phone || phone.length < 10) {
+          failed++;
+          errors.push(`Invalid phone number: ${rawPhone}`);
+          continue;
+        }
+
+        mapped.phone = phone;
+
+        let existing = await this.dealerRepository.findOne({ where: { phone } });
+
+        const saveOrRetry = async (data: any, retries = 0): Promise<void> => {
+          try {
+            const entity = this.dealerRepository.create(data);
+            await this.dealerRepository.save(entity);
+          } catch (saveErr: any) {
+            if (saveErr.code === '23505' && saveErr.constraint?.includes('dealerCode') && retries < 3) {
+              data.dealerCode = `DLR${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 900 + 100)}`;
+              return saveOrRetry(data, retries + 1);
+            }
+            throw saveErr;
+          }
+        };
+
+        if (existing) {
+          const { id, joinedDate, tier, electricianCount, ...updateData } = mapped;
+          await this.dealerRepository.update(existing.id, updateData);
+          await this.tierService.syncDealerTier(existing.id);
+          updated++;
+        } else {
+          const data: any = { ...mapped };
+          if (!data.dealerCode) {
+            data.dealerCode = `DLR${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 900 + 100)}`;
+          }
+          data.electricianCount = 0;
+          data.tier = MemberTier.SILVER;
+          await saveOrRetry(data);
+          created++;
+        }
+      } catch (err: any) {
+        const ref = String(mapped?.name ?? record.name ?? mapped?.phone ?? record.phone ?? 'unknown');
+        failed++;
+        errors.push(`Row ${ref}: ${err.message}`);
+      }
+    }
+
+    return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
+  }
+
   async getDistinctStates(): Promise<{ states: string[] }> {
     const rows = await this.dealerRepository
       .createQueryBuilder('dealer')

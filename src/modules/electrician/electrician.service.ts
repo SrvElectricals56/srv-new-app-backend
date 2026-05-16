@@ -226,6 +226,58 @@ export class ElectricianService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  async importMany(records: any[]) {
+    let created = 0, updated = 0, failed = 0, errors: string[] = [];
+
+    for (const record of records) {
+      try {
+        if (!record.name?.trim() || !record.phone?.trim()) {
+          failed++;
+          errors.push(`Row missing name or phone: ${JSON.stringify(record)}`);
+          continue;
+        }
+
+        const rawPhone = String(record.phone).trim();
+        const phone = rawPhone.replace(/\D/g, '').slice(0, 10);
+        if (!phone || phone.length < 10) {
+          failed++;
+          errors.push(`Invalid phone number: ${rawPhone}`);
+          continue;
+        }
+
+        record.phone = phone;
+        let existing = await this.electricianRepository.findOne({ where: { phone } });
+
+        if (existing) {
+          const { id, joinedDate, ...updateData } = record;
+          if (updateData.totalPoints !== undefined) {
+            const points = Number(updateData.totalPoints);
+            updateData.tier = this.tierService.calculateElectricianTier(points);
+          }
+          await this.electricianRepository.update(existing.id, updateData);
+          updated++;
+        } else {
+          const data: any = { ...record };
+          if (!data.electricianCode) {
+            data.electricianCode = `ELEC${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+          }
+          if (!data.dealerId || data.dealerId.trim() === '') data.dealerId = null;
+          const points = Number(data.totalPoints ?? 0);
+          data.tier = this.tierService.calculateElectricianTier(points);
+          const entity = this.electricianRepository.create(data);
+          await this.electricianRepository.save(entity as any);
+          if (data.dealerId) await this.tierService.syncDealerTier(data.dealerId);
+          created++;
+        }
+      } catch (err: any) {
+        failed++;
+        errors.push(`Row ${record.name ?? record.phone}: ${err.message}`);
+      }
+    }
+
+    return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
+  }
+
   async getDistinctStates(): Promise<{ states: string[] }> {
     const rows = await this.electricianRepository
       .createQueryBuilder('electrician')

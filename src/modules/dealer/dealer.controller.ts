@@ -55,6 +55,13 @@ export class DealerController {
     );
   }
 
+  @Post('import')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Bulk import dealers (upsert by phone)' })
+  importMany(@Body('records') records: any[]) {
+    return this.dealerService.importMany(records);
+  }
+
   @Get('distinct-states')
   @ApiOperation({ summary: 'Get all distinct dealer states for filter dropdown' })
   getDistinctStates() {

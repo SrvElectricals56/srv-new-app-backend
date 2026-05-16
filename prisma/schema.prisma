@@ -163,6 +163,11 @@ model Dealer {
   pincode            String?
   gstNumber          String?
   contactPerson      String?
+  salesManName       String?
+  townCode           String?
+  rtoCode            String?
+  listCode           String?
+  electricianList    String?
   tier               MemberTier  @default(Silver)
   electricianCount   Int         @default(0)
   status             UserStatus  @default(pending)

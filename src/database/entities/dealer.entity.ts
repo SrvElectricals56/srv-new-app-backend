@@ -50,6 +50,21 @@ export class Dealer {
   @Column({ nullable: true })
   contactPerson: string;
 
+  @Column({ nullable: true })
+  salesManName: string;
+
+  @Column({ nullable: true })
+  townCode: string;
+
+  @Column({ nullable: true })
+  rtoCode: string;
+
+  @Column({ nullable: true })
+  listCode: string;
+
+  @Column({ type: 'text', nullable: true })
+  electricianList: string;
+
   @Column({
     type: 'enum',
     enum: MemberTier,

@@ -53,6 +53,81 @@ export class CounterBoyService {
     return cb;
   }
 
+  async importMany(records: any[]) {
+    let created = 0, updated = 0, failed = 0, errors: string[] = [];
+
+    for (const record of records) {
+      try {
+        if (!record.name?.trim() || !record.phone?.trim()) {
+          failed++;
+          errors.push(`Row missing name or phone: ${JSON.stringify(record)}`);
+          continue;
+        }
+
+        const rawPhone = String(record.phone).trim();
+        const phone = rawPhone.replace(/\D/g, '').slice(0, 10);
+        if (!phone || phone.length < 10) {
+          failed++;
+          errors.push(`Invalid phone number: ${rawPhone}`);
+          continue;
+        }
+
+        record.phone = phone;
+        let existing = await this.counterboyRepository.findOne({ where: { phone } });
+
+        if (existing) {
+          const { id, password, ...updateData } = record;
+          const payload = { ...updateData } as Partial<CounterBoy> & { password?: string };
+          delete payload.password;
+          const passwordHash = await this.hashPassword(record.password);
+          if (passwordHash) payload.passwordHash = passwordHash;
+          await this.counterboyRepository.update(existing.id, payload);
+          updated++;
+        } else {
+          const data: any = { ...record };
+
+          let dealer: Dealer | null = null;
+          if (data.dealerId) {
+            dealer = await this.dealerRepository.findOne({ where: { id: String(data.dealerId) } });
+          }
+
+          if (!data.counterboyCode) {
+            data.counterboyCode = await this.generateUniqueCounterBoyCode(dealer);
+          }
+
+          const passwordHash = await this.hashPassword(data.password);
+          const payload: Partial<CounterBoy> = {
+            name: data.name.trim(),
+            phone,
+            email: data.email?.trim() || null,
+            counterboyCode: data.counterboyCode,
+            dealerId: data.dealerId ? String(data.dealerId) : undefined,
+            city: data.city || null,
+            state: data.state || null,
+            district: data.district || null,
+            tier: data.tier ?? 'Silver',
+            status: data.status ?? UserStatus.PENDING,
+            kycStatus: data.kycStatus ?? 'not_submitted',
+            totalScans: Number(data.totalScans ?? 0),
+            totalPoints: Number(data.totalPoints ?? 0),
+            walletBalance: Number(data.walletBalance ?? 0),
+            totalRedemptions: Number(data.totalRedemptions ?? 0),
+            bankLinked: Boolean(data.bankLinked),
+            passwordHash: passwordHash ?? undefined,
+          };
+          const entity = this.counterboyRepository.create(payload);
+          await this.counterboyRepository.save(entity);
+          created++;
+        }
+      } catch (err: any) {
+        failed++;
+        errors.push(`Row ${record.name ?? record.phone}: ${err.message}`);
+      }
+    }
+
+    return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
+  }
+
   async findAll(page = 1, limit = 20, search?: string, status?: string) {
     const skip = (page - 1) * limit;
 

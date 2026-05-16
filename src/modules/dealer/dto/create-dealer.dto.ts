@@ -105,4 +105,29 @@ export class CreateDealerDto {
   @IsOptional()
   @IsEnum(KYCStatus)
   kycStatus?: KYCStatus;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  salesManName?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  townCode?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  rtoCode?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  listCode?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  electricianList?: string;
 }

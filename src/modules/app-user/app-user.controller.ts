@@ -22,6 +22,13 @@ export class AppUserController {
     return this.appUserService.create(body);
   }
 
+  @Post('import')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Bulk import app users (upsert by phone)' })
+  importMany(@Body('records') records: any[]) {
+    return this.appUserService.importMany(records);
+  }
+
   @Get()
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get all app users (customers)' })
