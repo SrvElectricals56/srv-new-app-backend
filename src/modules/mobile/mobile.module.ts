@@ -18,6 +18,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
+import { GiftOrder } from '../../database/entities/gift-order.entity';
 import { TierModule } from '../../common/services/tier.module';
 
 @Module({
@@ -25,7 +26,7 @@ import { TierModule } from '../../common/services/tier.module';
     TypeOrmModule.forFeature([
       Product, Banner, Notification, Offer, Testimonial,
       QrCode, Scan, Wallet, Electrician, Dealer, AppUser, CounterBoy, Redemption,
-      Settings, SupportTicket,
+      Settings, SupportTicket, GiftOrder,
     ]),
     MobileAuthModule,
     TierModule,

@@ -21,6 +21,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
+import { GiftOrder } from '../../database/entities/gift-order.entity';
 import { UserRole, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 
@@ -57,6 +58,8 @@ export class MobileService {
     private settingsRepository: Repository<Settings>,
     @InjectRepository(SupportTicket)
     private supportTicketRepository: Repository<SupportTicket>,
+    @InjectRepository(GiftOrder)
+    private giftOrderRepository: Repository<GiftOrder>,
     private readonly tierService: TierService,
   ) {}
 
@@ -794,6 +797,26 @@ export class MobileService {
       link: null,
       channels: ['whatsapp', 'sms', 'copy'],
     };
+  }
+
+  // ── Orders ─────────────────────────────────────────────────────────────────
+
+  async getMyOrders(userId: string) {
+    const orders = await this.giftOrderRepository.find({
+      where: { userId },
+      order: { orderedAt: 'DESC' },
+    });
+
+    return orders.map(o => ({
+      id: o.id,
+      status: o.status,
+      title: o.giftName,
+      userId: o.userId,
+      userName: o.userName,
+      points: o.pointsUsed,
+      deliveredAt: o.processedAt?.toISOString() ?? null,
+      createdAt: o.orderedAt.toISOString(),
+    }));
   }
 
   // ── Rating ─────────────────────────────────────────────────────────────────

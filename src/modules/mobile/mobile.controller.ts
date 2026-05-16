@@ -257,6 +257,14 @@ export class MobileController {
 
   // ── Profile ────────────────────────────────────────────────────────────────
 
+  @Get('profile/orders')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get gift orders for current user' })
+  getMyOrders(@Request() req: any) {
+    return this.mobileService.getMyOrders(req.user.id);
+  }
+
   @Patch('profile/photo')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')
