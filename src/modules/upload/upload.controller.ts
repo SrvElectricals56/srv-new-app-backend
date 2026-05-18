@@ -34,6 +34,10 @@ const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
 export class UploadController {
   constructor(private configService: ConfigService) {}
 
+  private getBaseUrl() {
+    return this.configService.get<string>('APP_URL') || `http://${this.configService.get<string>('SERVER_HOST') || 'localhost'}:${this.configService.get<string>('PORT') || '3001'}`;
+  }
+
   @Post('image')
   @ApiOperation({ summary: 'Upload banner image' })
   @ApiConsumes('multipart/form-data')
@@ -66,9 +70,7 @@ export class UploadController {
       throw new BadRequestException('No file uploaded');
     }
 
-    const port = this.configService.get<string>('PORT') || '3001';
-    const host = this.configService.get<string>('SERVER_HOST') || '192.168.29.8';
-    const imageUrl = `http://${host}:${port}/uploads/banners/${file.filename}`;
+    const imageUrl = `${this.getBaseUrl()}/uploads/banners/${file.filename}`;
 
     return {
       url: imageUrl,
@@ -110,9 +112,7 @@ export class UploadController {
       throw new BadRequestException('No file uploaded');
     }
 
-    const port = this.configService.get<string>('PORT') || '3001';
-    const host = this.configService.get<string>('SERVER_HOST') || '192.168.29.8';
-    const imageUrl = `http://${host}:${port}/uploads/products/${file.filename}`;
+    const imageUrl = `${this.getBaseUrl()}/uploads/products/${file.filename}`;
 
     return {
       url: imageUrl,
@@ -153,9 +153,7 @@ export class UploadController {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
-    const port = this.configService.get<string>('PORT') || '3001';
-    const host = this.configService.get<string>('SERVER_HOST') || '192.168.29.8';
-    const url = `http://${host}:${port}/uploads/catalog/${file.filename}`;
+    const url = `${this.getBaseUrl()}/uploads/catalog/${file.filename}`;
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
@@ -190,9 +188,7 @@ export class UploadController {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
-    const port = this.configService.get<string>('PORT') || '3001';
-    const host = this.configService.get<string>('SERVER_HOST') || '192.168.29.8';
-    const url = `http://${host}:${port}/uploads/videos/${file.filename}`;
+    const url = `${this.getBaseUrl()}/uploads/videos/${file.filename}`;
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 }

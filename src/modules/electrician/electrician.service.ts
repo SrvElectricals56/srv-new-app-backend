@@ -298,6 +298,77 @@ export class ElectricianService {
     return { categories: rows.map(r => r.subCategory).filter(Boolean) };
   }
 
+  async getTop(from: string, to: string, sortBy: string = 'points', limit: number = 10) {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    toDate.setHours(23, 59, 59, 999);
+
+    const [scanResults, redemptionResults] = await Promise.all([
+      this.scanRepository
+        .createQueryBuilder('scan')
+        .select('scan.userId', 'userId')
+        .addSelect('COUNT(*)', 'periodScans')
+        .addSelect('COALESCE(SUM(scan.points), 0)', 'periodPoints')
+        .where('scan.role = :role', { role: 'electrician' })
+        .andWhere('scan.scannedAt >= :from', { from: fromDate })
+        .andWhere('scan.scannedAt <= :to', { to: toDate })
+        .groupBy('scan.userId')
+        .getRawMany(),
+      this.walletRepository
+        .createQueryBuilder('wallet')
+        .select('wallet.userId', 'userId')
+        .addSelect('COUNT(*)', 'periodRedemptions')
+        .where('wallet.userRole = :role', { role: 'electrician' })
+        .andWhere('wallet.type = :type', { type: 'debit' })
+        .andWhere('wallet.source = :source', { source: 'redemption' })
+        .andWhere('wallet.createdAt >= :from', { from: fromDate })
+        .andWhere('wallet.createdAt <= :to', { to: toDate })
+        .groupBy('wallet.userId')
+        .getRawMany(),
+    ]);
+
+    const scanMap = new Map(scanResults.map(r => [r.userId, r]));
+    const redemptionMap = new Map(redemptionResults.map(r => [r.userId, r]));
+    const allUserIds = new Set([...scanMap.keys(), ...redemptionMap.keys()]);
+
+    if (allUserIds.size === 0) return [];
+
+    const electricians = await this.electricianRepository
+      .createQueryBuilder('e')
+      .where('e.id IN (:...ids)', { ids: [...allUserIds] })
+      .andWhere('e.status = :status', { status: 'active' })
+      .getMany();
+
+    const result = electricians.map(e => {
+      const s = scanMap.get(e.id);
+      const r = redemptionMap.get(e.id);
+      return {
+        id: e.id,
+        name: e.name,
+        phone: e.phone,
+        electricianCode: e.electricianCode,
+        city: e.city,
+        state: e.state,
+        tier: e.tier,
+        walletBalance: e.walletBalance,
+        totalPoints: e.totalPoints,
+        totalScans: e.totalScans,
+        totalRedemptions: e.totalRedemptions,
+        periodPoints: s ? Number(s.periodPoints) : 0,
+        periodScans: s ? Number(s.periodScans) : 0,
+        periodRedemptions: r ? Number(r.periodRedemptions) : 0,
+      };
+    });
+
+    result.sort((a, b) => {
+      if (sortBy === 'scans') return b.periodScans - a.periodScans;
+      if (sortBy === 'redemptions') return b.periodRedemptions - a.periodRedemptions;
+      return b.periodPoints - a.periodPoints;
+    });
+
+    return result.slice(0, limit);
+  }
+
   async getTierCounts() {
     const rows = await this.electricianRepository
       .createQueryBuilder('electrician')

@@ -83,6 +83,17 @@ export class ElectricianController {
     return this.electricianService.getTierCounts();
   }
 
+  @Get('top')
+  @ApiOperation({ summary: 'Get top electricians by points/scans within a date range' })
+  getTop(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('sortBy') sortBy = 'points',
+    @Query('limit') limit = '10',
+  ) {
+    return this.electricianService.getTop(from, to, sortBy, parseInt(limit));
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get electrician by ID' })
   @ApiResponse({ status: 200, description: 'Electrician details' })

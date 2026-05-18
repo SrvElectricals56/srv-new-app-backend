@@ -283,6 +283,51 @@ export class DealerService {
     return { states: rows.map(r => r.state).filter(Boolean) };
   }
 
+  async getTop(from: string, to: string, limit: number = 10) {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    toDate.setHours(23, 59, 59, 999);
+
+    const results = await this.electricianRepository
+      .createQueryBuilder('e')
+      .select('e.dealerId', 'dealerId')
+      .addSelect('COUNT(*)', 'periodElectricians')
+      .where('e.joinedDate >= :from', { from: fromDate })
+      .andWhere('e.joinedDate <= :to', { to: toDate })
+      .andWhere('e.dealerId IS NOT NULL')
+      .groupBy('e.dealerId')
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    if (results.length === 0) return [];
+
+    const dealerIds = results.map(r => r.dealerId);
+    const dealers = await this.dealerRepository
+      .createQueryBuilder('d')
+      .where('d.id IN (:...ids)', { ids: dealerIds })
+      .getMany();
+
+    const dealerMap = new Map(dealers.map(d => [d.id, d]));
+
+    return results.map(r => {
+      const d = dealerMap.get(r.dealerId);
+      return {
+        id: r.dealerId,
+        name: d?.name ?? 'Unknown',
+        phone: d?.phone ?? '',
+        dealerCode: d?.dealerCode ?? '',
+        town: d?.town ?? '',
+        state: d?.state ?? '',
+        tier: d?.tier ?? 'Silver',
+        electricianCount: d?.electricianCount ?? 0,
+        monthlyTarget: d?.monthlyTarget ?? 0,
+        achievedTarget: d?.achievedTarget ?? 0,
+        periodElectricians: Number(r.periodElectricians),
+      };
+    });
+  }
+
   async getStats() {
     const [total, active, pending, inactive] = await Promise.all([
       this.dealerRepository.count(),

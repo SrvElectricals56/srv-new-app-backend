@@ -75,6 +75,16 @@ export class DealerController {
     return this.dealerService.getStats();
   }
 
+  @Get('top')
+  @ApiOperation({ summary: 'Get top dealers by electricians added within a date range' })
+  getTop(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('limit') limit = '10',
+  ) {
+    return this.dealerService.getTop(from, to, parseInt(limit));
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get dealer by ID' })
   @ApiResponse({ status: 200, description: 'Dealer details' })

@@ -138,7 +138,20 @@ export class MobileService {
 
     qb.orderBy('product.createdAt', 'DESC');
     const products = await qb.getMany();
-    return { data: products };
+    
+    // Transform products to include imageUrl field and handle null/empty images
+    const transformedProducts = products.map(product => {
+      // If image is null, empty, or just whitespace, set it to null so app can use fallback
+      const imageValue = product.image?.trim() || null;
+      
+      return {
+        ...product,
+        image: imageValue,
+        imageUrl: imageValue, // Add imageUrl field that points to image
+      };
+    });
+    
+    return { data: transformedProducts };
   }
 
   async getProductCategories() {
