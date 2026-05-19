@@ -181,6 +181,8 @@ model Dealer {
   aadharNumber       String?
   panNumber          String?
   gstDocument        String?
+  aadharFrontImage   String?
+  aadharBackImage    String?
   aadharDocument     String?
   panDocument        String?
   kycRejectionReason String?
@@ -230,8 +232,11 @@ model Electrician {
   kycStatus          KYCStatus               @default(not_submitted)
   aadharNumber       String?
   panNumber          String?
+  aadharFrontImage   String?
+  aadharBackImage    String?
   aadharDocument     String?
   panDocument        String?
+  gstDocument        String?
   kycRejectionReason String?
   dealerId           String?
   dealer             Dealer?                 @relation(fields: [dealerId], references: [id], onDelete: SetNull)
@@ -676,8 +681,11 @@ model AppUser {
   kycStatus          KYCStatus  @default(not_submitted)
   aadharNumber       String?
   panNumber          String?
+  aadharFrontImage   String?
+  aadharBackImage    String?
   aadharDocument     String?
   panDocument        String?
+  gstDocument        String?
   kycRejectionReason String?
   passwordHash       String?
   language           String?
@@ -710,8 +718,11 @@ model CounterBoy {
   kycStatus          KYCStatus  @default(not_submitted)
   aadharNumber       String?
   panNumber          String?
+  aadharFrontImage   String?
+  aadharBackImage    String?
   aadharDocument     String?
   panDocument        String?
+  gstDocument        String?
   kycRejectionReason String?
   passwordHash       String?
   language           String?

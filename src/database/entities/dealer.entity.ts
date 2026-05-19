@@ -114,6 +114,12 @@ export class Dealer {
   panNumber: string;
 
   @Column({ nullable: true })
+  aadharFrontImage: string;
+
+  @Column({ nullable: true })
+  aadharBackImage: string;
+
+  @Column({ nullable: true })
   gstDocument: string;
 
   @Column({ nullable: true })

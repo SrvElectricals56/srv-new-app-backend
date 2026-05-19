@@ -11,7 +11,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nes
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
 import { ConfigService } from '@nestjs/config';
 
 const UPLOAD_DIR = join(process.cwd(), 'uploads');
@@ -19,9 +19,10 @@ const BANNER_DIR = join(UPLOAD_DIR, 'banners');
 const PRODUCT_DIR = join(UPLOAD_DIR, 'products');
 const CATALOG_DIR = join(UPLOAD_DIR, 'catalog');
 const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
+const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
 
 // Ensure upload directories exist
-[BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR].forEach(dir => {
+[BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR, AADHAR_DIR].forEach(dir => {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -29,7 +30,7 @@ const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
 
 @ApiTags('Upload')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
+@UseGuards(MobileJwtGuard)
 @Controller('upload')
 export class UploadController {
   constructor(private configService: ConfigService) {}
@@ -190,5 +191,47 @@ export class UploadController {
     }
     const url = `${this.getBaseUrl()}/uploads/videos/${file.filename}`;
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
+  }
+
+  @Post('aadhar-image')
+  @ApiOperation({ summary: 'Upload Aadhar front or back image' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: AADHAR_DIR,
+        filename: (_req, file, cb) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `aadhar-${uniqueSuffix}${extname(file.originalname)}`);
+        },
+      }),
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.match(/^image\/(jpeg|jpg|png|gif|webp|pdf)$/)) {
+          return cb(new BadRequestException('Only image files or PDF are allowed'), false);
+        }
+        cb(null, true);
+      },
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    }),
+  )
+  uploadAadharImage(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+
+    const imageUrl = `${this.getBaseUrl()}/uploads/aadhar/${file.filename}`;
+
+    return {
+      url: imageUrl,
+      filename: file.filename,
+      originalName: file.originalname,
+      size: file.size,
+    };
   }
 }

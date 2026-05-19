@@ -130,4 +130,14 @@ export class CreateDealerDto {
   @IsOptional()
   @IsString()
   electricianList?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  aadharFrontImage?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  aadharBackImage?: string;
 }

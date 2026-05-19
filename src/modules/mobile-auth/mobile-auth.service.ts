@@ -423,11 +423,18 @@ export class MobileAuthService {
   async updateProfile(userId: string, role: string, data: any) {
     const commonFields = ['name', 'email', 'city', 'state', 'district', 'pincode', 'address',
       'upiId', 'bankAccount', 'ifsc', 'bankName', 'accountHolderName', 'bankLinked',
-      'language', 'darkMode', 'pushEnabled'];
+      'language', 'darkMode', 'pushEnabled',
+      'aadharFrontImage', 'aadharBackImage', 'panDocument', 'gstDocument'];
 
     const updateData: any = {};
     commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
     if (data.profileImage !== undefined) updateData.profileImage = data.profileImage;
+
+    // Dealer-specific fields
+    if (role === 'dealer') {
+      if (data.town !== undefined) updateData.town = data.town;
+      if (data.gstNumber !== undefined) updateData.gstNumber = data.gstNumber;
+    }
 
     switch (role) {
       case 'electrician': await this.electricianRepository.update(userId, updateData); break;
@@ -515,6 +522,10 @@ export class MobileAuthService {
           dealerPhone: user.dealer?.phone ?? null,
           dealerTown: user.dealer?.town ?? null,
           dealerCode: user.dealer?.dealerCode ?? null,
+          aadharFrontImage: user.aadharFrontImage ?? null,
+          panDocument: user.panDocument ?? null,
+          gstDocument: user.gstDocument ?? null,
+          kycRejectionReason: user.kycRejectionReason ?? null,
           role: 'electrician',
         };
 
@@ -543,6 +554,10 @@ export class MobileAuthService {
           bankName: user.bankName,
           accountHolderName: user.accountHolderName,
           profileImage: user.profileImage ?? null,
+          aadharFrontImage: user.aadharFrontImage ?? null,
+          panDocument: user.panDocument ?? null,
+          gstDocument: user.gstDocument ?? null,
+          kycRejectionReason: user.kycRejectionReason ?? null,
           role: 'dealer',
         };
 
@@ -571,6 +586,10 @@ export class MobileAuthService {
           bankName: user.bankName,
           accountHolderName: user.accountHolderName,
           profileImage: user.profileImage ?? null,
+          aadharFrontImage: user.aadharFrontImage ?? null,
+          panDocument: user.panDocument ?? null,
+          gstDocument: user.gstDocument ?? null,
+          kycRejectionReason: user.kycRejectionReason ?? null,
           role: 'user',
         };
 
@@ -595,6 +614,10 @@ export class MobileAuthService {
           dealerPhone: user.dealer?.phone ?? null,
           dealerCode: user.dealer?.dealerCode ?? null,
           profileImage: user.profileImage ?? null,
+          aadharFrontImage: user.aadharFrontImage ?? null,
+          panDocument: user.panDocument ?? null,
+          gstDocument: user.gstDocument ?? null,
+          kycRejectionReason: user.kycRejectionReason ?? null,
           role: 'counterboy',
         };
 

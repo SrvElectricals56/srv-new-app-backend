@@ -113,4 +113,14 @@ export class CreateElectricianDto {
   @ApiProperty({ required: false, default: 0 })
   @IsOptional()
   totalScans?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  aadharFrontImage?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  aadharBackImage?: string;
 }

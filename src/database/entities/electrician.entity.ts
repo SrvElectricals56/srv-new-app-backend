@@ -116,10 +116,16 @@ export class Electrician {
   panNumber: string;
 
   @Column({ nullable: true })
+  aadharFrontImage: string;
+
+  @Column({ nullable: true })
   aadharDocument: string;
 
   @Column({ nullable: true })
   panDocument: string;
+
+  @Column({ nullable: true })
+  gstDocument: string;
 
   @Column({ nullable: true })
   kycRejectionReason: string;
