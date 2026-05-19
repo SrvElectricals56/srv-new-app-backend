@@ -22,6 +22,7 @@ import { Redemption } from '../../database/entities/redemption.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
 import { GiftOrder } from '../../database/entities/gift-order.entity';
+import { ProductCategory } from '../../database/entities/product-category.entity';
 import { UserRole, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 
@@ -60,6 +61,8 @@ export class MobileService {
     private supportTicketRepository: Repository<SupportTicket>,
     @InjectRepository(GiftOrder)
     private giftOrderRepository: Repository<GiftOrder>,
+    @InjectRepository(ProductCategory)
+    private productCategoryRepository: Repository<ProductCategory>,
     private readonly tierService: TierService,
   ) {}
 
@@ -155,6 +158,11 @@ export class MobileService {
   }
 
   async getProductCategories() {
+    const adminCategories = await this.productCategoryRepository.find({
+      where: { isActive: true },
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
+    });
+
     const products = await this.productRepository
       .createQueryBuilder('product')
       .select('DISTINCT product.category', 'category')
@@ -162,15 +170,41 @@ export class MobileService {
       .andWhere('product.category != :gift', { gift: 'gift' })
       .getRawMany();
 
-    const categories = products.map((p, i) => ({
-      id: `cat_${i}`,
-      label: p.category,
-      slug: p.category.toLowerCase().replace(/\s+/g, '-'),
-      glyph: null,
-      imageUrl: null,
-    }));
+    const normalizeSlug = (value: string) =>
+      value
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-');
 
-    return { data: categories };
+    const categories = new Map<string, { id: string; label: string; slug: string; glyph: string | null; imageUrl: string | null }>();
+
+    for (const category of adminCategories) {
+      const slug = normalizeSlug(category.label);
+      categories.set(slug, {
+        id: category.id,
+        label: category.label,
+        slug,
+        glyph: category.glyph ?? null,
+        imageUrl: category.imageUrl ?? null,
+      });
+    }
+
+    for (const product of products) {
+      const label = product.category?.trim();
+      if (!label) continue;
+      const slug = normalizeSlug(label);
+      if (categories.has(slug)) continue;
+      categories.set(slug, {
+        id: `cat_${categories.size}`,
+        label,
+        slug,
+        glyph: null,
+        imageUrl: null,
+      });
+    }
+
+    return { data: Array.from(categories.values()) };
   }
 
   async getProductById(id: string) {
