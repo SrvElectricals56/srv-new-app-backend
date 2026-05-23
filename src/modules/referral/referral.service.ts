@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, ILike } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { UserStatus } from '../../common/enums';
 
 @Injectable()
@@ -12,6 +14,10 @@ export class ReferralService {
     private electricianRepository: Repository<Electrician>,
     @InjectRepository(Dealer)
     private dealerRepository: Repository<Dealer>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterboyRepository: Repository<CounterBoy>,
   ) {}
 
   async findAll(
@@ -25,6 +31,8 @@ export class ReferralService {
 
     const electricianQb = this.electricianRepository.createQueryBuilder('e');
     const dealerQb = this.dealerRepository.createQueryBuilder('d');
+    const appUserQb = this.appUserRepository.createQueryBuilder('u');
+    const counterboyQb = this.counterboyRepository.createQueryBuilder('c');
 
     if (search) {
       electricianQb.andWhere(
@@ -35,21 +43,39 @@ export class ReferralService {
         '(d.name ILIKE :s OR d.phone ILIKE :s OR d.dealerCode ILIKE :s)',
         { s: `%${search}%` },
       );
+      appUserQb.andWhere(
+        '(u.name ILIKE :s OR u.phone ILIKE :s OR u.userCode ILIKE :s)',
+        { s: `%${search}%` },
+      );
+      counterboyQb.andWhere(
+        '(c.name ILIKE :s OR c.phone ILIKE :s OR c.counterboyCode ILIKE :s)',
+        { s: `%${search}%` },
+      );
     }
 
     if (status && status !== 'all') {
       electricianQb.andWhere('e.status = :status', { status });
       dealerQb.andWhere('d.status = :status', { status });
+      appUserQb.andWhere('u.status = :status', { status });
+      counterboyQb.andWhere('c.status = :status', { status });
     }
 
     let electricians: Electrician[] = [];
     let dealers: Dealer[] = [];
+    let appUsers: AppUser[] = [];
+    let counterboys: CounterBoy[] = [];
 
     if (!type || type === 'all' || type === 'electrician') {
       electricians = await electricianQb.getMany();
     }
     if (!type || type === 'all' || type === 'dealer') {
       dealers = await dealerQb.getMany();
+    }
+    if (!type || type === 'all' || type === 'customer') {
+      appUsers = await appUserQb.getMany();
+    }
+    if (!type || type === 'all' || type === 'counterboy') {
+      counterboys = await counterboyQb.getMany();
     }
 
     // Map to unified referral records
@@ -89,7 +115,43 @@ export class ReferralService {
       dealerId: null,
     }));
 
-    const all = [...elecRecords, ...dealerRecords].sort(
+    const customerRecords = appUsers.map((u) => ({
+      id: u.id,
+      userName: u.name,
+      phone: u.phone,
+      referralCode: u.userCode,
+      type: 'customer',
+      tier: u.tier,
+      status: u.status,
+      totalPoints: u.totalPoints,
+      walletBalance: u.walletBalance,
+      totalScans: 0,
+      totalRedemptions: u.totalRedemptions,
+      joinedDate: u.joinedDate,
+      city: u.city,
+      state: u.state,
+      dealerId: null,
+    }));
+
+    const counterboyRecords = counterboys.map((c) => ({
+      id: c.id,
+      userName: c.name,
+      phone: c.phone,
+      referralCode: c.counterboyCode,
+      type: 'counterboy',
+      tier: c.tier,
+      status: c.status,
+      totalPoints: c.totalPoints,
+      walletBalance: c.walletBalance,
+      totalScans: c.totalScans,
+      totalRedemptions: c.totalRedemptions,
+      joinedDate: c.joinedDate,
+      city: c.city,
+      state: c.state,
+      dealerId: c.dealerId,
+    }));
+
+    const all = [...elecRecords, ...dealerRecords, ...customerRecords, ...counterboyRecords].sort(
       (a, b) => new Date(b.joinedDate).getTime() - new Date(a.joinedDate).getTime(),
     );
 
@@ -156,6 +218,56 @@ export class ReferralService {
       };
     }
 
+    // Try customer (app_user)
+    const appUser = await this.appUserRepository.findOne({ where: { id } });
+    if (appUser) {
+      return {
+        id: appUser.id,
+        userName: appUser.name,
+        phone: appUser.phone,
+        referralCode: appUser.userCode,
+        type: 'customer',
+        tier: appUser.tier,
+        status: appUser.status,
+        totalPoints: appUser.totalPoints,
+        walletBalance: appUser.walletBalance,
+        totalScans: 0,
+        totalRedemptions: appUser.totalRedemptions,
+        joinedDate: appUser.joinedDate,
+        city: appUser.city,
+        state: appUser.state,
+        email: appUser.email,
+        upiId: appUser.upiId,
+        bankLinked: appUser.bankLinked,
+        dealerId: null,
+      };
+    }
+
+    // Try counterboy
+    const counterboy = await this.counterboyRepository.findOne({ where: { id } });
+    if (counterboy) {
+      return {
+        id: counterboy.id,
+        userName: counterboy.name,
+        phone: counterboy.phone,
+        referralCode: counterboy.counterboyCode,
+        type: 'counterboy',
+        tier: counterboy.tier,
+        status: counterboy.status,
+        totalPoints: counterboy.totalPoints,
+        walletBalance: counterboy.walletBalance,
+        totalScans: counterboy.totalScans,
+        totalRedemptions: counterboy.totalRedemptions,
+        joinedDate: counterboy.joinedDate,
+        city: counterboy.city,
+        state: counterboy.state,
+        email: counterboy.email,
+        upiId: counterboy.upiId,
+        bankLinked: counterboy.bankLinked,
+        dealerId: counterboy.dealerId,
+      };
+    }
+
     throw new NotFoundException('Referral record not found');
   }
 
@@ -182,6 +294,28 @@ export class ReferralService {
       return this.findOne(id);
     }
 
+    // Try customer
+    const appUser = await this.appUserRepository.findOne({ where: { id } });
+    if (appUser) {
+      const allowed: any = {};
+      if (updateData.status !== undefined) allowed.status = updateData.status;
+      if (updateData.phone !== undefined) allowed.phone = updateData.phone;
+      if (updateData.tier !== undefined) allowed.tier = updateData.tier;
+      await this.appUserRepository.update(id, allowed);
+      return this.findOne(id);
+    }
+
+    // Try counterboy
+    const counterboy = await this.counterboyRepository.findOne({ where: { id } });
+    if (counterboy) {
+      const allowed: any = {};
+      if (updateData.status !== undefined) allowed.status = updateData.status;
+      if (updateData.phone !== undefined) allowed.phone = updateData.phone;
+      if (updateData.tier !== undefined) allowed.tier = updateData.tier;
+      await this.counterboyRepository.update(id, allowed);
+      return this.findOne(id);
+    }
+
     throw new NotFoundException('Referral record not found');
   }
 
@@ -198,18 +332,34 @@ export class ReferralService {
       return { message: 'Referral record deleted successfully' };
     }
 
+    const appUser = await this.appUserRepository.findOne({ where: { id } });
+    if (appUser) {
+      await this.appUserRepository.remove(appUser);
+      return { message: 'Referral record deleted successfully' };
+    }
+
+    const counterboy = await this.counterboyRepository.findOne({ where: { id } });
+    if (counterboy) {
+      await this.counterboyRepository.remove(counterboy);
+      return { message: 'Referral record deleted successfully' };
+    }
+
     throw new NotFoundException('Referral record not found');
   }
 
   async getStats() {
-    const [totalElectricians, totalDealers] = await Promise.all([
+    const [totalElectricians, totalDealers, totalCustomers, totalCounterboys] = await Promise.all([
       this.electricianRepository.count(),
       this.dealerRepository.count(),
+      this.appUserRepository.count(),
+      this.counterboyRepository.count(),
     ]);
 
-    const [activeElectricians, activeDealers] = await Promise.all([
+    const [activeElectricians, activeDealers, activeCustomers, activeCounterboys] = await Promise.all([
       this.electricianRepository.count({ where: { status: UserStatus.ACTIVE } }),
       this.dealerRepository.count({ where: { status: UserStatus.ACTIVE } }),
+      this.appUserRepository.count({ where: { status: UserStatus.ACTIVE } }),
+      this.counterboyRepository.count({ where: { status: UserStatus.ACTIVE } }),
     ]);
 
     const topElectricians = await this.electricianRepository.find({
@@ -218,10 +368,12 @@ export class ReferralService {
     });
 
     return {
-      totalReferrals: totalElectricians + totalDealers,
-      activeReferrals: activeElectricians + activeDealers,
+      totalReferrals: totalElectricians + totalDealers + totalCustomers + totalCounterboys,
+      activeReferrals: activeElectricians + activeDealers + activeCustomers + activeCounterboys,
       totalElectricians,
       totalDealers,
+      totalCustomers,
+      totalCounterboys,
       topReferrers: topElectricians.map((e) => ({
         id: e.id,
         name: e.name,

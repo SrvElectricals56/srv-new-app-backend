@@ -79,8 +79,8 @@ export class CreateGiftProductDto {
   @IsString()
   status?: string;
 
-  // Frontend sends type: 'electrician' | 'dealer'
-  @ApiProperty({ required: false })
+  // Frontend sends type: 'electrician' | 'dealer' | 'customer' | 'counterboy'
+  @ApiProperty({ required: false, description: 'electrician | dealer | customer | counterboy' })
   @IsOptional()
   @IsString()
   type?: string;

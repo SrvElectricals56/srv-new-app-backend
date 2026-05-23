@@ -55,7 +55,7 @@ export class CreateTestimonialDto {
   @IsNumber()
   displayOrder?: number;
 
-  @ApiProperty({ required: false, description: 'all | electrician | dealer', default: 'all' })
+  @ApiProperty({ required: false, description: 'all | electrician | dealer | customer | counterboy', default: 'all' })
   @IsOptional()
   @IsString()
   userCategory?: string;

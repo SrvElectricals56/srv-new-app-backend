@@ -25,6 +25,7 @@ import { Wallet } from './database/entities/wallet.entity';
 import { GiftOrder } from './database/entities/gift-order.entity';
 import { ProductCategory } from './database/entities/product-category.entity';
 import { Play } from './database/entities/play.entity';
+import { AppIcon } from './database/entities/app-icon.entity';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -53,6 +54,7 @@ import { ProductCategoryModule } from './modules/product-category/product-catego
 import { AppUserModule } from './modules/app-user/app-user.module';
 import { CounterBoyModule } from './modules/counterboy/counterboy.module';
 import { PlayModule } from './modules/play/play.module';
+import { AppIconModule } from './modules/app-icon/app-icon.module';
 
 @Module({
   imports: [
@@ -75,7 +77,7 @@ import { PlayModule } from './modules/play/play.module';
         entities: [
           Admin, Banner, Dealer, Electrician, AppUser, CounterBoy,
           Notification, Offer, PointsConfig, Product, QrCode, Redemption,
-          Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play,
+          Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play, AppIcon,
         ],
         synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
         logging: configService.get<string>('DB_LOGGING') === 'true',
@@ -127,6 +129,7 @@ import { PlayModule } from './modules/play/play.module';
     AppUserModule,
     CounterBoyModule,
     PlayModule,
+    AppIconModule,
   ],
 })
 export class AppModule {}

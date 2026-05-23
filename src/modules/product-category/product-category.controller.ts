@@ -7,6 +7,7 @@ import {
   Param,
   Delete,
   UseGuards,
+  HttpCode,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ProductCategoryService } from './product-category.service';
@@ -56,8 +57,9 @@ export class ProductCategoryController {
 
   @Delete(':id')
   @Roles(AdminRole.SUPER_ADMIN)
+  @HttpCode(204)
   @ApiOperation({ summary: 'Delete product category (Super Admin only)' })
-  @ApiResponse({ status: 200, description: 'Category deleted successfully' })
+  @ApiResponse({ status: 204, description: 'Category deleted successfully' })
   remove(@Param('id') id: string) {
     return this.categoryService.remove(id);
   }

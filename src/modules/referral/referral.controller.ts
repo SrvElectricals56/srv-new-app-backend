@@ -20,7 +20,7 @@ export class ReferralController {
   constructor(private readonly referralService: ReferralService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get all referral records (electricians + dealers)' })
+  @ApiOperation({ summary: 'Get all referral records (electricians, dealers, customers, counterboys)' })
   @ApiResponse({ status: 200, description: 'List of referrals' })
   findAll(
     @Query('page') page = '1',

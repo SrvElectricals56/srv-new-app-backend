@@ -296,6 +296,7 @@ export class MobileService {
     rows.forEach(r => { map[r.key] = r.value; });
     let rolePageControls: Record<string, Record<string, boolean>> | null = null;
     let appPageContent: Record<string, Record<string, Record<string, string>>> | null = null;
+    let pageSectionOrder: Record<string, Record<string, string[]>> | null = null;
     if (map['rolePageControls']) {
       try {
         rolePageControls = JSON.parse(map['rolePageControls']);
@@ -308,6 +309,13 @@ export class MobileService {
         appPageContent = JSON.parse(map['appPageContent']);
       } catch {
         appPageContent = null;
+      }
+    }
+    if (map['pageSectionOrder']) {
+      try {
+        pageSectionOrder = JSON.parse(map['pageSectionOrder']);
+      } catch {
+        pageSectionOrder = null;
       }
     }
     return {
@@ -331,6 +339,7 @@ export class MobileService {
       catalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
       rolePageControls,
       appPageContent,
+      pageSectionOrder,
     };
   }
 

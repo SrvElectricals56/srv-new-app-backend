@@ -698,6 +698,19 @@ model AppUser {
   @@map("app_users")
 }
 
+model AppIcon {
+  id           String   @id @default(uuid())
+  name         String
+  imageUrl     String?
+  isActive     Boolean  @default(false)
+  displayOrder Int      @default(0)
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("app_icons")
+}
+
 model CounterBoy {
   id                 String     @id @default(uuid())
   name               String
@@ -714,7 +727,16 @@ model CounterBoy {
   dealer             Dealer?    @relation(fields: [dealerId], references: [id], onDelete: SetNull)
   totalScans         Int        @default(0)
   totalPoints        Int        @default(0)
+  walletBalance      Int        @default(0)
+  totalRedemptions   Int        @default(0)
+  tier               MemberTier @default(Silver)
   status             UserStatus @default(pending)
+  bankLinked         Boolean    @default(false)
+  upiId              String?
+  bankAccount        String?
+  ifsc               String?
+  bankName           String?
+  accountHolderName  String?
   kycStatus          KYCStatus  @default(not_submitted)
   aadharNumber       String?
   panNumber          String?

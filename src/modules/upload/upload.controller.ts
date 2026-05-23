@@ -20,7 +20,6 @@ const PRODUCT_DIR = join(UPLOAD_DIR, 'products');
 const CATALOG_DIR = join(UPLOAD_DIR, 'catalog');
 const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
 const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
-
 // Ensure upload directories exist
 [BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR, AADHAR_DIR].forEach(dir => {
   if (!existsSync(dir)) {

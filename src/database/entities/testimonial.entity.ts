@@ -45,7 +45,7 @@ export class Testimonial {
   displayOrder: number;
 
   @Column({ nullable: true, default: 'all' })
-  userCategory: string; // 'all' | 'electrician' | 'dealer'
+  userCategory: string; // 'all' | 'electrician' | 'dealer' | 'customer' | 'counterboy'
 
   // Legacy fields kept for backward compat
   @Column({ nullable: true })
