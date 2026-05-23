@@ -103,9 +103,6 @@ export class AppUser {
   aadharFrontImage: string;
 
   @Column({ nullable: true })
-  aadharDocument: string;
-
-  @Column({ nullable: true })
   panDocument: string;
 
   @Column({ nullable: true })

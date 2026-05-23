@@ -424,7 +424,7 @@ export class MobileAuthService {
     const commonFields = ['name', 'email', 'city', 'state', 'district', 'pincode', 'address',
       'upiId', 'bankAccount', 'ifsc', 'bankName', 'accountHolderName', 'bankLinked',
       'language', 'darkMode', 'pushEnabled',
-      'aadharFrontImage', 'aadharBackImage', 'panDocument', 'gstDocument'];
+      'aadharFrontImage', 'panDocument', 'gstDocument'];
 
     const updateData: any = {};
     commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
@@ -434,6 +434,18 @@ export class MobileAuthService {
     if (role === 'dealer') {
       if (data.town !== undefined) updateData.town = data.town;
       if (data.gstNumber !== undefined) updateData.gstNumber = data.gstNumber;
+    }
+
+    // If any KYC document is being submitted, set kycStatus to pending
+    const kycDocFields = ['aadharFrontImage', 'panDocument', 'gstDocument'];
+    const hasKycDoc = kycDocFields.some(k => data[k] !== undefined && data[k] !== null && data[k] !== '');
+    if (hasKycDoc) {
+      // Only move to pending if currently not_submitted or rejected
+      const currentUser = await this.getProfile(userId, role);
+      const currentKycStatus = (currentUser as any).kycStatus;
+      if (currentKycStatus === 'not_submitted' || currentKycStatus === 'rejected') {
+        updateData.kycStatus = 'pending';
+      }
     }
 
     switch (role) {

@@ -137,7 +137,7 @@ async function bootstrap() {
   ║   🚀 SRV Electricals Admin Backend API                   ║
   ║                                                           ║
   ║   Server running on: http://localhost:${port}              ║
-  ║   Network access: http://192.168.31.125:${port}           ║
+  ║   Network access: http://10.255.222.231:${port}           ║
   ║   API Docs: http://localhost:${port}/api/docs             ║
   ║   Environment: ${configService.get('NODE_ENV')}                      ║
   ║                                                           ║

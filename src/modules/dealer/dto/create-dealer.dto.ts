@@ -139,5 +139,25 @@ export class CreateDealerDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  aadharBackImage?: string;
+  aadharNumber?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  panNumber?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  panDocument?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  gstDocument?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  kycRejectionReason?: string;
 }

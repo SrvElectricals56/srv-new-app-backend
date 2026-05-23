@@ -96,10 +96,13 @@ export class CounterBoy {
   panNumber: string;
 
   @Column({ nullable: true })
-  aadharDocument: string;
+  aadharFrontImage: string;
 
   @Column({ nullable: true })
   panDocument: string;
+
+  @Column({ nullable: true })
+  gstDocument: string;
 
   @Column({ nullable: true })
   kycRejectionReason: string;

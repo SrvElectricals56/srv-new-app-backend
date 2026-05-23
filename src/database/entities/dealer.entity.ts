@@ -117,16 +117,10 @@ export class Dealer {
   aadharFrontImage: string;
 
   @Column({ nullable: true })
-  aadharBackImage: string;
+  panDocument: string;
 
   @Column({ nullable: true })
   gstDocument: string;
-
-  @Column({ nullable: true })
-  aadharDocument: string;
-
-  @Column({ nullable: true })
-  panDocument: string;
 
   @Column({ nullable: true })
   kycRejectionReason: string;

@@ -295,11 +295,19 @@ export class MobileService {
     const map: Record<string, string> = {};
     rows.forEach(r => { map[r.key] = r.value; });
     let rolePageControls: Record<string, Record<string, boolean>> | null = null;
+    let appPageContent: Record<string, Record<string, Record<string, string>>> | null = null;
     if (map['rolePageControls']) {
       try {
         rolePageControls = JSON.parse(map['rolePageControls']);
       } catch {
         rolePageControls = null;
+      }
+    }
+    if (map['appPageContent']) {
+      try {
+        appPageContent = JSON.parse(map['appPageContent']);
+      } catch {
+        appPageContent = null;
       }
     }
     return {
@@ -322,6 +330,7 @@ export class MobileService {
       dealerCatalogPdfUrl: map['dealerCatalogPdfUrl'] ?? null,
       catalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
       rolePageControls,
+      appPageContent,
     };
   }
 
