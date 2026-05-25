@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateElectricianDto } from './dto/create-electrician.dto';
 import { UpdateElectricianDto } from './dto/update-electrician.dto';
 import { Electrician } from '../../database/entities/electrician.entity';
+import { Dealer } from '../../database/entities/dealer.entity';
 import { Scan } from '../../database/entities/scan.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { UserStatus, MemberTier } from '../../common/enums';
@@ -14,6 +15,8 @@ export class ElectricianService {
   constructor(
     @InjectRepository(Electrician)
     private electricianRepository: Repository<Electrician>,
+    @InjectRepository(Dealer)
+    private dealerRepository: Repository<Dealer>,
     @InjectRepository(Scan)
     private scanRepository: Repository<Scan>,
     @InjectRepository(Wallet)
@@ -21,21 +24,95 @@ export class ElectricianService {
     private readonly tierService: TierService,
   ) {}
 
+  private normalizeElectricianCode(code?: string | null): string | null {
+    const trimmed = code?.trim();
+    if (!trimmed || trimmed.includes('###')) {
+      return null;
+    }
+
+    return trimmed.toUpperCase();
+  }
+
+  private buildFallbackElectricianCode(phone?: string | null): string {
+    const phoneSuffix = String(phone ?? '').replace(/\D/g, '').slice(-4) || '0000';
+    return `ELC-${phoneSuffix}-${Date.now().toString().slice(-6)}`;
+  }
+
+  private async generateNextElectricianCodeForDealer(dealerId: string): Promise<string> {
+    const dealer = await this.dealerRepository.findOne({
+      where: { id: dealerId },
+      select: ['id', 'dealerCode'],
+    });
+
+    if (!dealer) {
+      throw new NotFoundException('Dealer not found');
+    }
+
+    if (!dealer.dealerCode?.trim()) {
+      throw new BadRequestException('Selected dealer does not have a dealer code');
+    }
+
+    const prefix = `${dealer.dealerCode.trim().toUpperCase()}-`;
+    const linkedElectricians = await this.electricianRepository.find({
+      where: { dealerId },
+      select: ['electricianCode'],
+    });
+
+    let maxSerial = 0;
+    for (const linkedElectrician of linkedElectricians) {
+      const code = linkedElectrician.electricianCode?.trim().toUpperCase();
+      if (!code?.startsWith(prefix)) continue;
+
+      const suffix = code.slice(prefix.length);
+      if (!/^\d+$/.test(suffix)) continue;
+
+      maxSerial = Math.max(maxSerial, Number.parseInt(suffix, 10) || 0);
+    }
+
+    return `${prefix}${String(maxSerial + 1).padStart(3, '0')}`;
+  }
+
+  private async resolveElectricianCode(params: {
+    electricianCode?: string | null;
+    dealerId?: string | null;
+    phone?: string | null;
+  }): Promise<string> {
+    const manualCode = this.normalizeElectricianCode(params.electricianCode);
+    if (manualCode) {
+      return manualCode;
+    }
+
+    if (params.dealerId) {
+      return this.generateNextElectricianCodeForDealer(params.dealerId);
+    }
+
+    return this.buildFallbackElectricianCode(params.phone);
+  }
+
   async create(createElectricianDto: CreateElectricianDto) {
     const existingElectrician = await this.electricianRepository.findOne({
-      where: [
-        { phone: createElectricianDto.phone },
-        { electricianCode: createElectricianDto.electricianCode },
-      ],
+      where: { phone: createElectricianDto.phone },
     });
 
     if (existingElectrician) {
-      throw new ConflictException('Electrician with this phone or code already exists');
+      throw new ConflictException('Electrician with this phone already exists');
     }
 
     const data: any = { ...createElectricianDto };
     if (!data.dealerId || data.dealerId.trim() === '') {
       data.dealerId = null;
+    }
+    data.electricianCode = await this.resolveElectricianCode({
+      electricianCode: data.electricianCode,
+      dealerId: data.dealerId,
+      phone: data.phone,
+    });
+
+    const existingCode = await this.electricianRepository.findOne({
+      where: { electricianCode: data.electricianCode },
+    });
+    if (existingCode) {
+      throw new ConflictException('Electrician with this code already exists');
     }
 
     // Set initial tier based on points (if provided)
@@ -156,6 +233,22 @@ export class ElectricianService {
     if (data.dealerId !== undefined && (!data.dealerId || data.dealerId.trim() === '')) {
       data.dealerId = null;
     }
+    if (data.electricianCode !== undefined) {
+      const normalizedCode = this.normalizeElectricianCode(data.electricianCode);
+      if (!normalizedCode) {
+        delete data.electricianCode;
+      } else {
+        if (normalizedCode !== electrician.electricianCode) {
+          const existingCode = await this.electricianRepository.findOne({
+            where: { electricianCode: normalizedCode },
+          });
+          if (existingCode && existingCode.id !== electrician.id) {
+            throw new ConflictException('Electrician with this code already exists');
+          }
+        }
+        data.electricianCode = normalizedCode;
+      }
+    }
 
     // Auto-recalculate tier when totalPoints changes — ignore any manually passed tier
     if (data.totalPoints !== undefined) {
@@ -258,10 +351,12 @@ export class ElectricianService {
           updated++;
         } else {
           const data: any = { ...record };
-          if (!data.electricianCode) {
-            data.electricianCode = `ELEC${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
-          }
           if (!data.dealerId || data.dealerId.trim() === '') data.dealerId = null;
+          data.electricianCode = await this.resolveElectricianCode({
+            electricianCode: data.electricianCode,
+            dealerId: data.dealerId,
+            phone: data.phone,
+          });
           const points = Number(data.totalPoints ?? 0);
           data.tier = this.tierService.calculateElectricianTier(points);
           const entity = this.electricianRepository.create(data);

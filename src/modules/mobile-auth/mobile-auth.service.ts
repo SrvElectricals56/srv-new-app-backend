@@ -16,6 +16,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
 import { ElectricianSubCategory, UserStatus } from '../../common/enums';
+import { TierService } from '../../common/services/tier.service';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<string, { otp: string; expiresAt: number }>();
@@ -31,6 +32,7 @@ export class MobileAuthService {
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(CounterBoy)
     private counterboyRepository: Repository<CounterBoy>,
+    private readonly tierService: TierService,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
@@ -58,6 +60,41 @@ export class MobileAuthService {
     if (!trimmed) return null;
     const salt = await bcrypt.genSalt(10);
     return bcrypt.hash(trimmed, salt);
+  }
+
+  private normalizeElectricianCode(code?: string | null): string | null {
+    const trimmed = code?.trim();
+    if (!trimmed || trimmed.includes('###')) {
+      return null;
+    }
+
+    return trimmed.toUpperCase();
+  }
+
+  private buildFallbackElectricianCode(phone?: string | null): string {
+    const phoneSuffix = String(phone ?? '').replace(/\D/g, '').slice(-4) || '0000';
+    return `ELC-${phoneSuffix}-${Date.now().toString().slice(-6)}`;
+  }
+
+  private async generateNextElectricianCodeForDealer(dealerId: string, dealerCode: string): Promise<string> {
+    const prefix = `${dealerCode.trim().toUpperCase()}-`;
+    const linkedElectricians = await this.electricianRepository.find({
+      where: { dealerId },
+      select: ['electricianCode'],
+    });
+
+    let maxSerial = 0;
+    for (const linkedElectrician of linkedElectricians) {
+      const code = linkedElectrician.electricianCode?.trim().toUpperCase();
+      if (!code?.startsWith(prefix)) continue;
+
+      const suffix = code.slice(prefix.length);
+      if (!/^\d+$/.test(suffix)) continue;
+
+      maxSerial = Math.max(maxSerial, Number.parseInt(suffix, 10) || 0);
+    }
+
+    return `${prefix}${String(maxSerial + 1).padStart(3, '0')}`;
   }
 
   private async hydrateCounterBoyDealer<T extends { dealerId?: string | null }>(counterboy: T | null) {
@@ -221,20 +258,27 @@ export class MobileAuthService {
   async registerElectrician(data: {
     name: string; phone: string; email?: string; city: string;
     district: string; state: string; address?: string; pincode?: string;
-    dealerPhone: string; password?: string; subCategory?: string;
+    dealerPhone: string; password?: string; subCategory?: string; electricianCode?: string;
   }) {
     const existing = await this.electricianRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
 
     let dealerId: string | undefined;
+    let dealerCode: string | undefined;
     if (data.dealerPhone) {
       const dealer = await this.dealerRepository.findOne({ where: { phone: data.dealerPhone } });
       if (!dealer) throw new NotFoundException('Dealer not found with this phone number.');
       dealerId = dealer.id;
+      dealerCode = dealer.dealerCode;
     }
 
-    const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
-    const electricianCode = `ELC${stateCode}${Date.now().toString().slice(-6)}`;
+    const manualCode = this.normalizeElectricianCode(data.electricianCode);
+    const electricianCode = manualCode
+      ?? (dealerId && dealerCode
+        ? await this.generateNextElectricianCodeForDealer(dealerId, dealerCode)
+        : this.buildFallbackElectricianCode(data.phone));
+    const existingCode = await this.electricianRepository.findOne({ where: { electricianCode } });
+    if (existingCode) throw new ConflictException('Electrician code already exists.');
 
     const electrician = this.electricianRepository.create({
       name: data.name,
@@ -252,6 +296,9 @@ export class MobileAuthService {
     });
 
     const saved = await this.electricianRepository.save(electrician);
+    if (dealerId) {
+      await this.tierService.syncDealerTier(dealerId);
+    }
     const savedWithDealer = await this.electricianRepository.findOne({
       where: { id: saved.id },
       relations: ['dealer'],

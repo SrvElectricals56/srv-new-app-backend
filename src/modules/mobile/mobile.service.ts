@@ -127,6 +127,41 @@ export class MobileService {
     return user?.counterboyCode ?? userId.slice(0, 8).toUpperCase();
   }
 
+  private normalizeElectricianCode(code?: string | null): string | null {
+    const trimmed = code?.trim();
+    if (!trimmed || trimmed.includes('###')) {
+      return null;
+    }
+
+    return trimmed.toUpperCase();
+  }
+
+  private async getNextElectricianSerial(dealerId: string, dealerCode: string): Promise<number> {
+    const prefix = `${dealerCode.trim().toUpperCase()}-`;
+    const linkedElectricians = await this.electricianRepository.find({
+      where: { dealerId },
+      select: ['electricianCode'],
+    });
+
+    let maxSerial = 0;
+    for (const linkedElectrician of linkedElectricians) {
+      const code = linkedElectrician.electricianCode?.trim().toUpperCase();
+      if (!code?.startsWith(prefix)) continue;
+
+      const suffix = code.slice(prefix.length);
+      if (!/^\d+$/.test(suffix)) continue;
+
+      maxSerial = Math.max(maxSerial, Number.parseInt(suffix, 10) || 0);
+    }
+
+    return maxSerial + 1;
+  }
+
+  private async generateNextElectricianCodeForDealer(dealerId: string, dealerCode: string): Promise<string> {
+    const nextSerial = await this.getNextElectricianSerial(dealerId, dealerCode);
+    return `${dealerCode.trim().toUpperCase()}-${String(nextSerial).padStart(3, '0')}`;
+  }
+
   // ── Products ───────────────────────────────────────────────────────────────
 
   async getProducts(category?: string) {
@@ -484,6 +519,7 @@ export class MobileService {
     if (!phone) throw new BadRequestException('Phone number is required');
     const dealer = await this.dealerRepository.findOne({ where: { phone } });
     if (!dealer) throw new NotFoundException('Dealer not found');
+    const nextElectricianSerial = await this.getNextElectricianSerial(dealer.id, dealer.dealerCode);
     return {
       id: dealer.id,
       name: dealer.name,
@@ -492,6 +528,8 @@ export class MobileService {
       town: dealer.town,
       district: dealer.district,
       state: dealer.state,
+      electricianCount: dealer.electricianCount ?? Math.max(0, nextElectricianSerial - 1),
+      nextElectricianSerial,
     };
   }
 
@@ -814,7 +852,13 @@ export class MobileService {
       return { message: 'Electrician linked to your network', electrician: existing };
     }
 
-    const code = `${dealer.state?.substring(0, 2).toUpperCase() ?? 'XX'}${Date.now().toString().slice(-6)}`;
+    const manualCode = this.normalizeElectricianCode(body?.electricianCode);
+    const code = manualCode ?? await this.generateNextElectricianCodeForDealer(dealerId, dealer.dealerCode);
+    const existingCode = await this.electricianRepository.findOne({ where: { electricianCode: code } });
+    if (existingCode) {
+      throw new ConflictException('Electrician with this code already exists');
+    }
+
     const electrician = this.electricianRepository.create({
       name: body.name,
       phone: body.phone,

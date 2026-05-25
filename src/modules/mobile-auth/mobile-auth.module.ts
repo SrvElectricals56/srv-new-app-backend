@@ -10,10 +10,12 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { TierModule } from '../../common/services/tier.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Electrician, Dealer, AppUser, CounterBoy]),
+    TierModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

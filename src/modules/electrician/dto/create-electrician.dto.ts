@@ -11,9 +11,10 @@ export class CreateElectricianDto {
   @IsString()
   phone: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: false, description: 'Leave blank to auto-generate from dealer code' })
+  @IsOptional()
   @IsString()
-  electricianCode: string;
+  electricianCode?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
