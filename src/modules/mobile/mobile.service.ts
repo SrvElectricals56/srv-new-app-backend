@@ -340,6 +340,8 @@ export class MobileService {
       rolePageControls,
       appPageContent,
       pageSectionOrder,
+      privacyPolicyContent: map['privacy_policy_content'] ?? null,
+      privacyPolicyUpdated: map['privacy_policy_updated'] ?? null,
     };
   }
 

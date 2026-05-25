@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ProductCategory } from '../../database/entities/product-category.entity';
+import { Product } from '../../database/entities/product.entity';
 import { CreateProductCategoryDto } from './dto/create-product-category.dto';
 import { UpdateProductCategoryDto } from './dto/update-product-category.dto';
 
@@ -10,6 +11,8 @@ export class ProductCategoryService {
   constructor(
     @InjectRepository(ProductCategory)
     private readonly categoryRepository: Repository<ProductCategory>,
+    @InjectRepository(Product)
+    private readonly productRepository: Repository<Product>,
   ) {}
 
   async create(createDto: CreateProductCategoryDto): Promise<ProductCategory> {
@@ -17,10 +20,25 @@ export class ProductCategoryService {
     return await this.categoryRepository.save(category);
   }
 
-  async findAll(): Promise<ProductCategory[]> {
-    return await this.categoryRepository.find({
+  async findAll(): Promise<any[]> {
+    const categories = await this.categoryRepository.find({
       order: { sortOrder: 'ASC', label: 'ASC' },
     });
+
+    // Count products per category by matching product.category string to category.label
+    const counts: { category: string; count: string }[] = await this.productRepository
+      .createQueryBuilder('product')
+      .select('product.category', 'category')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('product.category')
+      .getRawMany();
+
+    const countMap = new Map(counts.map(r => [r.category, parseInt(r.count, 10)]));
+
+    return categories.map(cat => ({
+      ...cat,
+      productCount: countMap.get(cat.label) ?? 0,
+    }));
   }
 
   async findOne(id: string): Promise<ProductCategory> {

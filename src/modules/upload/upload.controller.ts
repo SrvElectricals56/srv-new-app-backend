@@ -5,12 +5,15 @@ import {
   UploadedFile,
   UseGuards,
   BadRequestException,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { Request } from 'express';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
 import { ConfigService } from '@nestjs/config';
 
@@ -20,6 +23,7 @@ const PRODUCT_DIR = join(UPLOAD_DIR, 'products');
 const CATALOG_DIR = join(UPLOAD_DIR, 'catalog');
 const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
 const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
+
 // Ensure upload directories exist
 [BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR, AADHAR_DIR].forEach(dir => {
   if (!existsSync(dir)) {
@@ -29,16 +33,30 @@ const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
 
 @ApiTags('Upload')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(MobileJwtGuard)
 @Controller('upload')
 export class UploadController {
   constructor(private configService: ConfigService) {}
 
   private getBaseUrl() {
-    return this.configService.get<string>('APP_URL') || `http://${this.configService.get<string>('SERVER_HOST') || 'localhost'}:${this.configService.get<string>('PORT') || '3001'}`;
+    const appUrl = this.configService.get<string>('APP_URL');
+    if (appUrl) return appUrl;
+    const port = this.configService.get<string>('PORT') || '3001';
+    const host = this.configService.get<string>('SERVER_HOST') || 'localhost';
+    return `http://${host}:${port}`;
   }
 
+  // Build URL using the actual request host — so admin browser gets localhost URL
+  // and mobile app gets the LAN IP URL automatically.
+  private buildFileUrl(req: Request, subPath: string): string {
+    const proto = req.protocol || 'http';
+    const host = req.get('host') || `localhost:${this.configService.get('PORT') || '3001'}`;
+    return `${proto}://${host}/uploads/${subPath}`;
+  }
+
+  // ── Admin-only endpoints (JwtAuthGuard — validates against admins table) ──
+
   @Post('image')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Upload banner image' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -62,25 +80,17 @@ export class UploadController {
         }
         cb(null, true);
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  uploadImage(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No file uploaded');
-    }
-
-    const imageUrl = `${this.getBaseUrl()}/uploads/banners/${file.filename}`;
-
-    return {
-      url: imageUrl,
-      filename: file.filename,
-      originalName: file.originalname,
-      size: file.size,
-    };
+  uploadImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const imageUrl = this.buildFileUrl(req, `banners/${file.filename}`);
+    return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
   @Post('product-image')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Upload product image' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -104,25 +114,17 @@ export class UploadController {
         }
         cb(null, true);
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  uploadProductImage(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No file uploaded');
-    }
-
-    const imageUrl = `${this.getBaseUrl()}/uploads/products/${file.filename}`;
-
-    return {
-      url: imageUrl,
-      filename: file.filename,
-      originalName: file.originalname,
-      size: file.size,
-    };
+  uploadProductImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const imageUrl = this.buildFileUrl(req, `products/${file.filename}`);
+    return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
   @Post('catalog-pdf')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Upload product catalog PDF' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -146,18 +148,17 @@ export class UploadController {
         }
         cb(null, true);
       },
-      limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+      limits: { fileSize: 50 * 1024 * 1024 },
     }),
   )
-  uploadCatalogPdf(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No file uploaded');
-    }
-    const url = `${this.getBaseUrl()}/uploads/catalog/${file.filename}`;
+  uploadCatalogPdf(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const url = this.buildFileUrl(req, `catalog/${file.filename}`);
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
   @Post('video')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Upload play video file' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -181,19 +182,20 @@ export class UploadController {
         }
         cb(null, true);
       },
-      limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+      limits: { fileSize: 500 * 1024 * 1024 },
     }),
   )
-  uploadVideo(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No file uploaded');
-    }
-    const url = `${this.getBaseUrl()}/uploads/videos/${file.filename}`;
+  uploadVideo(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const url = this.buildFileUrl(req, `videos/${file.filename}`);
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
+  // ── Mobile-only endpoint (MobileJwtGuard — validates against mobile users) ──
+
   @Post('aadhar-image')
-  @ApiOperation({ summary: 'Upload Aadhar front or back image' })
+  @UseGuards(MobileJwtGuard)
+  @ApiOperation({ summary: 'Upload Aadhar front or back image (mobile users)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -216,21 +218,12 @@ export class UploadController {
         }
         cb(null, true);
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  uploadAadharImage(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('No file uploaded');
-    }
-
-    const imageUrl = `${this.getBaseUrl()}/uploads/aadhar/${file.filename}`;
-
-    return {
-      url: imageUrl,
-      filename: file.filename,
-      originalName: file.originalname,
-      size: file.size,
-    };
+  uploadAadharImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const imageUrl = this.buildFileUrl(req, `aadhar/${file.filename}`);
+    return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 }
