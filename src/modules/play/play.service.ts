@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -10,6 +10,9 @@ import {
   type PlayViewer,
 } from '../../database/entities/play.entity';
 
+const PLAY_TARGET_ROLES = ['user', 'dealer', 'electrician', 'counterboy'] as const;
+type PlayTargetRole = (typeof PLAY_TARGET_ROLES)[number];
+
 type PlayInteractionsResponse = {
   playId: string;
   likeCount: number;
@@ -18,11 +21,17 @@ type PlayInteractionsResponse = {
 };
 
 @Injectable()
-export class PlayService {
+export class PlayService implements OnModuleInit {
+  private readonly logger = new Logger(PlayService.name);
+
   constructor(
     @InjectRepository(Play)
     private playRepository: Repository<Play>,
   ) {}
+
+  async onModuleInit() {
+    await this.ensureTargetRolesColumn();
+  }
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
 
@@ -31,42 +40,54 @@ export class PlayService {
     if (!includeInactive) qb.where('play.isActive = :active', { active: true });
     qb.orderBy('play.displayOrder', 'ASC').addOrderBy('play.createdAt', 'DESC');
     const data = await qb.getMany();
-    return { data, total: data.length };
+    return {
+      data: data.map((play) => this.serializePlay(play)),
+      total: data.length,
+    };
   }
 
   async findOne(id: string) {
-    const play = await this.playRepository.findOne({ where: { id } });
-    if (!play) throw new NotFoundException('Play not found');
-    return play;
+    const play = await this.findOneEntity(id);
+    return this.serializePlay(play);
   }
 
   async create(body: Partial<Play>) {
-    const play = this.playRepository.create(body);
+    const play = this.playRepository.create({
+      ...this.prepareWriteBody(body),
+      targetRoles: this.normalizeTargetRoles((body as any)?.targetRoles ?? (body as any)?.targetRole, true),
+    });
     return this.playRepository.save(play);
   }
 
   async update(id: string, body: Partial<Play>) {
-    await this.findOne(id);
-    await this.playRepository.update(id, body);
+    await this.findOneEntity(id);
+    await this.playRepository.update(id, this.prepareWriteBody(body));
     return this.findOne(id);
   }
 
   async remove(id: string) {
-    await this.findOne(id);
+    await this.findOneEntity(id);
     await this.playRepository.delete(id);
     return { message: 'Play deleted successfully' };
   }
 
   // ── Mobile — public list ───────────────────────────────────────────────────
 
-  async getActivePlays() {
+  async getActivePlays(role: string) {
+    const normalizedRole = this.normalizeRole(role);
+    if (!normalizedRole) {
+      return { data: [] };
+    }
+
     const plays = await this.playRepository.find({
       where: { isActive: true },
       order: { displayOrder: 'ASC', createdAt: 'DESC' },
     });
-    // Strip private interaction arrays from public response.
+
     return {
-      data: plays.map(({ viewers: _v, likes: _l, comments: _c, ...rest }) => rest),
+      data: plays
+        .filter((play) => this.isVisibleForRole(play, normalizedRole))
+        .map((play) => this.serializePlay(play)),
     };
   }
 
@@ -74,7 +95,7 @@ export class PlayService {
 
   async recordView(id: string, userId: string, role: string) {
     const play = await this.playRepository.findOne({ where: { id } });
-    if (!play) return { message: 'ok' };
+    if (!play || !play.isActive || !this.isVisibleForRole(play, role)) return { message: 'ok' };
 
     const viewers = this.getViewersArray(play);
 
@@ -93,7 +114,7 @@ export class PlayService {
   // ── Admin — viewer analytics ───────────────────────────────────────────────
 
   async getViewers(id: string) {
-    const play = await this.findOne(id);
+    const play = await this.findOneEntity(id);
     return {
       id: play.id,
       title: play.title,
@@ -103,13 +124,13 @@ export class PlayService {
     };
   }
 
-  async getInteractions(id: string, userId?: string) {
-    const play = await this.findOne(id);
+  async getInteractions(id: string, userId?: string, role?: string) {
+    const play = role ? await this.findVisibleEntity(id, role) : await this.findOneEntity(id);
     return this.buildInteractions(play, userId);
   }
 
   async toggleLike(id: string, userId: string, role: string, userName?: string | null) {
-    const play = await this.findOne(id);
+    const play = await this.findVisibleEntity(id, role);
     const likes = this.getLikesArray(play);
     const existingIndex = likes.findIndex((like) => like.userId === userId);
 
@@ -134,7 +155,7 @@ export class PlayService {
       throw new BadRequestException('Comment message is required');
     }
 
-    const play = await this.findOne(id);
+    const play = await this.findVisibleEntity(id, user.role);
     const comments = this.getCommentsArray(play);
     comments.unshift({
       id: randomUUID(),
@@ -161,7 +182,7 @@ export class PlayService {
       throw new BadRequestException('Reply message is required');
     }
 
-    const play = await this.findOne(id);
+    const play = await this.findOneEntity(id);
     const comments = this.getCommentsArray(play).map((comment) => {
       if (comment.id !== commentId) return comment;
 
@@ -212,6 +233,109 @@ export class PlayService {
     return Array.isArray(play.viewers) ? play.viewers : [];
   }
 
+  private async findOneEntity(id: string) {
+    const play = await this.playRepository.findOne({ where: { id } });
+    if (!play) throw new NotFoundException('Play not found');
+    return play;
+  }
+
+  private async findVisibleEntity(id: string, role: string) {
+    const play = await this.findOneEntity(id);
+    if (!play.isActive || !this.isVisibleForRole(play, role)) {
+      throw new NotFoundException('Play not found');
+    }
+    return play;
+  }
+
+  private normalizeRole(role?: string | null): PlayTargetRole | null {
+    const value = role?.trim().toLowerCase();
+    switch (value) {
+      case 'dealer':
+      case 'electrician':
+      case 'user':
+      case 'counterboy':
+        return value;
+      case 'customer':
+        return 'user';
+      case 'counter_boy':
+      case 'counter-boy':
+      case 'counter boy':
+        return 'counterboy';
+      default:
+        return null;
+    }
+  }
+
+  private normalizeTargetRoles(input: unknown, useDefault = false): PlayTargetRole[] {
+    if (Array.isArray(input)) {
+      const collected = new Set<PlayTargetRole>();
+      for (const value of input) {
+        if (typeof value !== 'string') {
+          continue;
+        }
+
+        const normalizedValue = value.trim().toLowerCase();
+        if (normalizedValue === 'all' || normalizedValue === 'both') {
+          return [...PLAY_TARGET_ROLES];
+        }
+
+        const normalizedRole = this.normalizeRole(value);
+        if (normalizedRole) {
+          collected.add(normalizedRole);
+        }
+      }
+
+      if (collected.size > 0) {
+        return [...collected];
+      }
+    }
+
+    if (typeof input === 'string') {
+      return this.normalizeTargetRoles(
+        input
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+        useDefault,
+      );
+    }
+
+    return useDefault ? ['user'] : [];
+  }
+
+  private getTargetRoles(play: Play): PlayTargetRole[] {
+    return this.normalizeTargetRoles(play.targetRoles, true);
+  }
+
+  private isVisibleForRole(play: Play, role: string) {
+    const normalizedRole = this.normalizeRole(role);
+    if (!normalizedRole) {
+      return false;
+    }
+
+    return this.getTargetRoles(play).includes(normalizedRole);
+  }
+
+  private prepareWriteBody(body: Partial<Play>) {
+    const payload: Partial<Play> & { targetRole?: unknown } = { ...body } as any;
+    const rawTargetRoles = payload.targetRoles ?? payload.targetRole;
+
+    if (rawTargetRoles !== undefined) {
+      payload.targetRoles = this.normalizeTargetRoles(rawTargetRoles, true);
+    }
+
+    delete payload.targetRole;
+    return payload;
+  }
+
+  private serializePlay(play: Play) {
+    const { viewers: _viewers, likes: _likes, comments: _comments, ...rest } = play;
+    return {
+      ...rest,
+      targetRoles: this.getTargetRoles(play),
+    };
+  }
+
   private getLikesArray(play: Play): PlayLike[] {
     return Array.isArray(play.likes) ? play.likes : [];
   }
@@ -241,5 +365,23 @@ export class PlayService {
       likedByMe: userId ? likes.some((like) => like.userId === userId) : false,
       comments,
     };
+  }
+
+  private async ensureTargetRolesColumn() {
+    try {
+      await this.playRepository.query(`
+        ALTER TABLE "plays"
+        ADD COLUMN IF NOT EXISTS "targetRoles" text[]
+      `);
+
+      await this.playRepository.query(`
+        UPDATE "plays"
+        SET "targetRoles" = ARRAY['user']
+        WHERE "targetRoles" IS NULL OR cardinality("targetRoles") = 0
+      `);
+    } catch (error) {
+      this.logger.error('Unable to ensure plays.targetRoles column exists', error as Error);
+      throw error;
+    }
   }
 }

@@ -61,6 +61,9 @@ export class Play {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ type: 'text', array: true, nullable: true })
+  targetRoles: string[];
+
   @Column({ default: 0 })
   viewCount: number;
 

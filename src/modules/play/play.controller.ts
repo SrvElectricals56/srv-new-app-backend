@@ -91,43 +91,37 @@ export class PlayController {
 // ── Mobile routes (/mobile/plays) ─────────────────────────────────────────
 
 @ApiTags('Mobile App')
+@UseGuards(MobileJwtGuard)
+@ApiBearerAuth('JWT-auth')
 @Controller('mobile/plays')
 export class MobilePlayController {
   constructor(private readonly playService: PlayService) {}
 
   @Get()
   @ApiOperation({ summary: 'Get active plays for app' })
-  getActivePlays() {
-    return this.playService.getActivePlays();
+  getActivePlays(@Request() req: any) {
+    return this.playService.getActivePlays(req.user.role);
   }
 
   @Post(':id/view')
-  @UseGuards(MobileJwtGuard)
-  @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Record a play view' })
   recordView(@Param('id') id: string, @Request() req: any) {
     return this.playService.recordView(id, req.user.id, req.user.role);
   }
 
   @Get(':id/interactions')
-  @UseGuards(MobileJwtGuard)
-  @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get likes, comments, and replies for a play' })
   getMobileInteractions(@Param('id') id: string, @Request() req: any) {
-    return this.playService.getInteractions(id, req.user.id);
+    return this.playService.getInteractions(id, req.user.id, req.user.role);
   }
 
   @Post(':id/like')
-  @UseGuards(MobileJwtGuard)
-  @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Toggle like for a play' })
   toggleLike(@Param('id') id: string, @Request() req: any) {
     return this.playService.toggleLike(id, req.user.id, req.user.role, req.user.name);
   }
 
   @Post(':id/comments')
-  @UseGuards(MobileJwtGuard)
-  @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Add a comment on a play' })
   addComment(@Param('id') id: string, @Request() req: any, @Body() body: { message: string }) {
     return this.playService.addComment(

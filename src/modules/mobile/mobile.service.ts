@@ -423,10 +423,12 @@ export class MobileService {
       .andWhere('p.stock > 0');
 
     if (role) {
-      qb.andWhere('(p.subCategory IS NULL OR p.subCategory = :role OR p.subCategory = :all)', {
-        role,
-        all: 'all',
-      });
+      // 'user' role in app = 'customer' in admin panel — treat as aliases
+      const normalizedRole = role === 'user' ? 'customer' : role;
+      qb.andWhere(
+        '(p.subCategory IS NULL OR p.subCategory = :role OR p.subCategory = :alias OR p.subCategory = :all)',
+        { role: normalizedRole, alias: role, all: 'all' },
+      );
     }
 
     qb.orderBy('p.createdAt', 'DESC');
@@ -457,7 +459,12 @@ export class MobileService {
       .andWhere('p.isActive = :active', { active: true });
 
     if (category) {
-      qb.andWhere('p.subCategory = :category', { category });
+      // 'user' role in app = 'customer' in admin panel — treat as aliases
+      const normalizedCategory = category === 'user' ? 'customer' : category;
+      qb.andWhere('(p.subCategory = :category OR p.subCategory = :alias)', {
+        category: normalizedCategory,
+        alias: category,
+      });
     }
 
     qb.orderBy('p.points', 'ASC');
