@@ -124,6 +124,27 @@ export class MobileAuthService {
     }
   }
 
+  private getRepositoryByRole(role: string) {
+    switch (role) {
+      case 'electrician':
+        return this.electricianRepository;
+      case 'dealer':
+        return this.dealerRepository;
+      case 'user':
+        return this.appUserRepository;
+      case 'counterboy':
+        return this.counterboyRepository;
+      default:
+        throw new NotFoundException('Unknown role');
+    }
+  }
+
+  private async getUserEntityByRole(userId: string, role: string): Promise<any> {
+    return this.getRepositoryByRole(role).findOne({
+      where: { id: userId } as any,
+    });
+  }
+
   /** Update lastActivityAt for any role */
   private async touchActivity(id: string, role: MobileUserRole) {
     const now = new Date();
@@ -345,17 +366,10 @@ export class MobileAuthService {
   async registerCounterBoy(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    dealerPhone?: string; password?: string;
+    password?: string;
   }) {
     const existing = await this.counterboyRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
-
-    let dealerId: string | undefined;
-    if (data.dealerPhone) {
-      const dealer = await this.dealerRepository.findOne({ where: { phone: data.dealerPhone } });
-      if (!dealer) throw new NotFoundException('Dealer not found with this phone number.');
-      dealerId = dealer.id;
-    }
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
     const counterboyCode = `CBY${stateCode}${Date.now().toString().slice(-6)}`;
@@ -371,7 +385,6 @@ export class MobileAuthService {
       district: data.district,
       address: data.address,
       pincode: data.pincode,
-      dealerId,
       counterboyCode,
       status: UserStatus.PENDING,
       passwordHash,
@@ -525,6 +538,37 @@ export class MobileAuthService {
   }
 
   async changePassword(userId: string, role: string, data: { currentPassword?: string; newPassword: string }) {
+    const newPassword = data.newPassword?.trim();
+    if (!newPassword) {
+      throw new BadRequestException('New password is required');
+    }
+
+    if (newPassword.length < 4) {
+      throw new BadRequestException('New password must be at least 4 characters long');
+    }
+
+    const user = await this.getUserEntityByRole(userId, role);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const currentPassword = data.currentPassword?.trim();
+    if (user.passwordHash) {
+      if (!currentPassword) {
+        throw new BadRequestException('Current password is required');
+      }
+
+      const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!valid) {
+        throw new UnauthorizedException('Current password is incorrect');
+      }
+    }
+
+    const passwordHash = await this.hashPassword(newPassword);
+    await this.getRepositoryByRole(role).update(userId, {
+      passwordHash,
+    } as any);
+
     return { message: 'Password updated successfully' };
   }
 

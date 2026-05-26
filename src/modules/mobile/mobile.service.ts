@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
 import { Banner } from '../../database/entities/banner.entity';
 import { Notification } from '../../database/entities/notification.entity';
@@ -28,7 +28,10 @@ import { TierService } from '../../common/services/tier.service';
 
 @Injectable()
 export class MobileService {
+  private persistenceSetupPromise: Promise<void> | null = null;
+
   constructor(
+    private dataSource: DataSource,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
     @InjectRepository(Banner)
@@ -66,6 +69,31 @@ export class MobileService {
     private readonly tierService: TierService,
   ) {}
 
+  private async ensurePersistenceArtifacts() {
+    if (!this.persistenceSetupPromise) {
+      this.persistenceSetupPromise = this.dataSource.query(`
+        ALTER TABLE "support_tickets"
+        ADD COLUMN IF NOT EXISTS "photoUrl" text;
+      `).then(async () => {
+        await this.dataSource.query(`
+          CREATE TABLE IF NOT EXISTS "app_ratings" (
+            "userId" varchar(255) PRIMARY KEY,
+            "userRole" varchar(50) NOT NULL,
+            "rating" integer NOT NULL,
+            "review" text NULL,
+            "createdAt" timestamptz NOT NULL DEFAULT now(),
+            "updatedAt" timestamptz NOT NULL DEFAULT now()
+          );
+        `);
+      }).catch((error) => {
+        this.persistenceSetupPromise = null;
+        throw error;
+      });
+    }
+
+    await this.persistenceSetupPromise;
+  }
+
   private normalizeRole(role: string): UserRole {
     switch (role) {
       case UserRole.ELECTRICIAN:
@@ -78,46 +106,125 @@ export class MobileService {
     }
   }
 
-  private async getUserByRole(userId: string, role: string) {
+  private getUserRepositoryByRole(role: string, manager?: EntityManager) {
     switch (this.normalizeRole(role)) {
       case UserRole.ELECTRICIAN:
-        return this.electricianRepository.findOne({ where: { id: userId } });
+        return manager
+          ? manager.getRepository(Electrician)
+          : this.electricianRepository;
       case UserRole.DEALER:
-        return this.dealerRepository.findOne({ where: { id: userId } });
+        return manager ? manager.getRepository(Dealer) : this.dealerRepository;
       case UserRole.USER:
-        return this.appUserRepository.findOne({ where: { id: userId } });
+        return manager
+          ? manager.getRepository(AppUser)
+          : this.appUserRepository;
       case UserRole.COUNTERBOY:
-        return this.counterBoyRepository.findOne({ where: { id: userId } });
+        return manager
+          ? manager.getRepository(CounterBoy)
+          : this.counterBoyRepository;
     }
   }
 
-  private async updateUserByRole(userId: string, role: string, data: Record<string, any>) {
-    switch (this.normalizeRole(role)) {
-      case UserRole.ELECTRICIAN:
-        return this.electricianRepository.update(userId, data);
-      case UserRole.DEALER:
-        return this.dealerRepository.update(userId, data);
-      case UserRole.USER:
-        return this.appUserRepository.update(userId, data);
-      case UserRole.COUNTERBOY:
-        return this.counterBoyRepository.update(userId, data);
-    }
+  private async getUserByRole(
+    userId: string,
+    role: string,
+    manager?: EntityManager,
+  ) {
+    return this.getUserRepositoryByRole(role, manager).findOne({
+      where: { id: userId } as any,
+    });
   }
 
-  private async findReceiverByPhone(phone: string) {
-    const electrician = await this.electricianRepository.findOne({ where: { phone } });
+  private async getUserByRoleForUpdate(
+    userId: string,
+    role: string,
+    manager: EntityManager,
+  ) {
+    return this.getUserRepositoryByRole(role, manager)
+      .createQueryBuilder('user')
+      .setLock('pessimistic_write')
+      .where('user.id = :userId', { userId })
+      .getOne();
+  }
+
+  private async updateUserByRole(
+    userId: string,
+    role: string,
+    data: Record<string, any>,
+    manager?: EntityManager,
+  ) {
+    return this.getUserRepositoryByRole(role, manager).update(userId, data);
+  }
+
+  private async findReceiverByPhone(phone: string, manager?: EntityManager) {
+    const electrician = await (
+      manager ? manager.getRepository(Electrician) : this.electricianRepository
+    ).findOne({ where: { phone } });
     if (electrician) return { user: electrician, role: UserRole.ELECTRICIAN };
 
-    const dealer = await this.dealerRepository.findOne({ where: { phone } });
+    const dealer = await (
+      manager ? manager.getRepository(Dealer) : this.dealerRepository
+    ).findOne({ where: { phone } });
     if (dealer) return { user: dealer, role: UserRole.DEALER };
 
-    const appUser = await this.appUserRepository.findOne({ where: { phone } });
+    const appUser = await (
+      manager ? manager.getRepository(AppUser) : this.appUserRepository
+    ).findOne({ where: { phone } });
     if (appUser) return { user: appUser, role: UserRole.USER };
 
-    const counterBoy = await this.counterBoyRepository.findOne({ where: { phone } });
+    const counterBoy = await (
+      manager ? manager.getRepository(CounterBoy) : this.counterBoyRepository
+    ).findOne({ where: { phone } });
     if (counterBoy) return { user: counterBoy, role: UserRole.COUNTERBOY };
 
     return null;
+  }
+
+  private async getWalletSummary(
+    userId: string,
+    role: string,
+    manager?: EntityManager,
+  ) {
+    const normalizedRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, role, manager);
+    const walletRepo = manager
+      ? manager.getRepository(Wallet)
+      : this.walletRepository;
+
+    const totals = await walletRepo
+      .createQueryBuilder('wallet')
+      .select(
+        `COALESCE(SUM(CASE WHEN wallet.type = :credit THEN wallet.amount ELSE 0 END), 0)`,
+        'totalEarned',
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN wallet.type = :debit THEN wallet.amount ELSE 0 END), 0)`,
+        'totalRedeemed',
+      )
+      .where('wallet.userId = :userId', { userId })
+      .setParameters({
+        credit: TransactionType.CREDIT,
+        debit: TransactionType.DEBIT,
+      })
+      .getRawOne();
+
+    const balance = Number((user as any)?.walletBalance ?? 0);
+
+    return {
+      balance,
+      wallet: balance,
+      wallet_balance: balance,
+      walletbalance: balance,
+      currentwallet: balance,
+      totalwallet_amount: balance,
+      totalearnedwallet_amount: Number(totals?.totalEarned ?? 0),
+      totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
+      totalPoints:
+        normalizedRole === UserRole.DEALER
+          ? 0
+          : Number((user as any)?.totalPoints ?? 0),
+      totalScans: Number((user as any)?.totalScans ?? 0),
+    };
   }
 
   private getReferralCode(user: any, role: UserRole, userId: string) {
@@ -543,52 +650,74 @@ export class MobileService {
   // ── Scan ───────────────────────────────────────────────────────────────────
 
   async submitScan(userId: string, role: string, qrCode: string, mode: 'single' | 'multi') {
-    const qr = await this.qrCodeRepository.findOne({
-      where: { code: qrCode, isActive: true },
-      relations: ['product'],
-    });
+    const trimmedQrCode = qrCode?.trim();
+    if (!trimmedQrCode) {
+      throw new BadRequestException('QR code is required');
+    }
 
-    if (!qr) throw new NotFoundException('QR code not found or invalid');
-    if (!qr.product || !qr.product.isActive) throw new BadRequestException('Product is not active');
+    return this.dataSource.transaction(async (manager) => {
+      const qr = await manager
+        .getRepository(QrCode)
+        .createQueryBuilder('qr')
+        .leftJoinAndSelect('qr.product', 'product')
+        .setLock('pessimistic_write')
+        .where('qr.code = :qrCode', { qrCode: trimmedQrCode })
+        .andWhere('qr.isActive = :isActive', { isActive: true })
+        .getOne();
 
-    const existingScan = await this.scanRepository.findOne({
-      where: { userId, qrCodeId: qr.id },
-    });
-    if (existingScan) throw new ConflictException('This QR code has already been scanned by you');
+      if (!qr) throw new NotFoundException('QR code not found or invalid');
+      if (!qr.product || !qr.product.isActive) {
+        throw new BadRequestException('Product is not active');
+      }
 
-    const points = qr.product.points;
-    const userRole = this.normalizeRole(role);
-    const user = await this.getUserByRole(userId, role);
-    const userName = user?.name ?? 'Unknown';
+      if (qr.isScanned) {
+        throw new ConflictException(
+          'QR code is already redeemed - Please scan valid QR code',
+        );
+      }
 
-    const scan = this.scanRepository.create({
-      userId,
-      userName,
-      role: userRole,
-      productId: qr.product.id,
-      productName: qr.product.name,
-      points,
-      mode: mode === 'multi' ? ScanMode.MULTI : ScanMode.SINGLE,
-      qrCodeId: qr.id,
-    });
-    await this.scanRepository.save(scan);
+      const existingScan = await manager.getRepository(Scan).findOne({
+        where: { qrCodeId: qr.id } as any,
+      });
+      if (existingScan) {
+        throw new ConflictException(
+          'QR code is already redeemed - Please scan valid QR code',
+        );
+      }
 
-    await this.qrCodeRepository.update(qr.id, {
-      isScanned: true,
-      scanCount: (qr.scanCount ?? 0) + 1,
-      lastScannedBy: userId,
-      lastScannedAt: new Date(),
-    });
-
-    await this.productRepository.update(qr.product.id, {
-      totalScanned: (qr.product.totalScanned ?? 0) + 1,
-    });
-
-    if (user) {
+      const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
+      const userRole = this.normalizeRole(role);
+      const user = await this.getUserByRoleForUpdate(userId, role, manager);
+      if (!user) throw new NotFoundException('User not found');
       const userRecord = user as any;
-      const newPoints = (userRecord.totalPoints ?? 0) + points;
-      const newScans = (userRecord.totalScans ?? 0) + 1;
-      const newWallet = (userRecord.walletBalance ?? 0) + points;
+
+      const scan = manager.getRepository(Scan).create({
+        userId,
+        userName: userRecord.name ?? 'Unknown',
+        role: userRole,
+        productId: qr.product.id,
+        productName: qr.product.name,
+        points,
+        mode: mode === 'multi' ? ScanMode.MULTI : ScanMode.SINGLE,
+        qrCodeId: qr.id,
+      });
+      await manager.getRepository(Scan).save(scan);
+
+      await manager.getRepository(QrCode).update(qr.id, {
+        isScanned: true,
+        scanCount: (qr.scanCount ?? 0) + 1,
+        lastScannedBy: userId,
+        lastScannedAt: new Date(),
+      });
+
+      await manager.getRepository(Product).update(qr.product.id, {
+        totalScanned: (qr.product.totalScanned ?? 0) + 1,
+      });
+
+      const balanceBefore = Number(userRecord.walletBalance ?? 0);
+      const newPoints = Number(userRecord.totalPoints ?? 0) + points;
+      const newScans = Number(userRecord.totalScans ?? 0) + 1;
+      const newWallet = balanceBefore + points;
       const updateData: Record<string, any> = {
         totalPoints: newPoints,
         totalScans: newScans,
@@ -596,37 +725,89 @@ export class MobileService {
         lastActivityAt: new Date(),
       };
 
-      if (userRole === UserRole.ELECTRICIAN || userRole === UserRole.COUNTERBOY || userRole === UserRole.USER) {
-        updateData.tier = this.tierService.calculateElectricianTier(newPoints) as any;
+      if (
+        userRole === UserRole.ELECTRICIAN ||
+        userRole === UserRole.COUNTERBOY ||
+        userRole === UserRole.USER
+      ) {
+        updateData.tier = this.tierService.calculateElectricianTier(
+          newPoints,
+        ) as any;
       }
 
-      await this.updateUserByRole(userId, role, updateData);
+      await this.updateUserByRole(userId, role, updateData, manager);
 
-      const walletTx = this.walletRepository.create({
-        userId,
-        userRole,
-        type: 'credit' as any,
-        source: 'scan' as any,
-        amount: points,
-        balanceBefore: userRecord.walletBalance ?? 0,
-        balanceAfter: newWallet,
-        description: `Scan: ${qr.product.name}`,
-        referenceId: scan.id,
-        referenceType: 'scan',
-      });
-      await this.walletRepository.save(walletTx);
+      await manager.getRepository(Wallet).save(
+        manager.getRepository(Wallet).create({
+          userId,
+          userRole,
+          type: TransactionType.CREDIT,
+          source: TransactionSource.SCAN,
+          amount: points,
+          balanceBefore,
+          balanceAfter: newWallet,
+          description: `Scan: ${qr.product.name}`,
+          referenceId: scan.id,
+          referenceType: 'scan',
+        }),
+      );
+
+      return {
+        success: true,
+        msg: 'QR code scan successfully.',
+        scan: {
+          id: scan.id,
+          productId: qr.product.id,
+          productName: qr.product.name,
+          points,
+          mode,
+          scannedAt: scan.scannedAt,
+        },
+        pointsEarned: points,
+        qrcodeprice: points,
+        wallet: newWallet,
+        wallet_balance: newWallet,
+        walletbalance: newWallet,
+        currentwallet: newWallet,
+      };
+    });
+  }
+
+  async previewQrCode(qrCode: string) {
+    const trimmedQrCode = qrCode?.trim();
+    if (!trimmedQrCode) {
+      throw new BadRequestException('QR code is required');
     }
+
+    const qr = await this.qrCodeRepository.findOne({
+      where: { code: trimmedQrCode, isActive: true },
+      relations: ['product'],
+    });
+
+    if (!qr || !qr.product || !qr.product.isActive) {
+      throw new NotFoundException(
+        'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
+      );
+    }
+
+    if (qr.isScanned) {
+      throw new ConflictException(
+        'QR code is already redeemed - Please scan valid QR code',
+      );
+    }
+
+    const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
 
     return {
       success: true,
-      scan: {
-        id: scan.id,
-        productName: qr.product.name,
-        points,
-        mode,
-        scannedAt: scan.scannedAt,
-      },
-      pointsEarned: points,
+      msg: 'QR code scan successfully.',
+      productId: qr.product.id,
+      productName: qr.product.name,
+      productImage: qr.product.image ?? null,
+      qrcodeprice: points,
+      points,
+      batchId: qr.batchId ?? null,
+      batchNo: qr.batchNo ?? null,
     };
   }
 
@@ -645,8 +826,7 @@ export class MobileService {
 
   async getWallet(userId: string, role: string, page: number = 1, limit: number = 20) {
     const skip = (page - 1) * limit;
-    const normalizedRole = this.normalizeRole(role);
-    const user = await this.getUserByRole(userId, role);
+    const summary = await this.getWalletSummary(userId, role);
 
     const [transactions, total] = await this.walletRepository.findAndCount({
       where: { userId },
@@ -656,9 +836,16 @@ export class MobileService {
     });
 
     return {
-      balance: (user as any)?.walletBalance ?? 0,
-      totalPoints: normalizedRole === UserRole.DEALER ? 0 : ((user as any)?.totalPoints ?? 0),
-      totalScans: (user as any)?.totalScans ?? 0,
+      balance: summary.balance,
+      wallet: summary.wallet,
+      wallet_balance: summary.wallet_balance,
+      walletbalance: summary.walletbalance,
+      currentwallet: summary.currentwallet,
+      totalwallet_amount: summary.totalwallet_amount,
+      totalearnedwallet_amount: summary.totalearnedwallet_amount,
+      totalredeemedwallet_amount: summary.totalredeemedwallet_amount,
+      totalPoints: summary.totalPoints,
+      totalScans: summary.totalScans,
       transactions: {
         data: transactions,
         total,
@@ -686,73 +873,155 @@ export class MobileService {
   }
 
   async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string }) {
-    // Find the gift product (reward scheme)
-    const product = await this.productRepository.findOne({
-      where: { id: data.schemeId, category: 'gift', isActive: true },
+    return this.dataSource.transaction(async (manager) => {
+      const product = await manager.getRepository(Product).findOne({
+        where: { id: data.schemeId, category: 'gift', isActive: true },
+      });
+      if (!product) throw new NotFoundException('Reward scheme not found');
+
+      const normalizedRole = this.normalizeRole(role);
+      const user = await this.getUserByRoleForUpdate(userId, role, manager);
+      if (!user) throw new NotFoundException('User not found');
+
+      const pointsRequired = Number(product.points ?? 0);
+      const currentBalance = Number((user as any).walletBalance ?? 0);
+      if (currentBalance < pointsRequired) {
+        throw new BadRequestException('Insufficient points for this redemption');
+      }
+
+      const newBalance = currentBalance - pointsRequired;
+      const redemption = await manager.getRepository(Redemption).save(
+        manager.getRepository(Redemption).create({
+          userId,
+          userName: (user as any).name,
+          role: normalizedRole,
+          type: 'gift',
+          points: pointsRequired,
+          amount: product.mrp ?? 0,
+          status: 'pending' as any,
+          upiId: (user as any).upiId,
+          bankAccount: (user as any).bankAccount,
+          ifsc: (user as any).ifsc,
+          accountHolderName: (user as any).accountHolderName,
+        }),
+      );
+
+      await this.updateUserByRole(
+        userId,
+        role,
+        { walletBalance: newBalance },
+        manager,
+      );
+
+      const walletTransaction = await manager.getRepository(Wallet).save(
+        manager.getRepository(Wallet).create({
+          userId,
+          userRole: normalizedRole,
+          type: TransactionType.DEBIT,
+          source: TransactionSource.REDEMPTION,
+          amount: pointsRequired,
+          balanceBefore: currentBalance,
+          balanceAfter: newBalance,
+          description: `Reward redemption request for ${product.name}`,
+          referenceId: redemption.id,
+          referenceType: 'redemption',
+        }),
+      );
+
+      await manager.getRepository(Redemption).update(redemption.id, {
+        transactionId: walletTransaction.id,
+      });
+
+      return {
+        message: 'Redemption request submitted successfully',
+        redemptionId: redemption.id,
+        walletBalance: newBalance,
+      };
     });
-    if (!product) throw new NotFoundException('Reward scheme not found');
-
-    const normalizedRole = this.normalizeRole(role);
-    const user = await this.getUserByRole(userId, role);
-    if (!user) throw new NotFoundException('User not found');
-
-    const pointsRequired = product.points ?? 0;
-    if ((user.walletBalance ?? 0) < pointsRequired) {
-      throw new BadRequestException('Insufficient points for this redemption');
-    }
-
-    const redemption = this.redemptionRepository.create({
-      userId,
-      userName: user.name,
-      role: normalizedRole,
-      type: 'gift',
-      points: pointsRequired,
-      amount: product.mrp ?? 0,
-      status: 'pending' as any,
-      upiId: user.upiId,
-      bankAccount: user.bankAccount,
-      ifsc: user.ifsc,
-      accountHolderName: user.accountHolderName,
-    });
-    await this.redemptionRepository.save(redemption);
-
-    return { message: 'Redemption request submitted successfully', redemptionId: redemption.id };
   }
 
   async transferPoints(userId: string, role: string, data: { receiverPhone: string; points: number }) {
-    const normalizedRole = this.normalizeRole(role);
-    const sender = await this.getUserByRole(userId, role);
-    if (!sender) throw new NotFoundException('Sender not found');
-    if ((sender.walletBalance ?? 0) < data.points) {
-      throw new BadRequestException('Insufficient balance');
+    if (!Number.isFinite(data.points) || data.points <= 0) {
+      throw new BadRequestException('Points must be greater than 0');
     }
 
-    const receiverData = await this.findReceiverByPhone(data.receiverPhone);
-    if (!receiverData) throw new NotFoundException('Receiver not found');
-    const receiver = receiverData.user;
+    return this.dataSource.transaction(async (manager) => {
+      const normalizedRole = this.normalizeRole(role);
+      const sender = await this.getUserByRoleForUpdate(userId, role, manager);
+      if (!sender) throw new NotFoundException('Sender not found');
 
-    // Deduct from sender
-    const senderNewBalance = (sender.walletBalance ?? 0) - data.points;
-    await this.updateUserByRole(userId, role, { walletBalance: senderNewBalance });
+      const senderBalanceBefore = Number((sender as any).walletBalance ?? 0);
+      if (senderBalanceBefore < data.points) {
+        throw new BadRequestException('Insufficient balance');
+      }
 
-    const receiverNewBalance = (receiver.walletBalance ?? 0) + data.points;
-    await this.updateUserByRole(receiver.id, receiverData.role, { walletBalance: receiverNewBalance });
+      const receiverData = await this.findReceiverByPhone(data.receiverPhone, manager);
+      if (!receiverData) throw new NotFoundException('Receiver not found');
+      if (receiverData.user.id === userId && receiverData.role === normalizedRole) {
+        throw new BadRequestException('You cannot transfer points to yourself');
+      }
 
-    // Log transactions
-    await this.walletRepository.save(this.walletRepository.create({
-      userId,
-      userRole: normalizedRole,
-      type: TransactionType.DEBIT,
-      source: TransactionSource.TRANSFER,
-      amount: data.points,
-      balanceBefore: sender.walletBalance ?? 0,
-      balanceAfter: senderNewBalance,
-      description: `Transfer to ${receiver.name} (${data.receiverPhone})`,
-      referenceId: receiver.id,
-      referenceType: 'transfer',
-    }));
+      const receiver = await this.getUserByRoleForUpdate(
+        receiverData.user.id,
+        receiverData.role,
+        manager,
+      );
+      if (!receiver) throw new NotFoundException('Receiver not found');
 
-    return { message: 'Points transferred successfully' };
+      const receiverBalanceBefore = Number((receiver as any).walletBalance ?? 0);
+      const senderNewBalance = senderBalanceBefore - data.points;
+      const receiverNewBalance = receiverBalanceBefore + data.points;
+
+      await this.updateUserByRole(
+        userId,
+        role,
+        { walletBalance: senderNewBalance },
+        manager,
+      );
+      await this.updateUserByRole(
+        receiver.id,
+        receiverData.role,
+        { walletBalance: receiverNewBalance },
+        manager,
+      );
+
+      await manager.getRepository(Wallet).save(
+        manager.getRepository(Wallet).create({
+          userId,
+          userRole: normalizedRole,
+          type: TransactionType.DEBIT,
+          source: TransactionSource.TRANSFER,
+          amount: data.points,
+          balanceBefore: senderBalanceBefore,
+          balanceAfter: senderNewBalance,
+          description: `Transfer to ${(receiver as any).name} (${data.receiverPhone})`,
+          referenceId: receiver.id,
+          referenceType: 'transfer',
+        }),
+      );
+
+      await manager.getRepository(Wallet).save(
+        manager.getRepository(Wallet).create({
+          userId: receiver.id,
+          userRole: receiverData.role,
+          type: TransactionType.CREDIT,
+          source: TransactionSource.TRANSFER,
+          amount: data.points,
+          balanceBefore: receiverBalanceBefore,
+          balanceAfter: receiverNewBalance,
+          description: `Transfer from ${(sender as any).name} (${(sender as any).phone ?? ''})`,
+          referenceId: userId,
+          referenceType: 'transfer',
+        }),
+      );
+
+      return {
+        message: 'Points transferred successfully',
+        balance: senderNewBalance,
+        wallet_balance: senderNewBalance,
+        receiverBalance: receiverNewBalance,
+      };
+    });
   }
 
   async getDealerBonus(dealerId: string) {
@@ -887,6 +1156,7 @@ export class MobileService {
   async createSupportTicket(userId: string, role: string, data: {
     subject: string; comment: string; photoUrl?: string;
   }) {
+    await this.ensurePersistenceArtifacts();
     const user = await this.getUserByRole(userId, role);
     const userRole = this.normalizeRole(role);
     const ticket = this.supportTicketRepository.create({
@@ -895,6 +1165,7 @@ export class MobileService {
       userRole,
       subject: data.subject,
       message: data.comment,
+      photoUrl: data.photoUrl ?? null,
       status: SupportTicketStatus.OPEN,
       priority: SupportTicketPriority.MEDIUM,
     });
@@ -939,17 +1210,70 @@ export class MobileService {
 
   // ── Rating ─────────────────────────────────────────────────────────────────
 
-  // In-memory rating store (production mein DB table use karein)
-  private ratingStore = new Map<string, { id: string; rating: number; review: string | null }>();
-
   async submitRating(userId: string, rating: number, review?: string) {
-    const id = `rating_${userId}`;
-    const record = { id, rating, review: review ?? null };
-    this.ratingStore.set(userId, record);
-    return record;
+    await this.ensurePersistenceArtifacts();
+
+    const numericRating = Number(rating);
+    if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
+      throw new BadRequestException('Rating must be an integer between 1 and 5');
+    }
+
+    const existingUser = await this.getUserByRole(userId, UserRole.DEALER)
+      ?? await this.getUserByRole(userId, UserRole.ELECTRICIAN)
+      ?? await this.getUserByRole(userId, UserRole.USER)
+      ?? await this.getUserByRole(userId, UserRole.COUNTERBOY);
+    const userRole = existingUser
+      ? this.normalizeRole(
+        (existingUser as any).dealerCode ? UserRole.DEALER
+          : (existingUser as any).electricianCode ? UserRole.ELECTRICIAN
+            : (existingUser as any).counterboyCode ? UserRole.COUNTERBOY
+              : UserRole.USER,
+      )
+      : UserRole.USER;
+
+    await this.dataSource.query(
+      `
+        INSERT INTO "app_ratings" ("userId", "userRole", "rating", "review")
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT ("userId")
+        DO UPDATE SET
+          "userRole" = EXCLUDED."userRole",
+          "rating" = EXCLUDED."rating",
+          "review" = EXCLUDED."review",
+          "updatedAt" = now()
+      `,
+      [userId, userRole, numericRating, review ?? null],
+    );
+
+    return {
+      id: `rating_${userId}`,
+      rating: numericRating,
+      review: review ?? null,
+    };
   }
 
   async getRating(userId: string) {
-    return this.ratingStore.get(userId) ?? null;
+    await this.ensurePersistenceArtifacts();
+
+    const rows = await this.dataSource.query(
+      `
+        SELECT "rating", "review"
+        FROM "app_ratings"
+        WHERE "userId" = $1
+        LIMIT 1
+      `,
+      [userId],
+    );
+
+    const record = rows?.[0];
+    if (!record) {
+      return null;
+    }
+
+    return {
+      id: `rating_${userId}`,
+      rating: Number(record.rating),
+      review: record.review ?? null,
+    };
   }
 }

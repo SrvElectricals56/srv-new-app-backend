@@ -15,20 +15,28 @@ export class CounterBoyService {
     private dealerRepository: Repository<Dealer>,
   ) {}
 
-  private async generateUniqueCounterBoyCode(dealer?: Partial<Dealer> | null) {
-    const prefix = dealer?.dealerCode?.trim()
-      ? dealer.dealerCode.trim()
-      : `CB${String(Date.now()).slice(-6)}`;
+  private async generateUniqueCounterBoyCode() {
+    const prefix = `CB${String(Date.now()).slice(-6)}`;
 
     for (let attempt = 1; attempt <= 50; attempt += 1) {
-      const code = dealer?.dealerCode?.trim()
-        ? `${prefix}-${String(attempt).padStart(3, '0')}`
-        : `${prefix}-${Math.floor(Math.random() * 900 + 100)}`;
+      const code = `${prefix}-${Math.floor(Math.random() * 900 + 100)}`;
       const exists = await this.counterboyRepository.exists({ where: { counterboyCode: code } });
       if (!exists) return code;
     }
 
     throw new BadRequestException('Unable to generate unique counter boy code');
+  }
+
+  private normalizeRequestedCode(code?: string | null) {
+    const normalized = code?.trim();
+    return normalized ? normalized : null;
+  }
+
+  private async ensureUniqueCounterBoyCode(code: string, excludeId?: string) {
+    const existing = await this.counterboyRepository.findOne({ where: { counterboyCode: code } });
+    if (existing && existing.id !== excludeId) {
+      throw new BadRequestException('Counter boy code already exists');
+    }
   }
 
   private async hashPassword(password?: string) {
@@ -86,13 +94,8 @@ export class CounterBoyService {
         } else {
           const data: any = { ...record };
 
-          let dealer: Dealer | null = null;
-          if (data.dealerId) {
-            dealer = await this.dealerRepository.findOne({ where: { id: String(data.dealerId) } });
-          }
-
           if (!data.counterboyCode) {
-            data.counterboyCode = await this.generateUniqueCounterBoyCode(dealer);
+            data.counterboyCode = await this.generateUniqueCounterBoyCode();
           }
 
           const passwordHash = await this.hashPassword(data.password);
@@ -101,7 +104,7 @@ export class CounterBoyService {
             phone,
             email: data.email?.trim() || null,
             counterboyCode: data.counterboyCode,
-            dealerId: data.dealerId ? String(data.dealerId) : undefined,
+            dealerId: null,
             city: data.city || null,
             state: data.state || null,
             district: data.district || null,
@@ -203,23 +206,20 @@ export class CounterBoyService {
       }
     }
 
-    let dealer: Dealer | null = null;
-    if (data.dealerId) {
-      dealer = await this.dealerRepository.findOne({ where: { id: String(data.dealerId) } });
-      if (!dealer) {
-        throw new BadRequestException('Selected dealer was not found');
-      }
-    }
-
     const passwordHash = await this.hashPassword((data as Partial<CounterBoy> & { password?: string }).password);
+    const requestedCode = this.normalizeRequestedCode(data.counterboyCode);
+
+    if (requestedCode) {
+      await this.ensureUniqueCounterBoyCode(requestedCode);
+    }
 
     const payload: Partial<CounterBoy> = {
       ...data,
       name: data.name.trim(),
       phone,
       email,
-      dealerId: data.dealerId ? String(data.dealerId) : undefined,
-      counterboyCode: await this.generateUniqueCounterBoyCode(dealer),
+      dealerId: null,
+      counterboyCode: requestedCode ?? await this.generateUniqueCounterBoyCode(),
       tier: (data.tier ?? 'Silver') as CounterBoy['tier'],
       status: data.status ?? UserStatus.PENDING,
       kycStatus: (data.kycStatus ?? 'not_submitted') as CounterBoy['kycStatus'],
@@ -249,7 +249,17 @@ export class CounterBoyService {
     await this.findOnePlain(id);
     const passwordHash = await this.hashPassword((data as Partial<CounterBoy> & { password?: string }).password);
     const payload = { ...data } as Partial<CounterBoy> & { password?: string };
+    const requestedCode = this.normalizeRequestedCode(payload.counterboyCode);
+    payload.dealerId = null;
     delete payload.password;
+    if (Object.prototype.hasOwnProperty.call(payload, 'counterboyCode')) {
+      if (requestedCode) {
+        await this.ensureUniqueCounterBoyCode(requestedCode, id);
+        payload.counterboyCode = requestedCode;
+      } else {
+        delete payload.counterboyCode;
+      }
+    }
     if (passwordHash) payload.passwordHash = passwordHash;
     await this.counterboyRepository.update(id, payload);
     return this.findOne(id);

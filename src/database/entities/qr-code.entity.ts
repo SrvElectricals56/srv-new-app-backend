@@ -41,6 +41,15 @@ export class QrCode {
   @Column({ nullable: true })
   batchId: string;
 
+  @Column({ type: 'integer', nullable: true })
+  batchNo: number;
+
+  @Column({ type: 'integer', nullable: true })
+  sequenceNo: number;
+
+  @Column({ type: 'integer', default: 0 })
+  rewardPoints: number;
+
   @Column({ default: true })
   isActive: boolean;
 

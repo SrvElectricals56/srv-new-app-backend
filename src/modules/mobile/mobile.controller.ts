@@ -142,6 +142,15 @@ export class MobileController {
     return this.mobileService.submitScan(req.user.id, req.user.role, body.qrCode, body.mode);
   }
 
+  @Post('scan/preview')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Preview QR validity, product, and reward before redeeming' })
+  previewScan(@Body() body: { qrCode: string }) {
+    return this.mobileService.previewQrCode(body.qrCode);
+  }
+
   @Get('scan-history')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')

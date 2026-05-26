@@ -22,6 +22,18 @@ export class AppUserService {
     throw new BadRequestException('Unable to generate unique customer code');
   }
 
+  private normalizeRequestedCode(code?: string | null) {
+    const normalized = code?.trim();
+    return normalized ? normalized : null;
+  }
+
+  private async ensureUniqueUserCode(code: string, excludeId?: string) {
+    const existing = await this.appUserRepository.findOne({ where: { userCode: code } });
+    if (existing && existing.id !== excludeId) {
+      throw new BadRequestException('Customer code already exists');
+    }
+  }
+
   private async hashPassword(password?: string) {
     const trimmed = password?.trim();
     if (!trimmed) return null;
@@ -50,13 +62,18 @@ export class AppUserService {
     }
 
     const passwordHash = await this.hashPassword((data as Partial<AppUser> & { password?: string }).password);
+    const requestedCode = this.normalizeRequestedCode(data.userCode);
+
+    if (requestedCode) {
+      await this.ensureUniqueUserCode(requestedCode);
+    }
 
     const payload: Partial<AppUser> = {
       ...data,
       name: data.name.trim(),
       phone,
       email,
-      userCode: await this.generateUniqueUserCode(),
+      userCode: requestedCode ?? await this.generateUniqueUserCode(),
       tier: (data.tier ?? 'Silver') as AppUser['tier'],
       status: data.status ?? UserStatus.PENDING,
       kycStatus: (data.kycStatus ?? 'not_submitted') as AppUser['kycStatus'],
@@ -188,7 +205,16 @@ export class AppUserService {
     await this.findOne(id);
     const passwordHash = await this.hashPassword((data as Partial<AppUser> & { password?: string }).password);
     const payload = { ...data } as Partial<AppUser> & { password?: string };
+    const requestedCode = this.normalizeRequestedCode(payload.userCode);
     delete payload.password;
+    if (Object.prototype.hasOwnProperty.call(payload, 'userCode')) {
+      if (requestedCode) {
+        await this.ensureUniqueUserCode(requestedCode, id);
+        payload.userCode = requestedCode;
+      } else {
+        delete payload.userCode;
+      }
+    }
     if (passwordHash) payload.passwordHash = passwordHash;
     await this.appUserRepository.update(id, payload);
     return this.findOne(id);

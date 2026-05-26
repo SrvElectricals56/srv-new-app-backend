@@ -108,11 +108,6 @@ export class RegisterCounterBoyDto {
   @IsOptional()
   pincode?: string;
 
-  /** Phone of the dealer this counterboy is linked to */
-  @IsString()
-  @IsOptional()
-  dealerPhone?: string;
-
   @IsString()
   @IsOptional()
   password?: string;

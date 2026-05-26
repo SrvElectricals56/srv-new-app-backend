@@ -11,7 +11,7 @@ import { UserStatus, KYCStatus, MemberTier } from '../../common/enums';
 import { Dealer } from './dealer.entity';
 
 /**
- * CounterBoy — Counter staff role, linked to a dealer
+ * CounterBoy — Independent counter staff role
  */
 @Entity('counterboys')
 export class CounterBoy {
@@ -48,7 +48,6 @@ export class CounterBoy {
   @Column({ nullable: true, type: 'text' })
   address: string;
 
-  /** Linked dealer (counterboy works at a dealer's counter) */
   @Column({ nullable: true })
   dealerId: string;
 
