@@ -82,6 +82,9 @@ export class Dealer {
   })
   status: UserStatus;
 
+  @Column({ nullable: true })
+  rejectionReason: string;
+
   @Column({ default: false })
   bankLinked: boolean;
 

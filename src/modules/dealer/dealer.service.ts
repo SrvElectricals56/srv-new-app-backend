@@ -132,8 +132,13 @@ export class DealerService {
     return this.findOne(id);
   }
 
-  async updateStatus(id: string, status: UserStatus) {
-    await this.dealerRepository.update(id, { status });
+  async updateStatus(id: string, status: UserStatus, rejectionReason?: string) {
+    const normalizedReason = rejectionReason?.trim();
+    await this.dealerRepository.update(id, {
+      status,
+      rejectionReason:
+        status === UserStatus.INACTIVE ? normalizedReason || 'Rejected by admin' : null,
+    });
     return this.findOne(id);
   }
 

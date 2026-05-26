@@ -171,6 +171,7 @@ model Dealer {
   tier               MemberTier  @default(Silver)
   electricianCount   Int         @default(0)
   status             UserStatus  @default(pending)
+  rejectionReason    String?
   bankLinked         Boolean     @default(false)
   upiId              String?
   bankAccount        String?

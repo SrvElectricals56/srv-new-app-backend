@@ -104,8 +104,12 @@ export class DealerController {
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Update dealer status' })
   @ApiResponse({ status: 200, description: 'Status updated successfully' })
-  updateStatus(@Param('id') id: string, @Body('status') status: UserStatus) {
-    return this.dealerService.updateStatus(id, status);
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: UserStatus,
+    @Body('rejectionReason') rejectionReason?: string,
+  ) {
+    return this.dealerService.updateStatus(id, status, rejectionReason);
   }
 
   @Delete(':id')

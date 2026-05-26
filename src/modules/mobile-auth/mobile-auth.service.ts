@@ -649,6 +649,7 @@ export class MobileAuthService {
           electricianCount: user.electricianCount,
           walletBalance: user.walletBalance,
           status: user.status,
+          approvalRejectionReason: user.rejectionReason ?? null,
           kycStatus: user.kycStatus,
           bankLinked: user.bankLinked,
           upiId: user.upiId,
