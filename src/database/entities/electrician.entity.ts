@@ -137,6 +137,9 @@ export class Electrician {
   dealer: Dealer;
 
   @Column({ nullable: true })
+  passwordHash: string;
+
+  @Column({ nullable: true })
   lastActivityAt: Date;
 
   @CreateDateColumn()

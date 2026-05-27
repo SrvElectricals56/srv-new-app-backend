@@ -21,7 +21,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
-import { GiftOrder } from '../../database/entities/gift-order.entity';
+import { GiftOrder, GiftOrderStatus } from '../../database/entities/gift-order.entity';
 import { ProductCategory } from '../../database/entities/product-category.entity';
 import { UserRole, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
@@ -156,28 +156,114 @@ export class MobileService {
     return this.getUserRepositoryByRole(role, manager).update(userId, data);
   }
 
+  private normalizePhone(phone: string): string {
+    return String(phone ?? '').replace(/\D/g, '').slice(-10);
+  }
+
+  private async findRecordByPhone(
+    repository: Repository<any>,
+    alias: string,
+    phone: string,
+  ) {
+    const normalizedPhone = this.normalizePhone(phone);
+    if (normalizedPhone.length !== 10) {
+      return null;
+    }
+
+    return repository
+      .createQueryBuilder(alias)
+      .where(`${alias}.phone = :normalizedPhone`, { normalizedPhone })
+      .orWhere(
+        `RIGHT(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), 10) = :normalizedPhone`,
+        { normalizedPhone },
+      )
+      .getOne();
+  }
+
+  private buildTransferBalanceUpdate(
+    _user: any,
+    role: UserRole,
+    newBalance: number,
+    _pointsDelta: number,
+  ) {
+    const updateData: Record<string, any> = {
+      walletBalance: newBalance,
+    };
+
+    if (role !== UserRole.DEALER) {
+      const syncedPoints = Math.max(0, Number(newBalance ?? 0));
+      updateData.totalPoints = syncedPoints;
+
+      if (role === UserRole.ELECTRICIAN) {
+        updateData.tier = this.tierService.calculateElectricianTier(syncedPoints);
+      }
+    }
+
+    return updateData;
+  }
+
   private async findReceiverByPhone(phone: string, manager?: EntityManager) {
-    const electrician = await (
-      manager ? manager.getRepository(Electrician) : this.electricianRepository
-    ).findOne({ where: { phone } });
+    const electrician = await this.findRecordByPhone(
+      manager ? manager.getRepository(Electrician) : this.electricianRepository,
+      'electrician',
+      phone,
+    );
     if (electrician) return { user: electrician, role: UserRole.ELECTRICIAN };
 
-    const dealer = await (
-      manager ? manager.getRepository(Dealer) : this.dealerRepository
-    ).findOne({ where: { phone } });
+    const dealer = await this.findRecordByPhone(
+      manager ? manager.getRepository(Dealer) : this.dealerRepository,
+      'dealer',
+      phone,
+    );
     if (dealer) return { user: dealer, role: UserRole.DEALER };
 
-    const appUser = await (
-      manager ? manager.getRepository(AppUser) : this.appUserRepository
-    ).findOne({ where: { phone } });
+    const appUser = await this.findRecordByPhone(
+      manager ? manager.getRepository(AppUser) : this.appUserRepository,
+      'appUser',
+      phone,
+    );
     if (appUser) return { user: appUser, role: UserRole.USER };
 
-    const counterBoy = await (
-      manager ? manager.getRepository(CounterBoy) : this.counterBoyRepository
-    ).findOne({ where: { phone } });
+    const counterBoy = await this.findRecordByPhone(
+      manager ? manager.getRepository(CounterBoy) : this.counterBoyRepository,
+      'counterBoy',
+      phone,
+    );
     if (counterBoy) return { user: counterBoy, role: UserRole.COUNTERBOY };
 
     return null;
+  }
+
+  async lookupTransferRecipient(
+    phone: string,
+    currentUserId?: string,
+    currentRole?: string,
+  ) {
+    const normalizedPhone = this.normalizePhone(phone);
+    if (normalizedPhone.length !== 10) {
+      throw new BadRequestException('Phone number must be 10 digits');
+    }
+
+    const receiverData = await this.findReceiverByPhone(normalizedPhone);
+    if (!receiverData) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (
+      currentUserId &&
+      currentRole &&
+      receiverData.user.id === currentUserId &&
+      receiverData.role === this.normalizeRole(currentRole)
+    ) {
+      throw new BadRequestException('You cannot transfer points to yourself');
+    }
+
+    return {
+      id: receiverData.user.id,
+      name: (receiverData.user as any).name,
+      phone: this.normalizePhone((receiverData.user as any).phone),
+      role: receiverData.role,
+    };
   }
 
   private async getWalletSummary(
@@ -209,6 +295,7 @@ export class MobileService {
       .getRawOne();
 
     const balance = Number((user as any)?.walletBalance ?? 0);
+    const effectivePoints = normalizedRole === UserRole.DEALER ? 0 : balance;
 
     return {
       balance,
@@ -219,10 +306,7 @@ export class MobileService {
       totalwallet_amount: balance,
       totalearnedwallet_amount: Number(totals?.totalEarned ?? 0),
       totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
-      totalPoints:
-        normalizedRole === UserRole.DEALER
-          ? 0
-          : Number((user as any)?.totalPoints ?? 0),
+      totalPoints: effectivePoints,
       totalScans: Number((user as any)?.totalScans ?? 0),
     };
   }
@@ -464,7 +548,7 @@ export class MobileService {
       maintenanceMode: map['maintenanceMode'] === 'true',
       maintenanceMessage: map['maintenanceMessage'] ?? 'App is under maintenance. Please try again later.',
       supportPhone: map['supportPhone'] ?? '+91 88376 84004',
-      supportEmail: map['supportEmail'] ?? 'support@srvelectricals.com',
+      supportEmail: map['supportEmail'] ?? 'info@srvelectricals.com',
       whatsappNumber: map['whatsappNumber'] ?? '918837684004',
       appVersion: map['appVersion'] ?? '1.0.0',
       minAppVersion: map['minAppVersion'] ?? '1.0.0',
@@ -631,13 +715,13 @@ export class MobileService {
 
   async getDealerByPhone(phone: string) {
     if (!phone) throw new BadRequestException('Phone number is required');
-    const dealer = await this.dealerRepository.findOne({ where: { phone } });
+    const dealer = await this.findRecordByPhone(this.dealerRepository, 'dealer', phone);
     if (!dealer) throw new NotFoundException('Dealer not found');
     const nextElectricianSerial = await this.getNextElectricianSerial(dealer.id, dealer.dealerCode);
     return {
       id: dealer.id,
       name: dealer.name,
-      phone: dealer.phone,
+      phone: this.normalizePhone(dealer.phone),
       dealerCode: dealer.dealerCode,
       town: dealer.town,
       district: dealer.district,
@@ -659,7 +743,7 @@ export class MobileService {
       const qr = await manager
         .getRepository(QrCode)
         .createQueryBuilder('qr')
-        .leftJoinAndSelect('qr.product', 'product')
+        .innerJoinAndSelect('qr.product', 'product')
         .setLock('pessimistic_write')
         .where('qr.code = :qrCode', { qrCode: trimmedQrCode })
         .andWhere('qr.isActive = :isActive', { isActive: true })
@@ -715,11 +799,10 @@ export class MobileService {
       });
 
       const balanceBefore = Number(userRecord.walletBalance ?? 0);
-      const newPoints = Number(userRecord.totalPoints ?? 0) + points;
       const newScans = Number(userRecord.totalScans ?? 0) + 1;
       const newWallet = balanceBefore + points;
       const updateData: Record<string, any> = {
-        totalPoints: newPoints,
+        totalPoints: newWallet,
         totalScans: newScans,
         walletBalance: newWallet,
         lastActivityAt: new Date(),
@@ -731,7 +814,7 @@ export class MobileService {
         userRole === UserRole.USER
       ) {
         updateData.tier = this.tierService.calculateElectricianTier(
-          newPoints,
+          newWallet,
         ) as any;
       }
 
@@ -872,6 +955,151 @@ export class MobileService {
     return { message: 'Bank account saved successfully' };
   }
 
+  async requestBankTransfer(userId: string, role: string, data: { amount: number }) {
+    const amount = Number(data.amount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Amount must be greater than 0');
+    }
+
+    const normalizedRole = this.normalizeRole(role);
+
+    if (normalizedRole === UserRole.DEALER) {
+      const dealer = await this.dealerRepository.findOne({ where: { id: userId } });
+      if (!dealer) throw new NotFoundException('Dealer not found');
+      if (!dealer.bankLinked || !dealer.accountHolderName || !dealer.bankAccount || !dealer.ifsc) {
+        throw new BadRequestException('Please add bank details before requesting transfer');
+      }
+
+      const totalBonus = Math.max(
+        0,
+        ((dealer.achievedTarget ?? 0) as number) - ((dealer.monthlyTarget ?? 0) as number),
+      ) * 0.1;
+      const claimedSummary = await this.redemptionRepository
+        .createQueryBuilder('redemption')
+        .select(
+          `
+            COALESCE(SUM(CASE
+              WHEN redemption.status IN (:...activeStatuses) THEN redemption.amount
+              ELSE 0
+            END), 0)
+          `,
+          'claimedAmount',
+        )
+        .addSelect(
+          `
+            COALESCE(SUM(CASE
+              WHEN redemption.status = :pendingStatus THEN redemption.amount
+              ELSE 0
+            END), 0)
+          `,
+          'pendingAmount',
+        )
+        .where('redemption.userId = :userId', { userId })
+        .andWhere('redemption.role = :role', { role: UserRole.DEALER })
+        .andWhere('redemption.type IN (:...types)', {
+          types: ['dealer_bonus_bank_transfer', 'bonus_withdrawal'],
+        })
+        .setParameters({
+          activeStatuses: ['pending', 'approved'],
+          pendingStatus: 'pending',
+        })
+        .getRawOne();
+      const claimedAmount = Number(claimedSummary?.claimedAmount ?? 0);
+      const availableBonus = Math.max(0, totalBonus - claimedAmount);
+
+      if (amount > availableBonus) {
+        throw new BadRequestException('Requested amount exceeds available dealer bonus');
+      }
+
+      const redemption = this.redemptionRepository.create({
+        userId,
+        userName: dealer.name,
+        role: UserRole.DEALER,
+        type: 'dealer_bonus_bank_transfer',
+        points: amount,
+        amount,
+        status: 'pending' as any,
+        upiId: dealer.upiId,
+        bankAccount: dealer.bankAccount,
+        ifsc: dealer.ifsc,
+        accountHolderName: dealer.accountHolderName,
+      });
+      await this.redemptionRepository.save(redemption);
+
+      return {
+        message: 'Bank transfer request submitted successfully',
+        redemptionId: redemption.id,
+      };
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const user = await this.getUserByRoleForUpdate(userId, role, manager);
+      if (!user) throw new NotFoundException('User not found');
+      if (
+        !(user as any).bankLinked ||
+        !(user as any).accountHolderName ||
+        !(user as any).bankAccount ||
+        !(user as any).ifsc
+      ) {
+        throw new BadRequestException('Please add bank details before requesting transfer');
+      }
+
+      const currentBalance = Number((user as any).walletBalance ?? 0);
+      if (currentBalance < amount) {
+        throw new BadRequestException('Insufficient points balance');
+      }
+
+      const newBalance = currentBalance - amount;
+      const redemption = await manager.getRepository(Redemption).save(
+        manager.getRepository(Redemption).create({
+          userId,
+          userName: (user as any).name,
+          role: normalizedRole,
+          type: 'bank_transfer',
+          points: amount,
+          amount,
+          status: 'pending' as any,
+          upiId: (user as any).upiId,
+          bankAccount: (user as any).bankAccount,
+          ifsc: (user as any).ifsc,
+          accountHolderName: (user as any).accountHolderName,
+        }),
+      );
+
+      await this.updateUserByRole(
+        userId,
+        role,
+        this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -amount),
+        manager,
+      );
+
+      const walletTransaction = await manager.getRepository(Wallet).save(
+        manager.getRepository(Wallet).create({
+          userId,
+          userRole: normalizedRole,
+          type: TransactionType.DEBIT,
+          source: TransactionSource.REDEMPTION,
+          amount,
+          balanceBefore: currentBalance,
+          balanceAfter: newBalance,
+          description: 'Bank transfer withdrawal request',
+          referenceId: redemption.id,
+          referenceType: 'redemption',
+        }),
+      );
+
+      await manager.getRepository(Redemption).update(redemption.id, {
+        transactionId: walletTransaction.id,
+      });
+
+      return {
+        message: 'Bank transfer request submitted successfully',
+        redemptionId: redemption.id,
+        walletBalance: newBalance,
+      };
+    });
+  }
+
   async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string }) {
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
@@ -909,7 +1137,12 @@ export class MobileService {
       await this.updateUserByRole(
         userId,
         role,
-        { walletBalance: newBalance },
+        this.buildTransferBalanceUpdate(
+          user,
+          normalizedRole,
+          newBalance,
+          -pointsRequired,
+        ),
         manager,
       );
 
@@ -932,6 +1165,44 @@ export class MobileService {
         transactionId: walletTransaction.id,
       });
 
+      // ── Create GiftOrder so it appears in the admin Gift Orders panel ──
+      const userCode: string =
+        (user as any).electricianCode ??
+        (user as any).dealerCode ??
+        (user as any).userCode ??
+        (user as any).counterboyCode ??
+        '';
+
+      // Resolve dealer name for electricians
+      let dealerName: string | undefined;
+      if (normalizedRole === UserRole.ELECTRICIAN && (user as any).dealerId) {
+        const dealer = await manager.getRepository(Dealer).findOne({
+          where: { id: (user as any).dealerId },
+        });
+        dealerName = dealer?.name ?? undefined;
+      }
+
+      await manager.getRepository(GiftOrder).save(
+        manager.getRepository(GiftOrder).create({
+          userId,
+          userName: (user as any).name,
+          userCode,
+          dealerName,
+          role: normalizedRole,
+          giftProductId: product.id,
+          giftName: product.name,
+          giftImage: product.image ?? '',
+          pointsUsed: pointsRequired,
+          status: GiftOrderStatus.PENDING,
+          shippingAddress: (user as any).address ?? undefined,
+        }),
+      );
+
+      // Decrement gift product stock
+      if ((product.stock ?? 0) > 0) {
+        await manager.getRepository(Product).decrement({ id: product.id }, 'stock', 1);
+      }
+
       return {
         message: 'Redemption request submitted successfully',
         redemptionId: redemption.id,
@@ -947,6 +1218,11 @@ export class MobileService {
 
     return this.dataSource.transaction(async (manager) => {
       const normalizedRole = this.normalizeRole(role);
+      const receiverPhone = this.normalizePhone(data.receiverPhone);
+      if (receiverPhone.length !== 10) {
+        throw new BadRequestException('Receiver phone number must be 10 digits');
+      }
+
       const sender = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!sender) throw new NotFoundException('Sender not found');
 
@@ -955,7 +1231,7 @@ export class MobileService {
         throw new BadRequestException('Insufficient balance');
       }
 
-      const receiverData = await this.findReceiverByPhone(data.receiverPhone, manager);
+      const receiverData = await this.findReceiverByPhone(receiverPhone, manager);
       if (!receiverData) throw new NotFoundException('Receiver not found');
       if (receiverData.user.id === userId && receiverData.role === normalizedRole) {
         throw new BadRequestException('You cannot transfer points to yourself');
@@ -975,13 +1251,23 @@ export class MobileService {
       await this.updateUserByRole(
         userId,
         role,
-        { walletBalance: senderNewBalance },
+        this.buildTransferBalanceUpdate(
+          sender,
+          normalizedRole,
+          senderNewBalance,
+          -data.points,
+        ),
         manager,
       );
       await this.updateUserByRole(
         receiver.id,
         receiverData.role,
-        { walletBalance: receiverNewBalance },
+        this.buildTransferBalanceUpdate(
+          receiver,
+          receiverData.role,
+          receiverNewBalance,
+          data.points,
+        ),
         manager,
       );
 
@@ -994,7 +1280,7 @@ export class MobileService {
           amount: data.points,
           balanceBefore: senderBalanceBefore,
           balanceAfter: senderNewBalance,
-          description: `Transfer to ${(receiver as any).name} (${data.receiverPhone})`,
+          description: `Transfer to ${(receiver as any).name} (${receiverPhone})`,
           referenceId: receiver.id,
           referenceType: 'transfer',
         }),
@@ -1028,12 +1314,46 @@ export class MobileService {
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new NotFoundException('Dealer not found');
 
-    const bonusAmount = Math.max(0, ((dealer.achievedTarget ?? 0) as number) - ((dealer.monthlyTarget ?? 0) as number)) * 0.1;
+    const totalBonus =
+      Math.max(0, ((dealer.achievedTarget ?? 0) as number) - ((dealer.monthlyTarget ?? 0) as number)) * 0.1;
+    const claimedSummary = await this.redemptionRepository
+      .createQueryBuilder('redemption')
+      .select(
+        `
+          COALESCE(SUM(CASE
+            WHEN redemption.status IN (:...activeStatuses) THEN redemption.amount
+            ELSE 0
+          END), 0)
+        `,
+        'claimedAmount',
+      )
+      .addSelect(
+        `
+          COALESCE(SUM(CASE
+            WHEN redemption.status = :pendingStatus THEN redemption.amount
+            ELSE 0
+          END), 0)
+        `,
+        'pendingAmount',
+      )
+      .where('redemption.userId = :dealerId', { dealerId })
+      .andWhere('redemption.role = :role', { role: UserRole.DEALER })
+      .andWhere('redemption.type IN (:...types)', {
+        types: ['dealer_bonus_bank_transfer', 'bonus_withdrawal'],
+      })
+      .setParameters({
+        activeStatuses: ['pending', 'approved'],
+        pendingStatus: 'pending',
+      })
+      .getRawOne();
+    const claimedAmount = Number(claimedSummary?.claimedAmount ?? 0);
+    const pendingWithdrawals = Number(claimedSummary?.pendingAmount ?? 0);
+    const availableBonus = Math.max(0, totalBonus - claimedAmount);
 
     return {
-      availableBonus: bonusAmount,
-      totalBonus: bonusAmount,
-      pendingWithdrawals: 0,
+      availableBonus,
+      totalBonus,
+      pendingWithdrawals,
       achievedTarget: dealer.achievedTarget ?? 0,
       monthlyTarget: dealer.monthlyTarget ?? 0,
       bonusStatus: (dealer as any).bonusStatus ?? 'pending',
@@ -1041,25 +1361,7 @@ export class MobileService {
   }
 
   async requestDealerBonusWithdrawal(dealerId: string, data: { amount: number }) {
-    const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
-    if (!dealer) throw new NotFoundException('Dealer not found');
-
-    const redemption = this.redemptionRepository.create({
-      userId: dealerId,
-      userName: dealer.name,
-      role: UserRole.DEALER,
-      type: 'bonus_withdrawal',
-      points: 0,
-      amount: data.amount,
-      status: 'pending' as any,
-      upiId: dealer.upiId,
-      bankAccount: dealer.bankAccount,
-      ifsc: dealer.ifsc,
-      accountHolderName: dealer.accountHolderName,
-    });
-    await this.redemptionRepository.save(redemption);
-
-    return { message: 'Withdrawal request submitted successfully' };
+    return this.requestBankTransfer(dealerId, UserRole.DEALER, { amount: data.amount });
   }
 
   async getRedemptionHistory(userId: string, page: number = 1, limit: number = 20) {
@@ -1174,6 +1476,45 @@ export class MobileService {
     return { message: 'Support ticket created successfully', ticketId: ticket.id };
   }
 
+  async getMySupportTickets(userId: string, role: string) {
+    const tickets = await this.supportTicketRepository.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
+    return { data: tickets };
+  }
+
+  async replyToTicket(userId: string, ticketId: string, message: string) {
+    const ticket = await this.supportTicketRepository.findOne({ where: { id: ticketId, userId } });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.status === SupportTicketStatus.CLOSED || ticket.status === SupportTicketStatus.RESOLVED) {
+      throw new BadRequestException('This ticket is already closed');
+    }
+
+    const newReply = {
+      sender: 'user',
+      senderName: ticket.userName || 'User',
+      message,
+      timestamp: new Date(),
+    };
+    const existingReplies = ticket.replies || [];
+    await this.supportTicketRepository.update(ticketId, {
+      replies: [...existingReplies, newReply],
+      status: SupportTicketStatus.OPEN,
+    });
+    return { message: 'Reply sent successfully' };
+  }
+
+  async closeTicket(userId: string, ticketId: string) {
+    const ticket = await this.supportTicketRepository.findOne({ where: { id: ticketId, userId } });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    await this.supportTicketRepository.update(ticketId, {
+      status: SupportTicketStatus.CLOSED,
+    });
+    return { message: 'Ticket closed successfully' };
+  }
+
   // ── Referral ───────────────────────────────────────────────────────────────
 
   async getReferral(userId: string, role: string) {
@@ -1235,7 +1576,7 @@ export class MobileService {
       `
         INSERT INTO "app_ratings" ("userId", "userRole", "rating", "review")
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT ("userId")
+        ON CONFLICT ON CONSTRAINT "app_ratings_pkey"
         DO UPDATE SET
           "userRole" = EXCLUDED."userRole",
           "rating" = EXCLUDED."rating",

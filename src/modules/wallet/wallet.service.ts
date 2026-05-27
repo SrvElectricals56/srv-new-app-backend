@@ -185,11 +185,10 @@ export class WalletService {
     const updateData: any = { walletBalance: newBalance };
 
     if (pointsDelta !== undefined && userRole !== UserRole.DEALER) {
-      const user = await this.getUser(userId, userRole);
-      const newPoints = Math.max(0, ((user as any).totalPoints ?? 0) + pointsDelta);
-      updateData.totalPoints = newPoints;
-      if ('tier' in user) {
-        updateData.tier = this.calculateTier(newPoints);
+      const syncedPoints = Math.max(0, Number(newBalance ?? 0));
+      updateData.totalPoints = syncedPoints;
+      if (userRole === UserRole.ELECTRICIAN) {
+        updateData.tier = this.calculateTier(syncedPoints);
       }
     }
 

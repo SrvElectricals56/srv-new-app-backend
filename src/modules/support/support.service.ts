@@ -2,13 +2,16 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
-import { SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
+import { SupportTicketStatus, SupportTicketPriority, NotificationStatus } from '../../common/enums';
+import { Notification } from '../../database/entities/notification.entity';
 
 @Injectable()
 export class SupportService {
   constructor(
     @InjectRepository(SupportTicket)
     private supportTicketRepository: Repository<SupportTicket>,
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
   ) {}
 
   async getTickets(
@@ -56,14 +59,39 @@ export class SupportService {
     return ticket;
   }
 
-  async respond(id: string, response: string, adminId: string) {
+  async respond(id: string, message: string, adminId: string) {
     const ticket = await this.getTicket(id);
 
+    const newReply = {
+      sender: 'admin',
+      senderName: 'Admin Support',
+      message,
+      timestamp: new Date(),
+    };
+
+    const existingReplies = ticket.replies || [];
+    const updatedReplies = [...existingReplies, newReply];
+
     await this.supportTicketRepository.update(id, {
-      response,
+      response: message,
+      replies: updatedReplies,
       assignedTo: adminId,
       status: SupportTicketStatus.IN_PROGRESS,
     });
+
+    // Create notification for the user
+    if (ticket.userId) {
+      const notification = this.notificationRepository.create({
+        title: 'Reply to your enquiry',
+        message: `Admin replied to "${ticket.subject}": ${message.substring(0, 100)}`,
+        targetUserIds: [ticket.userId],
+        targetRole: ticket.userRole || undefined,
+        status: NotificationStatus.SENT,
+        sentAt: new Date(),
+        totalSent: 1,
+      });
+      await this.notificationRepository.save(notification);
+    }
 
     return this.getTicket(id);
   }

@@ -44,10 +44,11 @@ export class SupportController {
   @ApiResponse({ status: 200, description: 'Response added successfully' })
   respond(
     @Param('id') id: string,
-    @Body('response') response: string,
+    @Body() body: { message: string; response?: string },
     @CurrentUser('id') adminId: string,
   ) {
-    return this.supportService.respond(id, response, adminId);
+    const message = body.message || body.response;
+    return this.supportService.respond(id, message, adminId);
   }
 
   @Patch('tickets/:id/status')

@@ -133,6 +133,14 @@ export class MobileController {
 
   // ── Scan ───────────────────────────────────────────────────────────────────
 
+  @Get('wallet/transfer/recipient')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Lookup transfer recipient by phone number' })
+  getTransferRecipient(@Request() req: any, @Query('phone') phone: string) {
+    return this.mobileService.lookupTransferRecipient(phone, req.user.id, req.user.role);
+  }
+
   @Post('scan')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')
@@ -193,6 +201,15 @@ export class MobileController {
   @ApiOperation({ summary: 'Redeem points for a reward' })
   redeemReward(@Request() req: any, @Body() body: { schemeId: string; note?: string }) {
     return this.mobileService.redeemReward(req.user.id, req.user.role, body);
+  }
+
+  @Post('wallet/bank-transfer-request')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request bank transfer withdrawal' })
+  requestBankTransfer(@Request() req: any, @Body() body: { amount: number }) {
+    return this.mobileService.requestBankTransfer(req.user.id, req.user.role, body);
   }
 
   @Post('wallet/transfer')
@@ -315,6 +332,38 @@ export class MobileController {
   @ApiOperation({ summary: 'Create support ticket' })
   createSupportTicket(@Request() req: any, @Body() body: { subject: string; comment: string; photoUrl?: string }) {
     return this.mobileService.createSupportTicket(req.user.id, req.user.role, body);
+  }
+
+  @Get('support/tickets')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get my support tickets with replies' })
+  getMySupportTickets(@Request() req: any) {
+    return this.mobileService.getMySupportTickets(req.user.id, req.user.role);
+  }
+
+  @Post('support/tickets/:id/reply')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reply to my support ticket (user)' })
+  replyToTicket(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() body: { message: string },
+  ) {
+    return this.mobileService.replyToTicket(req.user.id, id, body.message);
+  }
+
+  @Patch('support/tickets/:id/close')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Close my support ticket' })
+  closeTicket(
+    @Request() req: any,
+    @Param('id') id: string,
+  ) {
+    return this.mobileService.closeTicket(req.user.id, id);
   }
 
   // ── Referral ───────────────────────────────────────────────────────────────

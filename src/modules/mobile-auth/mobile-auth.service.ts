@@ -256,6 +256,8 @@ export class MobileAuthService {
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
     const dealerCode = `DLR${stateCode}${Date.now().toString().slice(-6)}`;
 
+    const passwordHash = await this.hashPassword(data.password);
+
     const dealer = this.dealerRepository.create({
       name: data.name,
       phone: data.phone,
@@ -269,8 +271,9 @@ export class MobileAuthService {
       dealerCode,
       status: UserStatus.PENDING,
     });
+    (dealer as any).passwordHash = passwordHash;
 
-    const saved = await this.dealerRepository.save(dealer);
+    const saved = await this.dealerRepository.save(dealer) as Dealer;
     const payload = { sub: saved.id, phone: saved.phone, role: 'dealer' };
     const tokens = this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(saved, 'dealer') };
@@ -301,6 +304,8 @@ export class MobileAuthService {
     const existingCode = await this.electricianRepository.findOne({ where: { electricianCode } });
     if (existingCode) throw new ConflictException('Electrician code already exists.');
 
+    const passwordHash = await this.hashPassword(data.password);
+
     const electrician = this.electricianRepository.create({
       name: data.name,
       phone: data.phone,
@@ -315,8 +320,9 @@ export class MobileAuthService {
       subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
       status: UserStatus.PENDING,
     });
+    (electrician as any).passwordHash = passwordHash;
 
-    const saved = await this.electricianRepository.save(electrician);
+    const saved = await this.electricianRepository.save(electrician) as Electrician;
     if (dealerId) {
       await this.tierService.syncDealerTier(dealerId);
     }
@@ -591,6 +597,10 @@ export class MobileAuthService {
 
   // ── Format User Profile ────────────────────────────────────────────────────
 
+  private getEffectivePoints(user: any) {
+    return Number(user?.walletBalance ?? user?.totalPoints ?? 0);
+  }
+
   formatUserProfile(user: any, role: string) {
     switch (role) {
       case 'electrician':
@@ -607,7 +617,7 @@ export class MobileAuthService {
           address: user.address,
           tier: user.tier,
           subCategory: user.subCategory,
-          totalPoints: user.totalPoints,
+          totalPoints: this.getEffectivePoints(user),
           totalScans: user.totalScans,
           walletBalance: user.walletBalance,
           totalRedemptions: user.totalRedemptions,
@@ -678,7 +688,7 @@ export class MobileAuthService {
           pincode: user.pincode,
           address: user.address,
           tier: user.tier,
-          totalPoints: user.totalPoints,
+          totalPoints: this.getEffectivePoints(user),
           walletBalance: user.walletBalance,
           totalRedemptions: user.totalRedemptions,
           status: user.status,
@@ -710,7 +720,7 @@ export class MobileAuthService {
           pincode: user.pincode,
           address: user.address,
           totalScans: user.totalScans,
-          totalPoints: user.totalPoints,
+          totalPoints: this.getEffectivePoints(user),
           walletBalance: user.walletBalance ?? 0,
           totalRedemptions: user.totalRedemptions ?? 0,
           tier: user.tier,

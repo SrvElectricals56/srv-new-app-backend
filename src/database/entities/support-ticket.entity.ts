@@ -54,6 +54,9 @@ export class SupportTicket {
   @Column({ type: 'text', nullable: true })
   response: string;
 
+  @Column({ type: 'json', nullable: true })
+  replies: { sender: string; senderName: string; message: string; timestamp: Date }[];
+
   @CreateDateColumn()
   createdAt: Date;
 

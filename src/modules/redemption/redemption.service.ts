@@ -50,6 +50,13 @@ export class RedemptionService {
       .getOne();
   }
 
+  private calculateElectricianTier(points: number) {
+    if (points >= 10000) return 'Diamond';
+    if (points >= 5001) return 'Platinum';
+    if (points >= 1001) return 'Gold';
+    return 'Silver';
+  }
+
   async findAll(
     page: number = 1,
     limit: number = 20,
@@ -143,10 +150,21 @@ export class RedemptionService {
         const balanceBefore = Number((user as any).walletBalance ?? 0);
         const refundPoints = Number(redemption.points ?? 0);
         const balanceAfter = balanceBefore + refundPoints;
+        const updateData: Record<string, any> = {
+          walletBalance: balanceAfter,
+        };
+
+        if (redemption.role !== UserRole.DEALER) {
+          const totalPointsAfter = balanceAfter;
+          updateData.totalPoints = totalPointsAfter;
+          if (redemption.role === UserRole.ELECTRICIAN) {
+            updateData.tier = this.calculateElectricianTier(totalPointsAfter);
+          }
+        }
 
         await this.getUserRepositoryByRole(redemption.role, manager).update(
           redemption.userId,
-          { walletBalance: balanceAfter } as any,
+          updateData as any,
         );
 
         await manager.getRepository(Wallet).save(
