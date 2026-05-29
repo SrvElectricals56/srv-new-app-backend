@@ -116,7 +116,7 @@ export class FinanceController {
   @ApiResponse({ status: 200, description: 'Dealer bonus updated successfully' })
   updateDealerBonus(
     @Param('dealerId') dealerId: string,
-    @Body() body: { achievedTarget?: number; electricianCount?: number; bonusStatus?: string; month?: string; year?: number },
+    @Body() body: { bonusPoints?: number; electricianCount?: number; bonusStatus?: string },
   ) {
     return this.financeService.updateDealerBonus(dealerId, body);
   }

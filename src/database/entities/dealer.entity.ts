@@ -143,6 +143,9 @@ export class Dealer {
   @Column({ default: 'pending' })
   bonusStatus: string;
 
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'bonuspoints' })
+  bonusPoints: number;
+
   @OneToMany(() => Electrician, (electrician) => electrician.dealer)
   electricians: Electrician[];
 

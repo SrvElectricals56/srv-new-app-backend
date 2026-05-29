@@ -1011,66 +1011,71 @@ export class MobileService {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
 
-      const totalBonus = Math.max(
-        0,
-        ((dealer.achievedTarget ?? 0) as number) - ((dealer.monthlyTarget ?? 0) as number),
-      ) * 0.1;
-      const claimedSummary = await this.redemptionRepository
-        .createQueryBuilder('redemption')
-        .select(
-          `
-            COALESCE(SUM(CASE
-              WHEN redemption.status IN (:...activeStatuses) THEN redemption.amount
-              ELSE 0
-            END), 0)
-          `,
-          'claimedAmount',
-        )
-        .addSelect(
-          `
-            COALESCE(SUM(CASE
-              WHEN redemption.status = :pendingStatus THEN redemption.amount
-              ELSE 0
-            END), 0)
-          `,
-          'pendingAmount',
-        )
-        .where('redemption.userId = :userId', { userId })
-        .andWhere('redemption.role = :role', { role: UserRole.DEALER })
-        .andWhere('redemption.type IN (:...types)', {
-          types: ['dealer_bonus_bank_transfer', 'bonus_withdrawal'],
-        })
-        .setParameters({
-          activeStatuses: ['pending', 'approved'],
-          pendingStatus: 'pending',
-        })
-        .getRawOne();
-      const claimedAmount = Number(claimedSummary?.claimedAmount ?? 0);
-      const availableBonus = Math.max(0, totalBonus - claimedAmount);
+      const totalBonus = Number((dealer as any).bonusPoints ?? 0);
 
-      if (amount > availableBonus) {
+      if (amount > totalBonus) {
         throw new BadRequestException('Requested amount exceeds available dealer bonus');
       }
 
-      const redemption = this.redemptionRepository.create({
-        userId,
-        userName: dealer.name,
-        role: UserRole.DEALER,
-        type: 'dealer_bonus_bank_transfer',
-        points: amount,
-        amount,
-        status: 'pending' as any,
-        upiId: dealer.upiId,
-        bankAccount: dealer.bankAccount,
-        ifsc: dealer.ifsc,
-        accountHolderName: dealer.accountHolderName,
-      });
-      await this.redemptionRepository.save(redemption);
+      return this.dataSource.transaction(async (manager) => {
+        const dealerLock = await manager.getRepository(Dealer)
+          .createQueryBuilder('dealer')
+          .setLock('pessimistic_write')
+          .where('dealer.id = :id', { id: userId })
+          .getOne();
+        if (!dealerLock) throw new NotFoundException('Dealer not found');
 
-      return {
-        message: 'Bank transfer request submitted successfully',
-        redemptionId: redemption.id,
-      };
+        const currentBonusPoints = Number((dealerLock as any).bonusPoints ?? 0);
+        if (currentBonusPoints < amount) {
+          throw new BadRequestException('Insufficient bonus points');
+        }
+
+        const newBonusPoints = currentBonusPoints - amount;
+
+        const redemption = await manager.getRepository(Redemption).save(
+          manager.getRepository(Redemption).create({
+            userId,
+            userName: dealer.name,
+            role: UserRole.DEALER,
+            type: 'dealer_bonus_bank_transfer',
+            points: amount,
+            amount,
+            status: 'pending' as any,
+            upiId: dealer.upiId,
+            bankAccount: dealer.bankAccount,
+            ifsc: dealer.ifsc,
+            accountHolderName: dealer.accountHolderName,
+          }),
+        );
+
+        await manager.getRepository(Dealer).update(userId, {
+          bonusPoints: newBonusPoints,
+        });
+
+        const walletTransaction = await manager.getRepository(Wallet).save(
+          manager.getRepository(Wallet).create({
+            userId,
+            userRole: UserRole.DEALER,
+            type: TransactionType.DEBIT,
+            source: TransactionSource.REDEMPTION,
+            amount,
+            balanceBefore: currentBonusPoints,
+            balanceAfter: newBonusPoints,
+            description: 'Dealer bonus withdrawal request',
+            referenceId: redemption.id,
+            referenceType: 'redemption',
+          }),
+        );
+
+        await manager.getRepository(Redemption).update(redemption.id, {
+          transactionId: walletTransaction.id,
+        });
+
+        return {
+          message: 'Bank transfer request submitted successfully',
+          redemptionId: redemption.id,
+        };
+      });
     }
 
     return this.dataSource.transaction(async (manager) => {
@@ -1356,48 +1361,13 @@ export class MobileService {
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new NotFoundException('Dealer not found');
 
-    const totalBonus =
-      Math.max(0, ((dealer.achievedTarget ?? 0) as number) - ((dealer.monthlyTarget ?? 0) as number)) * 0.1;
-    const claimedSummary = await this.redemptionRepository
-      .createQueryBuilder('redemption')
-      .select(
-        `
-          COALESCE(SUM(CASE
-            WHEN redemption.status IN (:...activeStatuses) THEN redemption.amount
-            ELSE 0
-          END), 0)
-        `,
-        'claimedAmount',
-      )
-      .addSelect(
-        `
-          COALESCE(SUM(CASE
-            WHEN redemption.status = :pendingStatus THEN redemption.amount
-            ELSE 0
-          END), 0)
-        `,
-        'pendingAmount',
-      )
-      .where('redemption.userId = :dealerId', { dealerId })
-      .andWhere('redemption.role = :role', { role: UserRole.DEALER })
-      .andWhere('redemption.type IN (:...types)', {
-        types: ['dealer_bonus_bank_transfer', 'bonus_withdrawal'],
-      })
-      .setParameters({
-        activeStatuses: ['pending', 'approved'],
-        pendingStatus: 'pending',
-      })
-      .getRawOne();
-    const claimedAmount = Number(claimedSummary?.claimedAmount ?? 0);
-    const pendingWithdrawals = Number(claimedSummary?.pendingAmount ?? 0);
-    const availableBonus = Math.max(0, totalBonus - claimedAmount);
+    const totalBonus = Number((dealer as any).bonusPoints ?? 0);
 
     return {
-      availableBonus,
+      availableBonus: totalBonus,
       totalBonus,
-      pendingWithdrawals,
-      achievedTarget: dealer.achievedTarget ?? 0,
-      monthlyTarget: dealer.monthlyTarget ?? 0,
+      pendingWithdrawals: 0,
+      bonusPoints: totalBonus,
       bonusStatus: (dealer as any).bonusStatus ?? 'pending',
     };
   }

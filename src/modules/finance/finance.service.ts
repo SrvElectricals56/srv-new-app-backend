@@ -125,19 +125,22 @@ export class FinanceService {
 
   async getDealerBonus() {
     const dealers = await this.dealerRepository.find({
-      select: ['id', 'name', 'phone', 'walletBalance', 'monthlyTarget', 'achievedTarget', 'electricianCount', 'bonusStatus'],
+      select: ['id', 'name', 'phone', 'walletBalance', 'electricianCount', 'bonusPoints', 'bonusStatus'],
     });
 
     const bonusData = dealers.map(dealer => ({
-      ...dealer,
-      bonusEligible: (dealer.achievedTarget || 0) >= (dealer.monthlyTarget || 0),
-      bonusAmount: Math.max(0, (dealer.achievedTarget || 0) - (dealer.monthlyTarget || 0)) * 0.1,
+      id: dealer.id,
+      name: dealer.name,
+      phone: dealer.phone,
+      walletBalance: dealer.walletBalance,
+      electricianCount: dealer.electricianCount,
+      bonusPoints: Number(dealer.bonusPoints ?? 0),
       bonusStatus: dealer.bonusStatus || 'pending',
     }));
 
     return {
       dealers: bonusData,
-      totalBonusAmount: bonusData.reduce((sum, d) => sum + d.bonusAmount, 0),
+      totalBonusAmount: bonusData.reduce((sum, d) => sum + d.bonusPoints, 0),
     };
   }
 
@@ -413,42 +416,48 @@ export class FinanceService {
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new Error('Dealer not found');
 
-    const bonusAmount = Math.max(0, (dealer.achievedTarget || 0) - (dealer.monthlyTarget || 0)) * 0.1;
+    const bonusPoints = Number(dealer.bonusPoints ?? 0);
 
-    if (bonusAmount > 0) {
-      const transaction = this.walletRepository.create({
-        userId: dealerId,
-        userRole: UserRole.DEALER,
-        type: TransactionType.CREDIT,
-        source: TransactionSource.BONUS,
-        amount: bonusAmount,
-        balanceBefore: dealer.walletBalance || 0,
-        balanceAfter: (dealer.walletBalance || 0) + bonusAmount,
-        description: `Monthly bonus payment`,
-        referenceId: adminId,
-        referenceType: 'bonus_payment',
-      });
-      await this.walletRepository.save(transaction);
+    if (bonusPoints > 0) {
+      const currentBalance = dealer.walletBalance || 0;
+      const newBalance = currentBalance + bonusPoints;
+
+      await this.walletRepository.save(
+        this.walletRepository.create({
+          userId: dealerId,
+          userRole: UserRole.DEALER,
+          type: TransactionType.CREDIT,
+          source: TransactionSource.BONUS,
+          amount: bonusPoints,
+          balanceBefore: currentBalance,
+          balanceAfter: newBalance,
+          description: 'Dealer bonus payment',
+          referenceId: adminId,
+          referenceType: 'bonus_payment',
+        }),
+      );
+
       await this.dealerRepository.update(dealerId, {
-        walletBalance: (dealer.walletBalance || 0) + bonusAmount,
+        walletBalance: newBalance,
+        bonusPoints: 0,
         bonusStatus: 'paid',
       });
     } else {
       await this.dealerRepository.update(dealerId, { bonusStatus: 'paid' });
     }
 
-    return { message: 'Dealer bonus marked as paid', dealerId, bonusAmount };
+    return { message: 'Dealer bonus marked as paid', dealerId, bonusAmount: bonusPoints };
   }
 
   async updateDealerBonus(
     dealerId: string,
-    data: { achievedTarget?: number; electricianCount?: number; bonusStatus?: string; month?: string; year?: number },
+    data: { bonusPoints?: number; electricianCount?: number; bonusStatus?: string },
   ) {
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new Error('Dealer not found');
 
     const updatePayload: Partial<typeof dealer> = {};
-    if (data.achievedTarget !== undefined) updatePayload.achievedTarget = data.achievedTarget;
+    if (data.bonusPoints !== undefined) updatePayload.bonusPoints = data.bonusPoints;
     if (data.electricianCount !== undefined) updatePayload.electricianCount = data.electricianCount;
     if (data.bonusStatus !== undefined) (updatePayload as any).bonusStatus = data.bonusStatus;
 
@@ -458,8 +467,12 @@ export class FinanceService {
     return {
       message: 'Dealer bonus updated successfully',
       dealer: {
-        ...updated,
-        bonusAmount: Math.max(0, ((updated?.achievedTarget || 0) as number) - ((updated?.monthlyTarget || 0) as number)) * 0.1,
+        id: updated?.id,
+        name: updated?.name,
+        phone: updated?.phone,
+        walletBalance: updated?.walletBalance,
+        electricianCount: updated?.electricianCount,
+        bonusPoints: Number((updated as any)?.bonusPoints ?? 0),
         bonusStatus: (updated as any)?.bonusStatus || 'pending',
       },
     };

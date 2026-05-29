@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -80,14 +81,26 @@ export class RedemptionService {
       throw new NotFoundException('User not found for this redemption');
     }
 
-    const balanceBefore = Number((user as any).walletBalance ?? 0);
+    const isDealerBonus =
+      redemption.role === UserRole.DEALER &&
+      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
+
+    const balanceBefore = Number(
+      isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
+    );
     const refundPoints = Number(redemption.points ?? 0);
     const balanceAfter = balanceBefore + refundPoints;
 
-    await this.getUserRepositoryByRole(redemption.role, manager).update(
-      redemption.userId,
-      this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
-    );
+    if (isDealerBonus) {
+      await manager.getRepository(Dealer).update(redemption.userId, {
+        bonusPoints: balanceAfter,
+      });
+    } else {
+      await this.getUserRepositoryByRole(redemption.role, manager).update(
+        redemption.userId,
+        this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+      );
+    }
 
     await manager.getRepository(Wallet).save(
       manager.getRepository(Wallet).create({
@@ -117,19 +130,35 @@ export class RedemptionService {
       throw new NotFoundException('User not found for this redemption');
     }
 
-    const balanceBefore = Number((user as any).walletBalance ?? 0);
+    const isDealerBonus =
+      redemption.role === UserRole.DEALER &&
+      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
+
+    const balanceBefore = Number(
+      isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
+    );
     const lockedPoints = Number(redemption.points ?? 0);
 
     if (balanceBefore < lockedPoints) {
-      throw new BadRequestException('User no longer has enough wallet balance to re-activate this request');
+      throw new BadRequestException(
+        isDealerBonus
+          ? 'User no longer has enough bonus points to re-activate this request'
+          : 'User no longer has enough wallet balance to re-activate this request',
+      );
     }
 
     const balanceAfter = balanceBefore - lockedPoints;
 
-    await this.getUserRepositoryByRole(redemption.role, manager).update(
-      redemption.userId,
-      this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
-    );
+    if (isDealerBonus) {
+      await manager.getRepository(Dealer).update(redemption.userId, {
+        bonusPoints: balanceAfter,
+      });
+    } else {
+      await this.getUserRepositoryByRole(redemption.role, manager).update(
+        redemption.userId,
+        this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+      );
+    }
 
     await manager.getRepository(Wallet).save(
       manager.getRepository(Wallet).create({
@@ -250,6 +279,14 @@ export class RedemptionService {
 
       await this.syncWalletForStatusChange(redemption, nextStatus, reason, manager);
 
+      if (
+        redemption.status !== RedemptionStatus.APPROVED &&
+        nextStatus === RedemptionStatus.APPROVED &&
+        redemption.role === UserRole.ELECTRICIAN
+      ) {
+        await this.creditDealerCommission(redemption, manager);
+      }
+
       await manager.getRepository(Redemption).update(id, {
         status: nextStatus,
         rejectionReason: nextStatus === RedemptionStatus.REJECTED ? reason : null,
@@ -267,6 +304,52 @@ export class RedemptionService {
 
   async reject(id: string, rejectionReason: string, adminId: string) {
     return this.updateStatus(id, RedemptionStatus.REJECTED, adminId, rejectionReason);
+  }
+
+  private async creditDealerCommission(redemption: Redemption, manager: EntityManager) {
+    const electrician = await manager.getRepository(Electrician).findOne({
+      where: { id: redemption.userId },
+    });
+    if (!electrician || !electrician.dealerId) return;
+
+    const dealer = await manager.getRepository(Dealer)
+      .createQueryBuilder('dealer')
+      .setLock('pessimistic_write')
+      .where('dealer.id = :dealerId', { dealerId: electrician.dealerId })
+      .getOne();
+    if (!dealer) return;
+
+    const commission = Math.round(Number(redemption.points) * 0.05);
+    if (commission <= 0) return;
+
+    const balanceBefore = Number(dealer.walletBalance ?? 0);
+    const balanceAfter = balanceBefore + commission;
+
+    await manager.getRepository(Dealer).update(electrician.dealerId, {
+      walletBalance: balanceAfter,
+    });
+
+    await manager.getRepository(Dealer).increment(
+      { id: electrician.dealerId },
+      'bonusPoints',
+      commission,
+    );
+
+    await manager.getRepository(Wallet).save(
+      manager.getRepository(Wallet).create({
+        id: crypto.randomUUID(),
+        userId: electrician.dealerId,
+        userRole: UserRole.DEALER,
+        type: TransactionType.CREDIT,
+        source: TransactionSource.COMMISSION,
+        amount: commission,
+        balanceBefore,
+        balanceAfter,
+        description: `5% commission on electrician withdrawal - ${electrician.name}`,
+        referenceId: redemption.id,
+        referenceType: 'redemption',
+      }),
+    );
   }
 
   async remove(id: string) {
