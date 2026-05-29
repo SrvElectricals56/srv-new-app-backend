@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { CreateElectricianDto } from './dto/create-electrician.dto';
 import { UpdateElectricianDto } from './dto/update-electrician.dto';
 import { Electrician } from '../../database/entities/electrician.entity';
@@ -23,6 +24,36 @@ export class ElectricianService {
     private walletRepository: Repository<Wallet>,
     private readonly tierService: TierService,
   ) {}
+
+  private async hashPassword(password?: string) {
+    const trimmed = password?.trim();
+    if (!trimmed) return null;
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(trimmed, salt);
+  }
+
+  private serialize(electrician: Electrician) {
+    const {
+      passwordHash,
+      dealer,
+      ...rest
+    } = electrician as Electrician & { dealer?: Dealer | null };
+    return {
+      ...rest,
+      ...(dealer
+        ? {
+            dealer: (() => {
+              const { passwordHash: dealerPasswordHash, ...dealerRest } = dealer;
+              return {
+                ...dealerRest,
+                hasPassword: Boolean(dealerPasswordHash),
+              };
+            })(),
+          }
+        : {}),
+      hasPassword: Boolean(passwordHash),
+    };
+  }
 
   private normalizeElectricianCode(code?: string | null): string | null {
     const trimmed = code?.trim();
@@ -204,10 +235,10 @@ export class ElectricianService {
 
     const [rawData, total] = await queryBuilder.getManyAndCount();
 
-    const data = rawData.map(e => ({
+    const data = rawData.map(e => this.serialize({
       ...e,
       dealerName: (e as any).dealer?.name ?? null,
-    }));
+    } as Electrician & { dealerName?: string | null }));
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -222,7 +253,10 @@ export class ElectricianService {
       throw new NotFoundException('Electrician not found');
     }
 
-    return electrician;
+    return this.serialize({
+      ...electrician,
+      dealerName: (electrician as any).dealer?.name ?? null,
+    } as Electrician & { dealerName?: string | null });
   }
 
   async update(id: string, updateElectricianDto: UpdateElectricianDto) {
@@ -237,7 +271,9 @@ export class ElectricianService {
       }
     }
 
+    const passwordHash = await this.hashPassword(updateElectricianDto.password);
     const data: any = { ...updateElectricianDto };
+    delete data.password;
     if (data.dealerId !== undefined && (!data.dealerId || data.dealerId.trim() === '')) {
       data.dealerId = null;
     }
@@ -271,8 +307,15 @@ export class ElectricianService {
       data.tier = this.tierService.calculateElectricianTier(data.totalPoints);
     }
 
+    if (passwordHash) {
+      data.passwordHash = passwordHash;
+    }
+
     const oldDealerId = electrician.dealerId;
     await this.electricianRepository.update(id, data);
+    if (passwordHash) {
+      await this.electricianRepository.increment({ id }, 'tokenVersion', 1);
+    }
 
     // Sync dealer tier if dealer assignment changed
     const newDealerId = data.dealerId !== undefined ? data.dealerId : oldDealerId;
@@ -292,7 +335,10 @@ export class ElectricianService {
   }
 
   async remove(id: string) {
-    const electrician = await this.findOne(id);
+    const electrician = await this.electricianRepository.findOne({ where: { id } });
+    if (!electrician) {
+      throw new NotFoundException('Electrician not found');
+    }
     const dealerId = electrician.dealerId;
 
     await this.electricianRepository.remove(electrician);

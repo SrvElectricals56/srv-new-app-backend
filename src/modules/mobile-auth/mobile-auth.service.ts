@@ -713,6 +713,8 @@ export class MobileAuthService {
           tier: user.tier,
           electricianCount: user.electricianCount,
           walletBalance: user.walletBalance,
+          bonusPoints: Number((user as any).bonusPoints ?? 0),
+          bonusStatus: (user as any).bonusStatus ?? 'pending',
           status: user.status,
           approvalRejectionReason: user.rejectionReason ?? null,
           kycStatus: user.kycStatus,

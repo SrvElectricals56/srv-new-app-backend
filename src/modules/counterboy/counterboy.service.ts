@@ -47,11 +47,13 @@ export class CounterBoyService {
   }
 
   private serialize(counterboy: CounterBoy, dealer?: Partial<Dealer> | null) {
+    const { passwordHash, ...rest } = counterboy;
     return {
-      ...counterboy,
+      ...rest,
       dealerName: dealer?.name ?? null,
       dealerPhone: dealer?.phone ?? null,
       dealerCode: dealer?.dealerCode ?? null,
+      hasPassword: Boolean(passwordHash),
     };
   }
 

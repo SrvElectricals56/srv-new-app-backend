@@ -41,6 +41,20 @@ export class AppUserService {
     return bcrypt.hash(trimmed, salt);
   }
 
+  private serialize(user: AppUser) {
+    const { passwordHash, ...rest } = user;
+    return {
+      ...rest,
+      hasPassword: Boolean(passwordHash),
+    };
+  }
+
+  private async findOnePlain(id: string) {
+    const user = await this.appUserRepository.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
   async create(data: Partial<AppUser>) {
     if (!data.name?.trim() || !data.phone?.trim()) {
       throw new BadRequestException('Name and phone are required');
@@ -202,23 +216,22 @@ export class AppUserService {
       .take(limit)
       .getManyAndCount();
 
-    return { data, total, page, limit };
+    return { data: data.map((user) => this.serialize(user)), total, page, limit };
   }
 
   async findOne(id: string) {
-    const user = await this.appUserRepository.findOne({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
-    return user;
+    const user = await this.findOnePlain(id);
+    return this.serialize(user);
   }
 
   async updateStatus(id: string, status: UserStatus) {
-    await this.findOne(id);
+    await this.findOnePlain(id);
     await this.appUserRepository.update(id, { status });
     return this.findOne(id);
   }
 
   async update(id: string, data: Partial<AppUser>) {
-    await this.findOne(id);
+    await this.findOnePlain(id);
     const passwordHash = await this.hashPassword((data as Partial<AppUser> & { password?: string }).password);
     const payload = { ...data } as Partial<AppUser> & { password?: string };
     const requestedCode = this.normalizeRequestedCode(payload.userCode);
@@ -242,7 +255,7 @@ export class AppUserService {
   }
 
   async remove(id: string) {
-    const user = await this.findOne(id);
+    const user = await this.findOnePlain(id);
     await this.appUserRepository.remove(user);
     return { deleted: true };
   }

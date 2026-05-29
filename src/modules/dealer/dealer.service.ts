@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { CreateDealerDto } from './dto/create-dealer.dto';
 import { UpdateDealerDto } from './dto/update-dealer.dto';
 import { Dealer } from '../../database/entities/dealer.entity';
@@ -20,6 +21,32 @@ export class DealerService {
     private walletRepository: Repository<Wallet>,
     private readonly tierService: TierService,
   ) {}
+
+  private async hashPassword(password?: string) {
+    const trimmed = password?.trim();
+    if (!trimmed) return null;
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(trimmed, salt);
+  }
+
+  private serialize(dealer: Dealer) {
+    const { passwordHash, electricians, ...rest } = dealer as Dealer & { electricians?: Electrician[] };
+    return {
+      ...rest,
+      ...(electricians
+        ? {
+            electricians: electricians.map((electrician) => {
+              const { passwordHash: electricianPasswordHash, ...electricianRest } = electrician;
+              return {
+                ...electricianRest,
+                hasPassword: Boolean(electricianPasswordHash),
+              };
+            }),
+          }
+        : {}),
+      hasPassword: Boolean(passwordHash),
+    };
+  }
 
   async create(createDealerDto: CreateDealerDto) {
     const existingDealer = await this.dealerRepository.findOne({
@@ -98,7 +125,13 @@ export class DealerService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      data: data.map((dealer) => this.serialize(dealer)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async findOne(id: string) {
@@ -111,7 +144,7 @@ export class DealerService {
       throw new NotFoundException('Dealer not found');
     }
 
-    return dealer;
+    return this.serialize(dealer);
   }
 
   async update(id: string, updateDealerDto: UpdateDealerDto) {
@@ -127,9 +160,21 @@ export class DealerService {
     }
 
     // Strip tier from update payload — tier is always auto-calculated
-    const { tier: _ignoredTier, electricianCount: _ignoredCount, ...safeData } = updateDealerDto as any;
+    const passwordHash = await this.hashPassword(updateDealerDto.password);
+    const {
+      tier: _ignoredTier,
+      electricianCount: _ignoredCount,
+      password: _ignoredPassword,
+      ...safeData
+    } = updateDealerDto as any;
 
-    await this.dealerRepository.update(id, safeData);
+    if (passwordHash) {
+      safeData.passwordHash = passwordHash;
+      await this.dealerRepository.update(id, safeData);
+      await this.dealerRepository.increment({ id }, 'tokenVersion', 1);
+    } else {
+      await this.dealerRepository.update(id, safeData);
+    }
 
     // Re-sync tier from actual electrician count
     await this.tierService.syncDealerTier(id);
@@ -148,7 +193,10 @@ export class DealerService {
   }
 
   async remove(id: string) {
-    const dealer = await this.findOne(id);
+    const dealer = await this.dealerRepository.findOne({ where: { id } });
+    if (!dealer) {
+      throw new NotFoundException('Dealer not found');
+    }
     await this.dealerRepository.remove(dealer);
     return { message: 'Dealer deleted successfully' };
   }
