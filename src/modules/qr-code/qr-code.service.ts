@@ -11,6 +11,10 @@ import { createHash, randomBytes } from 'crypto';
 import { GenerateQrCodeDto } from './dto/generate-qr-code.dto';
 import { QrCode } from '../../database/entities/qr-code.entity';
 import { Product } from '../../database/entities/product.entity';
+import { Electrician } from '../../database/entities/electrician.entity';
+import { Dealer } from '../../database/entities/dealer.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 
 @Injectable()
 export class QrCodeService implements OnModuleInit {
@@ -22,6 +26,14 @@ export class QrCodeService implements OnModuleInit {
     private qrCodeRepository: Repository<QrCode>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
+    @InjectRepository(Electrician)
+    private electricianRepository: Repository<Electrician>,
+    @InjectRepository(Dealer)
+    private dealerRepository: Repository<Dealer>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterBoyRepository: Repository<CounterBoy>,
   ) {}
 
   async onModuleInit() {
@@ -112,6 +124,68 @@ export class QrCodeService implements OnModuleInit {
     return { total, active, used };
   }
 
+  async findBatches(page: number = 1, limit: number = 20, search?: string) {
+    await this.ensureLegacyColumns();
+
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+    const offset = (safePage - 1) * safeLimit;
+    const whereSql = search
+      ? `WHERE (
+          q."productName" ILIKE $1
+          OR q."batchId" ILIKE $1
+          OR CAST(q."batchNo" AS text) ILIKE $1
+        )`
+      : '';
+    const params = search ? [`%${search}%`] : [];
+    const limitParam = params.length + 1;
+    const offsetParam = params.length + 2;
+
+    const data = await this.qrCodeRepository.query(
+      `
+        SELECT
+          COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "id",
+          COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchId",
+          MAX(q."batchNo") AS "batchNo",
+          MAX(q."productId") AS "productId",
+          MAX(q."productName") AS "productName",
+          MIN(q."createdAt") AS "generatedDate",
+          COALESCE(MAX(q."rewardPoints"), 0) AS "points",
+          COUNT(*)::int AS "qty",
+          SUM(CASE WHEN q."isScanned" = true THEN 1 ELSE 0 END)::int AS "usedQty",
+          SUM(CASE WHEN q."isScanned" = false THEN 1 ELSE 0 END)::int AS "activeQty"
+        FROM "qr_codes" q
+        ${whereSql}
+        GROUP BY COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text)
+        ORDER BY MAX(q."batchNo") DESC NULLS LAST, MIN(q."createdAt") DESC
+        LIMIT $${limitParam} OFFSET $${offsetParam}
+      `,
+      [...params, safeLimit, offset],
+    );
+
+    const countRows = await this.qrCodeRepository.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM (
+          SELECT COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchKey"
+          FROM "qr_codes" q
+          ${whereSql}
+          GROUP BY COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text)
+        ) batches
+      `,
+      params,
+    );
+    const total = Number(countRows?.[0]?.total ?? 0);
+
+    return {
+      data,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
+    };
+  }
+
   async findAll(
     page: number = 1,
     limit: number = 20,
@@ -163,9 +237,36 @@ export class QrCodeService implements OnModuleInit {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
+    const scannedUserIds = data
+      .filter((qr) => qr.lastScannedBy)
+      .map((qr) => qr.lastScannedBy);
+    const uniqueIds = [...new Set(scannedUserIds)];
+
+    const [electricians, dealers, appUsers, counterBoys] = await Promise.all([
+      uniqueIds.length
+        ? this.electricianRepository.find({ where: uniqueIds.map((id) => ({ id })) })
+        : Promise.resolve([]),
+      uniqueIds.length
+        ? this.dealerRepository.find({ where: uniqueIds.map((id) => ({ id })) })
+        : Promise.resolve([]),
+      uniqueIds.length
+        ? this.appUserRepository.find({ where: uniqueIds.map((id) => ({ id })) })
+        : Promise.resolve([]),
+      uniqueIds.length
+        ? this.counterBoyRepository.find({ where: uniqueIds.map((id) => ({ id })) })
+        : Promise.resolve([]),
+    ]);
+
+    const userMap = new Map<string, { phone: string; code: string }>();
+    for (const u of electricians) userMap.set(u.id, { phone: u.phone, code: u.electricianCode });
+    for (const u of dealers) userMap.set(u.id, { phone: u.phone, code: u.dealerCode });
+    for (const u of appUsers) userMap.set(u.id, { phone: u.phone, code: u.userCode });
+    for (const u of counterBoys) userMap.set(u.id, { phone: u.phone, code: u.counterboyCode });
+
     const enriched = data.map((qr) => {
       const productPoints = qr.product?.points ?? 0;
       const effectivePoints = qr.rewardPoints ?? productPoints;
+      const user = qr.lastScannedBy ? userMap.get(qr.lastScannedBy) : undefined;
 
       return {
         id: qr.id,
@@ -177,6 +278,8 @@ export class QrCodeService implements OnModuleInit {
         scanCount: qr.scanCount,
         lastScannedBy: qr.lastScannedBy,
         lastScannedAt: qr.lastScannedAt,
+        lastScannedPhone: user?.phone ?? null,
+        lastScannedCode: user?.code ?? null,
         batchId: qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : null),
         batchNo: qr.batchNo ?? null,
         sequenceNo: qr.sequenceNo ?? null,
@@ -221,6 +324,58 @@ export class QrCodeService implements OnModuleInit {
     return qrCode;
   }
 
+  async updateBatch(
+    batchId: string,
+    body: { productId?: string; rewardPoints?: number },
+  ) {
+    await this.ensureLegacyColumns();
+
+    const updates: Partial<QrCode> = {};
+
+    if (body.productId) {
+      const product = await this.productRepository.findOne({
+        where: { id: body.productId },
+      });
+      if (!product) {
+        throw new NotFoundException('Product not found');
+      }
+      updates.productId = product.id;
+      updates.productName = product.name;
+    }
+
+    if (body.rewardPoints !== undefined) {
+      const points = Number(body.rewardPoints);
+      if (!Number.isFinite(points) || points < 0) {
+        throw new BadRequestException(
+          'rewardPoints must be a valid non-negative number',
+        );
+      }
+      updates.rewardPoints = points;
+    }
+
+    if (!Object.keys(updates).length) {
+      throw new BadRequestException('No batch fields provided to update');
+    }
+
+    const result = await this.qrCodeRepository
+      .createQueryBuilder()
+      .update(QrCode)
+      .set(updates)
+      .where('"batchId" = :batchId OR CAST("batchNo" AS text) = :batchId', {
+        batchId,
+      })
+      .execute();
+
+    if (!result.affected) {
+      throw new NotFoundException(`QR batch "${batchId}" not found`);
+    }
+
+    return {
+      message: 'QR batch updated successfully',
+      updated: result.affected,
+    };
+  }
+
   async remove(id: string) {
     await this.ensureLegacyColumns();
 
@@ -233,6 +388,28 @@ export class QrCodeService implements OnModuleInit {
     }
     await this.qrCodeRepository.remove(qrCode);
     return { message: 'QR code deleted successfully' };
+  }
+
+  async removeBatch(batchId: string) {
+    await this.ensureLegacyColumns();
+
+    const result = await this.qrCodeRepository
+      .createQueryBuilder()
+      .delete()
+      .from(QrCode)
+      .where('"batchId" = :batchId OR CAST("batchNo" AS text) = :batchId', {
+        batchId,
+      })
+      .execute();
+
+    if (!result.affected) {
+      throw new NotFoundException(`QR batch "${batchId}" not found`);
+    }
+
+    return {
+      message: 'QR batch deleted successfully',
+      deleted: result.affected,
+    };
   }
 
   async removeAll(productId?: string) {

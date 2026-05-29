@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Delete,
+  Patch,
   UseGuards,
   Query,
 } from '@nestjs/common';
@@ -36,6 +37,21 @@ export class QrCodeController {
   @ApiResponse({ status: 200, description: 'QR stats' })
   getStats() {
     return this.qrCodeService.getStats();
+  }
+
+  @Get('hub')
+  @ApiOperation({ summary: 'Get QR batches for QR Hub (paginated)' })
+  @ApiResponse({ status: 200, description: 'List of QR batches' })
+  findBatches(
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+  ) {
+    return this.qrCodeService.findBatches(
+      parseInt(page),
+      parseInt(limit),
+      search,
+    );
   }
 
   @Get()
@@ -77,6 +93,25 @@ export class QrCodeController {
   @ApiResponse({ status: 200, description: 'QR codes deleted' })
   removeAll(@Query('productId') productId?: string) {
     return this.qrCodeService.removeAll(productId);
+  }
+
+  @Patch('batches/:batchId')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Update product or points for a QR batch' })
+  @ApiResponse({ status: 200, description: 'QR batch updated' })
+  updateBatch(
+    @Param('batchId') batchId: string,
+    @Body() body: { productId?: string; rewardPoints?: number },
+  ) {
+    return this.qrCodeService.updateBatch(batchId, body);
+  }
+
+  @Delete('batches/:batchId')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete a full QR batch' })
+  @ApiResponse({ status: 200, description: 'QR batch deleted' })
+  removeBatch(@Param('batchId') batchId: string) {
+    return this.qrCodeService.removeBatch(batchId);
   }
 
   @Get(':id')
