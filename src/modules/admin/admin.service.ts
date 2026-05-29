@@ -10,6 +10,7 @@ import { Admin } from '../../database/entities/admin.entity';
 @Injectable()
 export class AdminService {
   private prisma = new PrismaClient();
+  private adminSchemaEnsured = false;
 
   constructor(
     @InjectRepository(Admin)
@@ -17,6 +18,8 @@ export class AdminService {
   ) {}
 
   async create(createAdminDto: CreateAdminDto) {
+    await this.ensureAdminSessionColumns();
+
     console.log('=== CREATE ADMIN CALLED ===');
     console.log('Payload received:', JSON.stringify(createAdminDto, null, 2));
     
@@ -36,6 +39,8 @@ export class AdminService {
   }
 
   async findAll(page: number = 1, limit: number = 20, search?: string) {
+    await this.ensureAdminSessionColumns();
+
     const skip = (page - 1) * limit;
     const where = search
       ? [
@@ -62,6 +67,8 @@ export class AdminService {
   }
 
   async findOne(id: string) {
+    await this.ensureAdminSessionColumns();
+
     const admin = await this.adminRepository.findOne({
       where: { id },
       select: ['id', 'email', 'name', 'role', 'phone', 'isActive', 'lastLoginAt', 'createdAt'],
@@ -75,6 +82,8 @@ export class AdminService {
   }
 
   async update(id: string, updateAdminDto: UpdateAdminDto) {
+    await this.ensureAdminSessionColumns();
+
     console.log('=== UPDATE ADMIN CALLED ===');
     console.log('Admin ID:', id);
     console.log('Payload received:', JSON.stringify(updateAdminDto, null, 2));
@@ -98,6 +107,15 @@ export class AdminService {
       }
     }
 
+    const passwordChanged =
+      typeof updateAdminDto.password === 'string' &&
+      updateAdminDto.password.trim().length > 0;
+
+    if (passwordChanged) {
+      admin.tokenVersion = (admin.tokenVersion ?? 0) + 1;
+      admin.refreshToken = null;
+    }
+
     // Merge the updates into the entity
     Object.assign(admin, updateAdminDto);
 
@@ -110,6 +128,8 @@ export class AdminService {
   }
 
   async remove(id: string) {
+    await this.ensureAdminSessionColumns();
+
     const admin = await this.findOne(id);
     await this.adminRepository.remove(admin);
     return { message: 'Admin deleted successfully' };
@@ -117,6 +137,8 @@ export class AdminService {
 
   // Permission Management Methods
   async getPermissions(adminId: string) {
+    await this.ensureAdminSessionColumns();
+
     const admin = await this.adminRepository.findOne({ where: { id: adminId } });
     
     if (!admin) {
@@ -144,6 +166,8 @@ export class AdminService {
   }
 
   async updatePermissions(adminId: string, updatePermissionsDto: UpdatePermissionsDto) {
+    await this.ensureAdminSessionColumns();
+
     const admin = await this.adminRepository.findOne({ where: { id: adminId } });
     
     if (!admin) {
@@ -178,5 +202,21 @@ export class AdminService {
     }
 
     return this.getPermissions(adminId);
+  }
+
+  private async ensureAdminSessionColumns() {
+    if (this.adminSchemaEnsured) {
+      return;
+    }
+
+    await this.adminRepository.query(`
+      ALTER TABLE "admins"
+      ADD COLUMN IF NOT EXISTS "tokenVersion" integer NOT NULL DEFAULT 0
+    `);
+    await this.adminRepository.query(`
+      UPDATE "admins"
+      SET "tokenVersion" = COALESCE("tokenVersion", 0)
+    `);
+    this.adminSchemaEnsured = true;
   }
 }

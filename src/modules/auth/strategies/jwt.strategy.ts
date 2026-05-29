@@ -29,6 +29,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException();
     }
 
+    if ((admin.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)) {
+      throw new UnauthorizedException('Session expired');
+    }
+
     return {
       id: admin.id,
       email: admin.email,

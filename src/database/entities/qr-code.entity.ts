@@ -57,6 +57,9 @@ export class QrCode {
   @JoinColumn({ name: 'productId' })
   product: Product;
 
+  @Column({ nullable: true })
+  createdBy: string;
+
   @CreateDateColumn()
   createdAt: Date;
 

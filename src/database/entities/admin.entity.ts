@@ -43,6 +43,9 @@ export class Admin {
   @Column({ nullable: true })
   refreshToken: string;
 
+  @Column({ type: 'integer', default: 0 })
+  tokenVersion: number;
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -15,6 +15,7 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { Admin } from '../../database/entities/admin.entity';
 
 @Injectable()
 export class QrCodeService implements OnModuleInit {
@@ -34,13 +35,15 @@ export class QrCodeService implements OnModuleInit {
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(CounterBoy)
     private counterBoyRepository: Repository<CounterBoy>,
+    @InjectRepository(Admin)
+    private adminRepository: Repository<Admin>,
   ) {}
 
   async onModuleInit() {
     await this.ensureLegacyColumns();
   }
 
-  async generate(generateQrCodeDto: GenerateQrCodeDto) {
+  async generate(generateQrCodeDto: GenerateQrCodeDto, adminId?: string) {
     await this.ensureLegacyColumns();
 
     const { productId, quantity, rewardPoints } = generateQrCodeDto;
@@ -91,6 +94,7 @@ export class QrCodeService implements OnModuleInit {
         batchNo,
         sequenceNo,
         rewardPoints: frozenRewardPoints,
+        createdBy: adminId,
       });
     }
 
@@ -263,10 +267,22 @@ export class QrCodeService implements OnModuleInit {
     for (const u of appUsers) userMap.set(u.id, { phone: u.phone, code: u.userCode });
     for (const u of counterBoys) userMap.set(u.id, { phone: u.phone, code: u.counterboyCode });
 
+    const adminIds = data
+      .filter((qr) => qr.createdBy)
+      .map((qr) => qr.createdBy);
+    const uniqueAdminIds = [...new Set(adminIds)];
+    const admins = uniqueAdminIds.length
+      ? await this.adminRepository.find({ where: uniqueAdminIds.map((id) => ({ id })) })
+      : [];
+    const adminNameMap = new Map<string, string>();
+    for (const a of admins) adminNameMap.set(a.id, a.name);
+
     const enriched = data.map((qr) => {
       const productPoints = qr.product?.points ?? 0;
       const effectivePoints = qr.rewardPoints ?? productPoints;
       const user = qr.lastScannedBy ? userMap.get(qr.lastScannedBy) : undefined;
+
+      const adminName = qr.createdBy ? adminNameMap.get(qr.createdBy) : undefined;
 
       return {
         id: qr.id,
@@ -280,6 +296,7 @@ export class QrCodeService implements OnModuleInit {
         lastScannedAt: qr.lastScannedAt,
         lastScannedPhone: user?.phone ?? null,
         lastScannedCode: user?.code ?? null,
+        generatedBy: adminName ?? 'Admin',
         batchId: qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : null),
         batchNo: qr.batchNo ?? null,
         sequenceNo: qr.sequenceNo ?? null,
@@ -452,6 +469,11 @@ export class QrCodeService implements OnModuleInit {
       await this.qrCodeRepository.query(`
         UPDATE "qr_codes"
         SET "rewardPoints" = COALESCE("rewardPoints", 0)
+      `);
+
+      await this.qrCodeRepository.query(`
+        ALTER TABLE "qr_codes"
+        ADD COLUMN IF NOT EXISTS "createdBy" character varying
       `);
 
       this.schemaEnsured = true;

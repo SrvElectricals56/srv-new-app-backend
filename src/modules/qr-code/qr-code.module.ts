@@ -8,9 +8,10 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { Admin } from '../../database/entities/admin.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([QrCode, Product, Electrician, Dealer, AppUser, CounterBoy])],
+  imports: [TypeOrmModule.forFeature([QrCode, Product, Electrician, Dealer, AppUser, CounterBoy, Admin])],
   controllers: [QrCodeController],
   providers: [QrCodeService],
   exports: [QrCodeService],

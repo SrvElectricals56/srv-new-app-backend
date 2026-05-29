@@ -2,6 +2,8 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -11,7 +13,10 @@ import { Admin } from '../../database/entities/admin.entity';
 import { LoginDto } from './dto/login.dto';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
+  private authSchemaEnsured = false;
+
   constructor(
     @InjectRepository(Admin)
     private adminRepository: Repository<Admin>,
@@ -19,7 +24,13 @@ export class AuthService {
     private configService: ConfigService,
   ) {}
 
+  async onModuleInit() {
+    await this.ensureAuthSessionColumns();
+  }
+
   async validateUser(email: string, password: string): Promise<any> {
+    await this.ensureAuthSessionColumns();
+
     const admin = await this.adminRepository.findOne({ where: { email } });
 
     if (!admin) {
@@ -47,6 +58,7 @@ export class AuthService {
       sub: admin.id,
       email: admin.email,
       role: admin.role,
+      tokenVersion: admin.tokenVersion ?? 0,
     };
 
     const accessToken = this.jwtService.sign(payload);
@@ -74,6 +86,8 @@ export class AuthService {
   }
 
   async refreshToken(refreshToken: string) {
+    await this.ensureAuthSessionColumns();
+
     try {
       const payload = this.jwtService.verify(refreshToken, {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
@@ -91,6 +105,7 @@ export class AuthService {
         sub: admin.id,
         email: admin.email,
         role: admin.role,
+        tokenVersion: admin.tokenVersion ?? 0,
       };
 
       const accessToken = this.jwtService.sign(newPayload);
@@ -104,11 +119,15 @@ export class AuthService {
   }
 
   async logout(userId: string) {
+    await this.ensureAuthSessionColumns();
+
     await this.adminRepository.update(userId, { refreshToken: null });
     return { message: 'Logged out successfully' };
   }
 
   async getProfile(userId: string) {
+    await this.ensureAuthSessionColumns();
+
     const admin = await this.adminRepository.findOne({
       where: { id: userId },
       select: ['id', 'email', 'name', 'role', 'phone', 'isActive', 'lastLoginAt', 'createdAt'],
@@ -119,5 +138,29 @@ export class AuthService {
     }
 
     return admin;
+  }
+
+  private async ensureAuthSessionColumns() {
+    if (this.authSchemaEnsured) {
+      return;
+    }
+
+    try {
+      await this.adminRepository.query(`
+        ALTER TABLE "admins"
+        ADD COLUMN IF NOT EXISTS "tokenVersion" integer NOT NULL DEFAULT 0
+      `);
+      await this.adminRepository.query(`
+        UPDATE "admins"
+        SET "tokenVersion" = COALESCE("tokenVersion", 0)
+      `);
+      this.authSchemaEnsured = true;
+    } catch (error) {
+      this.logger.error(
+        'Unable to ensure admin auth session columns exist',
+        error as Error,
+      );
+      throw error;
+    }
   }
 }

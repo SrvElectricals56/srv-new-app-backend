@@ -15,6 +15,7 @@ import { GenerateQrCodeDto } from './dto/generate-qr-code.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AdminRole } from '../../common/enums';
 
 @ApiTags('QR Code Management')
@@ -28,8 +29,8 @@ export class QrCodeController {
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Generate QR codes for a product (up to 20,000)' })
   @ApiResponse({ status: 201, description: 'QR codes generated and saved to database' })
-  generate(@Body() generateQrCodeDto: GenerateQrCodeDto) {
-    return this.qrCodeService.generate(generateQrCodeDto);
+  generate(@Body() generateQrCodeDto: GenerateQrCodeDto, @CurrentUser('id') adminId: string) {
+    return this.qrCodeService.generate(generateQrCodeDto, adminId);
   }
 
   @Get('stats')
