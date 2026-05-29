@@ -19,14 +19,18 @@ async function bootstrap() {
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // CORS must be enabled BEFORE helmet
-  const corsOrigins = configService.get('CORS_ORIGIN')?.split(',') || ['http://localhost:3000'];
+  const corsOrigins = (configService.get<string>('CORS_ORIGIN') || 'http://localhost:3000')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const allowAllCors = corsOrigins.includes('*');
   app.enableCors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // Allow mobile apps (no origin) and listed origins
-      if (!origin || corsOrigins.includes(origin) || corsOrigins.includes('*')) {
+      // Allow mobile apps (no origin) and explicitly configured web origins only.
+      if (!origin || allowAllCors || corsOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(null, true); // Allow all in development; restrict in production
+        callback(new Error('Not allowed by CORS'));
       }
     },
     credentials: configService.get('CORS_CREDENTIALS') === 'true',

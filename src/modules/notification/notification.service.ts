@@ -13,9 +13,33 @@ export class NotificationService {
     private notificationRepository: Repository<Notification>,
   ) {}
 
+  private normalizeTargetRole(targetRole?: string | null) {
+    const normalized = String(targetRole ?? '').trim().toLowerCase();
+
+    if (!normalized || normalized === 'all users' || normalized === 'all' || normalized === 'specific user') {
+      return null;
+    }
+
+    const roleMap: Record<string, string> = {
+      electrician: 'electrician',
+      'only electricians': 'electrician',
+      dealer: 'dealer',
+      'only dealers': 'dealer',
+      user: 'user',
+      customer: 'user',
+      'only customers': 'user',
+      counterboy: 'counterboy',
+      counterboys: 'counterboy',
+      'only counterboys': 'counterboy',
+    };
+
+    return roleMap[normalized] ?? normalized;
+  }
+
   async create(createNotificationDto: CreateNotificationDto, adminId: string) {
     const notification = this.notificationRepository.create({
       ...createNotificationDto,
+      targetRole: this.normalizeTargetRole(createNotificationDto.targetRole),
       createdBy: adminId,
     });
     return this.notificationRepository.save(notification);
@@ -62,7 +86,13 @@ export class NotificationService {
   }
 
   async update(id: string, updateNotificationDto: UpdateNotificationDto) {
-    await this.notificationRepository.update(id, updateNotificationDto);
+    await this.notificationRepository.update(id, {
+      ...updateNotificationDto,
+      targetRole:
+        updateNotificationDto.targetRole === undefined
+          ? undefined
+          : this.normalizeTargetRole(updateNotificationDto.targetRole),
+    });
     return this.findOne(id);
   }
 

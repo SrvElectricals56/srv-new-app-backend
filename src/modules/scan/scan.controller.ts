@@ -8,16 +8,19 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ScanService } from './scan.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { UserRole } from '../../common/enums';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { AdminRole, UserRole } from '../../common/enums';
 
 @ApiTags('Scan Management')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('scans')
 export class ScanController {
   constructor(private readonly scanService: ScanService) {}
 
   @Get()
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get all scans' })
   @ApiResponse({ status: 200, description: 'List of scans' })
   findAll(
@@ -35,6 +38,7 @@ export class ScanController {
   }
 
   @Get('stats')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get scan statistics' })
   @ApiResponse({ status: 200, description: 'Scan statistics' })
   getStats() {
@@ -42,6 +46,7 @@ export class ScanController {
   }
 
   @Get(':id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get scan by ID' })
   @ApiResponse({ status: 200, description: 'Scan details' })
   findOne(@Param('id') id: string) {

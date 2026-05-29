@@ -56,9 +56,11 @@ export class MobileController {
   // ── Notifications ──────────────────────────────────────────────────────────
 
   @Get('notifications')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get notifications for app' })
-  getNotifications(@Query('role') role?: string, @Query('userId') userId?: string) {
-    return this.mobileService.getNotifications(userId, role);
+  getNotifications(@Request() req: any) {
+    return this.mobileService.getNotifications(req.user.id, req.user.role);
   }
 
   @Delete('notifications/:id')

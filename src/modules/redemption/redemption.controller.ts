@@ -11,17 +11,20 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { RedemptionService } from './redemption.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { RedemptionStatus, UserRole } from '../../common/enums';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { AdminRole, RedemptionStatus, UserRole } from '../../common/enums';
 
 @ApiTags('Redemption Management')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('redemptions')
 export class RedemptionController {
   constructor(private readonly redemptionService: RedemptionService) {}
 
   @Get()
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get all redemptions' })
   @ApiResponse({ status: 200, description: 'List of redemptions' })
   findAll(
@@ -35,6 +38,7 @@ export class RedemptionController {
   }
 
   @Get(':id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get redemption by ID' })
   @ApiResponse({ status: 200, description: 'Redemption details' })
   findOne(@Param('id') id: string) {
@@ -42,6 +46,7 @@ export class RedemptionController {
   }
 
   @Patch(':id/status')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Update redemption status' })
   @ApiResponse({ status: 200, description: 'Redemption status updated successfully' })
   updateStatus(
@@ -54,6 +59,7 @@ export class RedemptionController {
   }
 
   @Patch(':id/approve')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Approve redemption' })
   @ApiResponse({ status: 200, description: 'Redemption approved successfully' })
   approve(@Param('id') id: string, @CurrentUser('id') adminId: string) {
@@ -61,6 +67,7 @@ export class RedemptionController {
   }
 
   @Patch(':id/reject')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Reject redemption' })
   @ApiResponse({ status: 200, description: 'Redemption rejected successfully' })
   reject(
@@ -72,6 +79,7 @@ export class RedemptionController {
   }
 
   @Delete(':id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Delete redemption record' })
   @ApiResponse({ status: 200, description: 'Redemption deleted successfully' })
   remove(@Param('id') id: string) {

@@ -480,21 +480,61 @@ export class MobileService {
 
   // ── Notifications ──────────────────────────────────────────────────────────
 
-  async getNotifications(userId?: string, role?: string) {
-    const qb = this.notificationRepository
-      .createQueryBuilder('notification')
-      .where('notification.status = :status', { status: 'sent' });
+  private normalizeNotificationTargetRole(targetRole?: string | null): UserRole | 'all' | null {
+    const normalized = String(targetRole ?? '').trim().toLowerCase();
 
-    if (role) {
-      qb.andWhere('(notification.targetRole IS NULL OR notification.targetRole = :role OR notification.targetRole = :all)', {
-        role,
-        all: 'all',
-      });
+    if (!normalized || normalized === 'all' || normalized === 'all users') {
+      return 'all';
     }
 
-    qb.orderBy('notification.sentAt', 'DESC').take(50);
-    const notifications = await qb.getMany();
-    return { data: notifications };
+    const roleMap: Record<string, UserRole> = {
+      electrician: UserRole.ELECTRICIAN,
+      'only electricians': UserRole.ELECTRICIAN,
+      dealer: UserRole.DEALER,
+      'only dealers': UserRole.DEALER,
+      user: UserRole.USER,
+      customer: UserRole.USER,
+      'only customers': UserRole.USER,
+      counterboy: UserRole.COUNTERBOY,
+      counterboys: UserRole.COUNTERBOY,
+      'only counterboys': UserRole.COUNTERBOY,
+    };
+
+    return roleMap[normalized] ?? null;
+  }
+
+  async getNotifications(userId?: string, role?: string) {
+    const notifications = await this.notificationRepository
+      .createQueryBuilder('notification')
+      .where('notification.status = :status', { status: 'sent' })
+      .orderBy('notification.sentAt', 'DESC', 'NULLS LAST')
+      .addOrderBy('notification.createdAt', 'DESC')
+      .take(50)
+      .getMany();
+
+    const normalizedRole = role ? this.normalizeRole(role) : null;
+    const filteredNotifications = notifications.filter((notification) => {
+      const targetUserIds = Array.isArray(notification.targetUserIds)
+        ? notification.targetUserIds.filter(Boolean)
+        : [];
+
+      if (targetUserIds.length > 0) {
+        return !!userId && targetUserIds.includes(userId);
+      }
+
+      const targetRole = this.normalizeNotificationTargetRole(notification.targetRole);
+      if (targetRole === 'all') {
+        return true;
+      }
+
+      if (!targetRole || !normalizedRole) {
+        return false;
+      }
+
+      return targetRole === normalizedRole;
+    });
+
+    return { data: filteredNotifications };
   }
 
   async deleteNotification(id: string) {
@@ -1107,6 +1147,9 @@ export class MobileService {
         where: { id: data.schemeId, category: 'gift', isActive: true },
       });
       if (!product) throw new NotFoundException('Reward scheme not found');
+      if (Number(product.stock ?? 0) <= 0) {
+        throw new BadRequestException('Reward scheme is out of stock');
+      }
 
       const normalizedRole = this.normalizeRole(role);
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
@@ -1200,9 +1243,7 @@ export class MobileService {
       );
 
       // Decrement gift product stock
-      if ((product.stock ?? 0) > 0) {
-        await manager.getRepository(Product).decrement({ id: product.id }, 'stock', 1);
-      }
+      await manager.getRepository(Product).decrement({ id: product.id }, 'stock', 1);
 
       return {
         message: 'Redemption request submitted successfully',

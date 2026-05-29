@@ -10,17 +10,20 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SupportService } from './support.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { AdminRole, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 
 @ApiTags('Support Management')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('support')
 export class SupportController {
   constructor(private readonly supportService: SupportService) {}
 
   @Get('tickets')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get all support tickets' })
   @ApiResponse({ status: 200, description: 'List of support tickets' })
   getTickets(
@@ -33,6 +36,7 @@ export class SupportController {
   }
 
   @Get('tickets/:id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get support ticket by ID' })
   @ApiResponse({ status: 200, description: 'Support ticket details' })
   getTicket(@Param('id') id: string) {
@@ -40,6 +44,7 @@ export class SupportController {
   }
 
   @Patch('tickets/:id/respond')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Respond to support ticket' })
   @ApiResponse({ status: 200, description: 'Response added successfully' })
   respond(
@@ -52,6 +57,7 @@ export class SupportController {
   }
 
   @Patch('tickets/:id/status')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Update ticket status' })
   @ApiResponse({ status: 200, description: 'Status updated successfully' })
   updateStatus(

@@ -213,7 +213,7 @@ export class UploadController {
         },
       }),
       fileFilter: (_req, file, cb) => {
-        if (!file.mimetype.match(/^image\/(jpeg|jpg|png|gif|webp|pdf)$/)) {
+        if (!file.mimetype.match(/^(image\/(jpeg|jpg|png|gif|webp)|application\/pdf)$/)) {
           return cb(new BadRequestException('Only image files or PDF are allowed'), false);
         }
         cb(null, true);

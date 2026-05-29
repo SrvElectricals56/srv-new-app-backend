@@ -20,6 +20,7 @@ import { TierService } from '../../common/services/tier.service';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<string, { otp: string; expiresAt: number }>();
+const SIGNUP_OTP_VERIFIED = 'VERIFIED';
 
 @Injectable()
 export class MobileAuthService {
@@ -156,6 +157,26 @@ export class MobileAuthService {
     }
   }
 
+  private buildSignupOtpKey(phone: string, role: MobileUserRole): string {
+    return `signup:${phone}:${role}`;
+  }
+
+  private ensureSignupOtpVerified(phone: string, role: MobileUserRole): string {
+    const key = this.buildSignupOtpKey(phone, role);
+    const stored = otpStore.get(key);
+
+    if (!stored || stored.otp !== SIGNUP_OTP_VERIFIED) {
+      throw new BadRequestException('Signup OTP verification required before registration.');
+    }
+
+    if (Date.now() > stored.expiresAt) {
+      otpStore.delete(key);
+      throw new BadRequestException('Signup OTP expired. Please request and verify a new OTP.');
+    }
+
+    return key;
+  }
+
   // ── Login OTP ──────────────────────────────────────────────────────────────
 
   async sendOtp(dto: MobileLoginDto) {
@@ -177,7 +198,6 @@ export class MobileAuthService {
     const otp = this.generateOtp();
     const key = `${phone}:${role}`;
     otpStore.set(key, { otp, expiresAt: Date.now() + 5 * 60 * 1000 });
-    console.log(`[OTP] Phone: ${phone}, Role: ${role}, OTP: ${otp}`);
 
     return {
       success: true,
@@ -216,9 +236,8 @@ export class MobileAuthService {
     if (existing) throw new ConflictException('Phone number already registered.');
 
     const otp = this.generateOtp();
-    const key = `signup:${phone}:${role}`;
+    const key = this.buildSignupOtpKey(phone, role);
     otpStore.set(key, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
-    console.log(`[SIGNUP OTP] Phone: ${phone}, Role: ${role}, OTP: ${otp}`);
 
     return {
       success: true,
@@ -228,7 +247,7 @@ export class MobileAuthService {
   }
 
   async verifySignupOtp(phone: string, role: MobileUserRole, otp: string) {
-    const key = `signup:${phone}:${role}`;
+    const key = this.buildSignupOtpKey(phone, role);
     const stored = otpStore.get(key);
 
     if (!stored) throw new BadRequestException('OTP not found or expired.');
@@ -238,7 +257,7 @@ export class MobileAuthService {
     }
     if (stored.otp !== otp) throw new UnauthorizedException('Invalid OTP.');
     // Mark as verified for signup completion
-    otpStore.set(key, { otp: 'VERIFIED', expiresAt: Date.now() + 15 * 60 * 1000 });
+    otpStore.set(key, { otp: SIGNUP_OTP_VERIFIED, expiresAt: Date.now() + 15 * 60 * 1000 });
 
     return { success: true, message: 'OTP verified successfully' };
   }
@@ -250,6 +269,7 @@ export class MobileAuthService {
     district: string; state: string; address: string; pincode?: string;
     gstNumber?: string; password?: string;
   }) {
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer');
     const existing = await this.dealerRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
 
@@ -274,6 +294,7 @@ export class MobileAuthService {
     (dealer as any).passwordHash = passwordHash;
 
     const saved = await this.dealerRepository.save(dealer) as Dealer;
+    otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'dealer' };
     const tokens = this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(saved, 'dealer') };
@@ -284,6 +305,7 @@ export class MobileAuthService {
     district: string; state: string; address?: string; pincode?: string;
     dealerPhone: string; password?: string; subCategory?: string; electricianCode?: string;
   }) {
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician');
     const existing = await this.electricianRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
 
@@ -323,6 +345,7 @@ export class MobileAuthService {
     (electrician as any).passwordHash = passwordHash;
 
     const saved = await this.electricianRepository.save(electrician) as Electrician;
+    otpStore.delete(signupOtpKey);
     if (dealerId) {
       await this.tierService.syncDealerTier(dealerId);
     }
@@ -341,6 +364,7 @@ export class MobileAuthService {
     state?: string; district?: string; address?: string; pincode?: string;
     password?: string;
   }) {
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user');
     const existing = await this.appUserRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
 
@@ -364,6 +388,7 @@ export class MobileAuthService {
     });
 
     const saved = await this.appUserRepository.save(appUser);
+    otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
     const tokens = this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(saved, 'user') };
@@ -374,6 +399,7 @@ export class MobileAuthService {
     state?: string; district?: string; address?: string; pincode?: string;
     password?: string;
   }) {
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy');
     const existing = await this.counterboyRepository.findOne({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Phone number already registered.');
 
@@ -397,6 +423,7 @@ export class MobileAuthService {
     });
 
     const saved = await this.counterboyRepository.save(counterboy);
+    otpStore.delete(signupOtpKey);
     const savedWithDealer = await this.hydrateCounterBoyDealer(
       await this.counterboyRepository.findOne({ where: { id: saved.id } }),
     );
@@ -418,10 +445,7 @@ export class MobileAuthService {
 
     // If no password provided and no passwordHash set → allow login (OTP-registered users)
     if (!password?.trim()) {
-      await this.touchActivity(user.id, role);
-      const payload = { sub: user.id, phone: user.phone, role };
-      const tokens = this.generateTokens(payload);
-      return { ...tokens, user: this.formatUserProfile(user, role) };
+      throw new BadRequestException('Password is required. Please use OTP login if you do not have a password.');
     }
 
     if (isDev && password === '1234') {
@@ -431,7 +455,7 @@ export class MobileAuthService {
       if (!valid) throw new UnauthorizedException('Invalid password.');
     } else {
       // No passwordHash set — treat any password attempt as invalid, suggest OTP
-      throw new BadRequestException('No password set for this account. Please use OTP login or leave password empty.');
+      throw new BadRequestException('No password set for this account. Please use OTP login instead.');
     }
 
     await this.touchActivity(user.id, role);

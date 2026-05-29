@@ -14,16 +14,19 @@ import { OfferService } from './offer.service';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { OfferStatus } from '../../common/enums';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { AdminRole, OfferStatus } from '../../common/enums';
 
 @ApiTags('Offer Management')
 @ApiBearerAuth('JWT-auth')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('offers')
 export class OfferController {
   constructor(private readonly offerService: OfferService) {}
 
   @Post()
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Create new offer' })
   @ApiResponse({ status: 201, description: 'Offer created successfully' })
   create(@Body() createOfferDto: CreateOfferDto) {
@@ -31,6 +34,7 @@ export class OfferController {
   }
 
   @Get()
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get all offers' })
   @ApiResponse({ status: 200, description: 'List of offers' })
   findAll(
@@ -43,6 +47,7 @@ export class OfferController {
   }
 
   @Get(':id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Get offer by ID' })
   @ApiResponse({ status: 200, description: 'Offer details' })
   findOne(@Param('id') id: string) {
@@ -50,6 +55,7 @@ export class OfferController {
   }
 
   @Patch(':id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Update offer' })
   @ApiResponse({ status: 200, description: 'Offer updated successfully' })
   update(@Param('id') id: string, @Body() updateOfferDto: UpdateOfferDto) {
@@ -57,6 +63,7 @@ export class OfferController {
   }
 
   @Delete(':id')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Delete offer' })
   @ApiResponse({ status: 200, description: 'Offer deleted successfully' })
   remove(@Param('id') id: string) {
