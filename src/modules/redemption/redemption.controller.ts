@@ -41,6 +41,18 @@ export class RedemptionController {
     return this.redemptionService.findOne(id);
   }
 
+  @Patch(':id/status')
+  @ApiOperation({ summary: 'Update redemption status' })
+  @ApiResponse({ status: 200, description: 'Redemption status updated successfully' })
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: RedemptionStatus,
+    @Body('rejectionReason') rejectionReason: string | undefined,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.redemptionService.updateStatus(id, status, adminId, rejectionReason);
+  }
+
   @Patch(':id/approve')
   @ApiOperation({ summary: 'Approve redemption' })
   @ApiResponse({ status: 200, description: 'Redemption approved successfully' })

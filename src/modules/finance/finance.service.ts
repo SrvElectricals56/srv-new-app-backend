@@ -5,6 +5,8 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TransactionType, TransactionSource, UserRole, RedemptionStatus } from '../../common/enums';
 
 @Injectable()
@@ -18,7 +20,28 @@ export class FinanceService {
     private dealerRepository: Repository<Dealer>,
     @InjectRepository(Electrician)
     private electricianRepository: Repository<Electrician>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterBoyRepository: Repository<CounterBoy>,
   ) {}
+
+  private async resolveUser(identifier: string): Promise<{ name: string; phone: string } | null> {
+    if (!identifier) return null;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const isUuid = uuidRegex.test(identifier);
+    const idMatch = isUuid ? [{ id: identifier }] : [];
+    const phoneMatch = [{ phone: identifier }];
+    const [d, e, a, c] = await Promise.all([
+      this.dealerRepository.findOne({ where: [...idMatch, ...phoneMatch, { dealerCode: identifier }] }),
+      this.electricianRepository.findOne({ where: [...idMatch, ...phoneMatch, { electricianCode: identifier }] }),
+      this.appUserRepository.findOne({ where: [...idMatch, ...phoneMatch, { userCode: identifier }] }),
+      this.counterBoyRepository.findOne({ where: [...idMatch, ...phoneMatch, { counterboyCode: identifier }] }),
+    ]);
+    const user = d || e || a || c;
+    if (user) return { name: user.name, phone: user.phone };
+    return null;
+  }
 
   async getSummary() {
     const [
@@ -160,9 +183,61 @@ export class FinanceService {
       take: 200,
     });
 
+    const enriched = await Promise.all(transfers.map(async (t) => {
+      let fromName: string | null = null;
+      let fromPhone: string | null = null;
+      let toName: string | null = null;
+      let toPhone: string | null = null;
+
+      if (t.description) {
+        // Normalize: strip [REVERSED] prefix and . Reason: suffix
+        let desc = t.description
+          .replace(/^\[REVERSED\]\s*/i, '')
+          .replace(/\.\s*Reason:.*$/, '');
+
+        // Try new format: "Manual transfer from Name (Phone) to Name (Phone)"
+        const match = desc.match(
+          /^Manual transfer from (.+?) \(([^)]*)\) to (.+?) \(([^)]*)\)$/,
+        );
+        if (match) {
+          fromName = match[1];
+          fromPhone = match[2] || null;
+          toName = match[3];
+          toPhone = match[4] || null;
+        } else {
+          // Fallback to old format: "Manual transfer from <value> to <value>"
+          const parts = desc.split(' to ');
+          if (parts.length >= 2) {
+            const rawFrom = parts[0].replace('Manual transfer from ', '').trim();
+            const rawTo = parts.slice(1).join(' to ').trim();
+            // Try to resolve as user identifier
+            const [fromUser, toUser] = await Promise.all([
+              this.resolveUser(rawFrom),
+              this.resolveUser(rawTo),
+            ]);
+            if (fromUser) { fromName = fromUser.name; fromPhone = fromUser.phone; }
+            else fromName = rawFrom;
+            if (toUser) { toName = toUser.name; toPhone = toUser.phone; }
+            else toName = rawTo;
+          } else {
+            // Description is just a reason string — use as fallback fromName
+            fromName = desc;
+          }
+        }
+      }
+
+      return {
+        ...t,
+        fromName,
+        fromPhone,
+        toName,
+        toPhone,
+      };
+    }));
+
     return {
-      transfers,
-      totalTransfers: transfers.length,
+      transfers: enriched,
+      totalTransfers: enriched.length,
     };
   }
 
@@ -172,6 +247,23 @@ export class FinanceService {
   ) {
     const { fromUser, toUser, points, reason } = body;
 
+    // Resolve from/to user identifiers to names and phones
+    const [resolvedFrom, resolvedTo] = await Promise.all([
+      this.resolveUser(fromUser),
+      this.resolveUser(toUser),
+    ]);
+
+    const fromDisplay = resolvedFrom
+      ? `${resolvedFrom.name} (${resolvedFrom.phone})`
+      : fromUser;
+    const toDisplay = resolvedTo
+      ? `${resolvedTo.name} (${resolvedTo.phone})`
+      : toUser;
+
+    const description = reason
+      ? `Manual transfer from ${fromDisplay} to ${toDisplay}. Reason: ${reason}`
+      : `Manual transfer from ${fromDisplay} to ${toDisplay}`;
+
     const transaction = this.walletRepository.create({
       userId: adminId,
       userRole: UserRole.ELECTRICIAN,
@@ -180,7 +272,7 @@ export class FinanceService {
       amount: points,
       balanceBefore: 0,
       balanceAfter: points,
-      description: reason || `Manual transfer from ${fromUser} to ${toUser}`,
+      description,
       referenceId: adminId,
       referenceType: 'manual_transfer',
     });

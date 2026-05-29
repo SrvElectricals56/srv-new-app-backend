@@ -63,6 +63,7 @@ export class SupportService {
     const ticket = await this.getTicket(id);
 
     const newReply = {
+      id: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       sender: 'admin',
       senderName: 'Admin Support',
       message,

@@ -57,6 +57,118 @@ export class RedemptionService {
     return 'Silver';
   }
 
+  private buildUserBalanceUpdate(role: UserRole, balanceAfter: number) {
+    const updateData: Record<string, any> = {
+      walletBalance: balanceAfter,
+    };
+
+    if (role !== UserRole.DEALER) {
+      updateData.totalPoints = balanceAfter;
+      if (role === UserRole.ELECTRICIAN) {
+        updateData.tier = this.calculateElectricianTier(balanceAfter);
+      }
+    }
+
+    return updateData;
+  }
+
+  private async refundHeldPoints(redemption: Redemption, reason: string, manager: EntityManager) {
+    if (!redemption.transactionId) return;
+
+    const user = await this.getUserForUpdate(redemption.userId, redemption.role, manager);
+    if (!user) {
+      throw new NotFoundException('User not found for this redemption');
+    }
+
+    const balanceBefore = Number((user as any).walletBalance ?? 0);
+    const refundPoints = Number(redemption.points ?? 0);
+    const balanceAfter = balanceBefore + refundPoints;
+
+    await this.getUserRepositoryByRole(redemption.role, manager).update(
+      redemption.userId,
+      this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+    );
+
+    await manager.getRepository(Wallet).save(
+      manager.getRepository(Wallet).create({
+        userId: redemption.userId,
+        userRole: redemption.role,
+        type: TransactionType.CREDIT,
+        source: TransactionSource.REFUND,
+        amount: refundPoints,
+        balanceBefore,
+        balanceAfter,
+        description: `Refund for rejected redemption ${redemption.id}. Reason: ${reason}`,
+        referenceId: redemption.id,
+        referenceType: 'redemption',
+      }),
+    );
+  }
+
+  private async holdPointsAgain(
+    redemption: Redemption,
+    nextStatus: RedemptionStatus,
+    manager: EntityManager,
+  ) {
+    if (!redemption.transactionId) return;
+
+    const user = await this.getUserForUpdate(redemption.userId, redemption.role, manager);
+    if (!user) {
+      throw new NotFoundException('User not found for this redemption');
+    }
+
+    const balanceBefore = Number((user as any).walletBalance ?? 0);
+    const lockedPoints = Number(redemption.points ?? 0);
+
+    if (balanceBefore < lockedPoints) {
+      throw new BadRequestException('User no longer has enough wallet balance to re-activate this request');
+    }
+
+    const balanceAfter = balanceBefore - lockedPoints;
+
+    await this.getUserRepositoryByRole(redemption.role, manager).update(
+      redemption.userId,
+      this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+    );
+
+    await manager.getRepository(Wallet).save(
+      manager.getRepository(Wallet).create({
+        userId: redemption.userId,
+        userRole: redemption.role,
+        type: TransactionType.DEBIT,
+        source: TransactionSource.REDEMPTION,
+        amount: lockedPoints,
+        balanceBefore,
+        balanceAfter,
+        description: `Points locked again after redemption ${redemption.id} moved to ${nextStatus}`,
+        referenceId: redemption.id,
+        referenceType: 'redemption',
+      }),
+    );
+  }
+
+  private async syncWalletForStatusChange(
+    redemption: Redemption,
+    nextStatus: RedemptionStatus,
+    rejectionReason: string,
+    manager: EntityManager,
+  ) {
+    if (
+      redemption.status !== RedemptionStatus.REJECTED &&
+      nextStatus === RedemptionStatus.REJECTED
+    ) {
+      await this.refundHeldPoints(redemption, rejectionReason, manager);
+      return;
+    }
+
+    if (
+      redemption.status === RedemptionStatus.REJECTED &&
+      nextStatus !== RedemptionStatus.REJECTED
+    ) {
+      await this.holdPointsAgain(redemption, nextStatus, manager);
+    }
+  }
+
   async findAll(
     page: number = 1,
     limit: number = 20,
@@ -107,23 +219,22 @@ export class RedemptionService {
     return redemption;
   }
 
-  async approve(id: string, adminId: string) {
-    const redemption = await this.findOne(id);
-
-    if (redemption.status !== RedemptionStatus.PENDING) {
-      throw new BadRequestException('Only pending redemptions can be approved');
+  async updateStatus(
+    id: string,
+    nextStatus: RedemptionStatus,
+    adminId: string,
+    rejectionReason?: string,
+  ) {
+    if (
+      ![
+        RedemptionStatus.PENDING,
+        RedemptionStatus.APPROVED,
+        RedemptionStatus.REJECTED,
+      ].includes(nextStatus)
+    ) {
+      throw new BadRequestException('Unsupported redemption status');
     }
 
-    await this.redemptionRepository.update(id, {
-      status: RedemptionStatus.APPROVED,
-      processedBy: adminId,
-      processedAt: new Date(),
-    });
-
-    return this.findOne(id);
-  }
-
-  async reject(id: string, rejectionReason: string, adminId: string) {
     const reason = rejectionReason?.trim() || 'Rejected by admin';
 
     return this.dataSource.transaction(async (manager) => {
@@ -137,61 +248,25 @@ export class RedemptionService {
         throw new NotFoundException('Redemption not found');
       }
 
-      if (redemption.status !== RedemptionStatus.PENDING) {
-        throw new BadRequestException('Only pending redemptions can be rejected');
-      }
-
-      if (redemption.transactionId) {
-        const user = await this.getUserForUpdate(redemption.userId, redemption.role, manager);
-        if (!user) {
-          throw new NotFoundException('User not found for this redemption');
-        }
-
-        const balanceBefore = Number((user as any).walletBalance ?? 0);
-        const refundPoints = Number(redemption.points ?? 0);
-        const balanceAfter = balanceBefore + refundPoints;
-        const updateData: Record<string, any> = {
-          walletBalance: balanceAfter,
-        };
-
-        if (redemption.role !== UserRole.DEALER) {
-          const totalPointsAfter = balanceAfter;
-          updateData.totalPoints = totalPointsAfter;
-          if (redemption.role === UserRole.ELECTRICIAN) {
-            updateData.tier = this.calculateElectricianTier(totalPointsAfter);
-          }
-        }
-
-        await this.getUserRepositoryByRole(redemption.role, manager).update(
-          redemption.userId,
-          updateData as any,
-        );
-
-        await manager.getRepository(Wallet).save(
-          manager.getRepository(Wallet).create({
-            userId: redemption.userId,
-            userRole: redemption.role,
-            type: TransactionType.CREDIT,
-            source: TransactionSource.REFUND,
-            amount: refundPoints,
-            balanceBefore,
-            balanceAfter,
-            description: `Refund for rejected redemption ${redemption.id}`,
-            referenceId: redemption.id,
-            referenceType: 'redemption',
-          }),
-        );
-      }
+      await this.syncWalletForStatusChange(redemption, nextStatus, reason, manager);
 
       await manager.getRepository(Redemption).update(id, {
-        status: RedemptionStatus.REJECTED,
-        rejectionReason: reason,
-        processedBy: adminId,
-        processedAt: new Date(),
+        status: nextStatus,
+        rejectionReason: nextStatus === RedemptionStatus.REJECTED ? reason : null,
+        processedBy: nextStatus === RedemptionStatus.PENDING ? null : adminId,
+        processedAt: nextStatus === RedemptionStatus.PENDING ? null : new Date(),
       });
 
       return this.findOne(id);
     });
+  }
+
+  async approve(id: string, adminId: string) {
+    return this.updateStatus(id, RedemptionStatus.APPROVED, adminId);
+  }
+
+  async reject(id: string, rejectionReason: string, adminId: string) {
+    return this.updateStatus(id, RedemptionStatus.REJECTED, adminId, rejectionReason);
   }
 
   async remove(id: string) {

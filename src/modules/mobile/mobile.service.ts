@@ -558,6 +558,7 @@ export class MobileService {
       referralEnabled: map['referralEnabled'] !== 'false',
       testimonialsEnabled: map['testimonialsEnabled'] !== 'false',
       playEnabled: map['playEnabled'] !== 'false',
+      dealerCanAddElectrician: map['dealerCanAddElectrician'] !== 'false',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
       generalCatalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
@@ -1492,6 +1493,7 @@ export class MobileService {
     }
 
     const newReply = {
+      id: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       sender: 'user',
       senderName: ticket.userName || 'User',
       message,
