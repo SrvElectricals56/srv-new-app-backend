@@ -77,7 +77,7 @@ export class CounterBoy {
   @Column({
     type: 'enum',
     enum: UserStatus,
-    default: UserStatus.PENDING,
+    default: UserStatus.ACTIVE,
   })
   status: UserStatus;
 
@@ -126,6 +126,9 @@ export class CounterBoy {
 
   @Column({ nullable: true })
   passwordHash: string;
+
+  @Column({ default: 0 })
+  tokenVersion: number;
 
   @Column({ nullable: true })
   language: string;

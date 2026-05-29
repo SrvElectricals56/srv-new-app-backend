@@ -80,7 +80,7 @@ export class Electrician {
   @Column({
     type: 'enum',
     enum: UserStatus,
-    default: UserStatus.PENDING,
+    default: UserStatus.ACTIVE,
   })
   status: UserStatus;
 
@@ -138,6 +138,9 @@ export class Electrician {
 
   @Column({ nullable: true })
   passwordHash: string;
+
+  @Column({ default: 0 })
+  tokenVersion: number;
 
   @Column({ nullable: true })
   lastActivityAt: Date;

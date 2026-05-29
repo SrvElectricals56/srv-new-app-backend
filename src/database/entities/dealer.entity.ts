@@ -152,6 +152,9 @@ export class Dealer {
   @Column({ nullable: true })
   passwordHash: string;
 
+  @Column({ default: 0 })
+  tokenVersion: number;
+
   @Column({ nullable: true })
   lastActivityAt: Date;
 

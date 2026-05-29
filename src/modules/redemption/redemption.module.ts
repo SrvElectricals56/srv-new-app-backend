@@ -8,9 +8,10 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { Notification } from '../../database/entities/notification.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Redemption, Electrician, Dealer, AppUser, CounterBoy, Wallet])],
+  imports: [TypeOrmModule.forFeature([Redemption, Electrician, Dealer, AppUser, CounterBoy, Wallet, Notification])],
   controllers: [RedemptionController],
   providers: [RedemptionService],
   exports: [RedemptionService],

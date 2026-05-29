@@ -75,7 +75,7 @@ export class AppUserService {
       email,
       userCode: requestedCode ?? await this.generateUniqueUserCode(),
       tier: (data.tier ?? 'Silver') as AppUser['tier'],
-      status: data.status ?? UserStatus.PENDING,
+      status: data.status ?? UserStatus.ACTIVE,
       kycStatus: (data.kycStatus ?? 'not_submitted') as AppUser['kycStatus'],
       totalPoints: Number(data.totalPoints ?? 0),
       walletBalance: Number(data.walletBalance ?? 0),
@@ -135,7 +135,7 @@ export class AppUserService {
             state: data.state || null,
             district: data.district || null,
             tier: data.tier ?? 'Silver',
-            status: data.status ?? UserStatus.PENDING,
+            status: data.status ?? UserStatus.ACTIVE,
             kycStatus: data.kycStatus ?? 'not_submitted',
             totalPoints: Number(data.totalPoints ?? 0),
             walletBalance: Number(data.walletBalance ?? 0),
@@ -156,7 +156,17 @@ export class AppUserService {
     return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
   }
 
-  async findAll(page = 1, limit = 20, search?: string, status?: string) {
+  private normalizeLocationValues(values: Array<string | null | undefined>) {
+    return Array.from(
+      new Set(
+        values
+          .map((value) => String(value ?? '').trim())
+          .filter((value) => value !== '' && value !== '?'),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+  }
+
+  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string) {
     const skip = (page - 1) * limit;
     const where: any[] = [];
 
@@ -178,6 +188,12 @@ export class AppUserService {
     }
     if (status) {
       query.andWhere('u.status = :status', { status });
+    }
+    if (state) {
+      query.andWhere('u.state = :state', { state });
+    }
+    if (city) {
+      query.andWhere('u.city = :city', { city });
     }
 
     const [data, total] = await query
@@ -215,8 +231,13 @@ export class AppUserService {
         delete payload.userCode;
       }
     }
-    if (passwordHash) payload.passwordHash = passwordHash;
-    await this.appUserRepository.update(id, payload);
+    if (passwordHash) {
+      payload.passwordHash = passwordHash;
+      await this.appUserRepository.update(id, payload);
+      await this.appUserRepository.increment({ id }, 'tokenVersion', 1);
+    } else {
+      await this.appUserRepository.update(id, payload);
+    }
     return this.findOne(id);
   }
 
@@ -232,5 +253,29 @@ export class AppUserService {
     const pending = await this.appUserRepository.count({ where: { status: UserStatus.PENDING } });
     const inactive = await this.appUserRepository.count({ where: { status: UserStatus.INACTIVE } });
     return { total, active, pending, inactive };
+  }
+
+  async getDistinctStates(): Promise<{ states: string[] }> {
+    const rows = await this.appUserRepository
+      .createQueryBuilder('u')
+      .select('DISTINCT u.state', 'state')
+      .where('u.state IS NOT NULL')
+      .andWhere(`TRIM(u.state) <> ''`)
+      .orderBy('u.state', 'ASC')
+      .getRawMany();
+    return { states: this.normalizeLocationValues(rows.map(r => r.state)) };
+  }
+
+  async getDistinctCities(state?: string): Promise<{ cities: string[] }> {
+    const query = this.appUserRepository
+      .createQueryBuilder('u')
+      .select('DISTINCT u.city', 'city')
+      .where('u.city IS NOT NULL')
+      .andWhere(`TRIM(u.city) <> ''`);
+    if (state) {
+      query.andWhere('u.state = :state', { state });
+    }
+    const rows = await query.orderBy('u.city', 'ASC').getRawMany();
+    return { cities: this.normalizeLocationValues(rows.map(r => r.city)) };
   }
 }

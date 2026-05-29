@@ -49,6 +49,7 @@ export class DealerService {
     status?: UserStatus,
     tier?: MemberTier,
     state?: string,
+    city?: string,
     bankLinked?: boolean,
     dateFrom?: string,
     dateTo?: string,
@@ -73,6 +74,10 @@ export class DealerService {
 
     if (state) {
       queryBuilder.andWhere('dealer.state = :state', { state });
+    }
+
+    if (city) {
+      queryBuilder.andWhere('dealer.town = :city', { city });
     }
 
     if (bankLinked !== undefined) {
@@ -283,9 +288,39 @@ export class DealerService {
       .createQueryBuilder('dealer')
       .select('DISTINCT dealer.state', 'state')
       .where('dealer.state IS NOT NULL')
+      .andWhere(`TRIM(dealer.state) <> ''`)
       .orderBy('dealer.state', 'ASC')
       .getRawMany();
-    return { states: rows.map(r => r.state).filter(Boolean) };
+    return {
+      states: Array.from(
+        new Set(
+          rows
+            .map((r) => String(r.state ?? '').trim())
+            .filter((state) => state !== '' && state !== '?'),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    };
+  }
+
+  async getDistinctCities(state?: string): Promise<{ cities: string[] }> {
+    const query = this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select('DISTINCT dealer.town', 'city')
+      .where('dealer.town IS NOT NULL')
+      .andWhere(`TRIM(dealer.town) <> ''`);
+    if (state) {
+      query.andWhere('dealer.state = :state', { state });
+    }
+    const rows = await query.orderBy('dealer.town', 'ASC').getRawMany();
+    return {
+      cities: Array.from(
+        new Set(
+          rows
+            .map((r) => String(r.city ?? '').trim())
+            .filter((city) => city !== '' && city !== '?'),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    };
   }
 
   async getTop(from: string, to: string, limit: number = 10) {

@@ -61,6 +61,16 @@ export class CounterBoyService {
     return cb;
   }
 
+  private normalizeLocationValues(values: Array<string | null | undefined>) {
+    return Array.from(
+      new Set(
+        values
+          .map((value) => String(value ?? '').trim())
+          .filter((value) => value !== '' && value !== '?'),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+  }
+
   async importMany(records: any[]) {
     let created = 0, updated = 0, failed = 0, errors: string[] = [];
 
@@ -109,7 +119,7 @@ export class CounterBoyService {
             state: data.state || null,
             district: data.district || null,
             tier: data.tier ?? 'Silver',
-            status: data.status ?? UserStatus.PENDING,
+            status: data.status ?? UserStatus.ACTIVE,
             kycStatus: data.kycStatus ?? 'not_submitted',
             totalScans: Number(data.totalScans ?? 0),
             totalPoints: Number(data.totalPoints ?? 0),
@@ -131,7 +141,7 @@ export class CounterBoyService {
     return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
   }
 
-  async findAll(page = 1, limit = 20, search?: string, status?: string) {
+  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string) {
     const skip = (page - 1) * limit;
 
     const query = this.counterboyRepository
@@ -149,6 +159,12 @@ export class CounterBoyService {
     }
     if (status) {
       query.andWhere('cb.status = :status', { status });
+    }
+    if (state) {
+      query.andWhere('cb.state = :state', { state });
+    }
+    if (city) {
+      query.andWhere('cb.city = :city', { city });
     }
 
     const total = await query.clone().getCount();
@@ -221,7 +237,7 @@ export class CounterBoyService {
       dealerId: null,
       counterboyCode: requestedCode ?? await this.generateUniqueCounterBoyCode(),
       tier: (data.tier ?? 'Silver') as CounterBoy['tier'],
-      status: data.status ?? UserStatus.PENDING,
+      status: data.status ?? UserStatus.ACTIVE,
       kycStatus: (data.kycStatus ?? 'not_submitted') as CounterBoy['kycStatus'],
       totalScans: Number(data.totalScans ?? 0),
       totalPoints: Number(data.totalPoints ?? 0),
@@ -260,8 +276,13 @@ export class CounterBoyService {
         delete payload.counterboyCode;
       }
     }
-    if (passwordHash) payload.passwordHash = passwordHash;
-    await this.counterboyRepository.update(id, payload);
+    if (passwordHash) {
+      payload.passwordHash = passwordHash;
+      await this.counterboyRepository.update(id, payload);
+      await this.counterboyRepository.increment({ id }, 'tokenVersion', 1);
+    } else {
+      await this.counterboyRepository.update(id, payload);
+    }
     return this.findOne(id);
   }
 
@@ -277,5 +298,29 @@ export class CounterBoyService {
     const pending = await this.counterboyRepository.count({ where: { status: UserStatus.PENDING } });
     const inactive = await this.counterboyRepository.count({ where: { status: UserStatus.INACTIVE } });
     return { total, active, pending, inactive };
+  }
+
+  async getDistinctStates(): Promise<{ states: string[] }> {
+    const rows = await this.counterboyRepository
+      .createQueryBuilder('cb')
+      .select('DISTINCT cb.state', 'state')
+      .where('cb.state IS NOT NULL')
+      .andWhere(`TRIM(cb.state) <> ''`)
+      .orderBy('cb.state', 'ASC')
+      .getRawMany();
+    return { states: this.normalizeLocationValues(rows.map(r => r.state)) };
+  }
+
+  async getDistinctCities(state?: string): Promise<{ cities: string[] }> {
+    const query = this.counterboyRepository
+      .createQueryBuilder('cb')
+      .select('DISTINCT cb.city', 'city')
+      .where('cb.city IS NOT NULL')
+      .andWhere(`TRIM(cb.city) <> ''`);
+    if (state) {
+      query.andWhere('cb.state = :state', { state });
+    }
+    const rows = await query.orderBy('cb.city', 'ASC').getRawMany();
+    return { cities: this.normalizeLocationValues(rows.map(r => r.city)) };
   }
 }

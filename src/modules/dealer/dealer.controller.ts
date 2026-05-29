@@ -43,13 +43,14 @@ export class DealerController {
     @Query('status') status?: UserStatus,
     @Query('tier') tier?: MemberTier,
     @Query('state') state?: string,
+    @Query('city') city?: string,
     @Query('bankLinked') bankLinked?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
     return this.dealerService.findAll(
       parseInt(page), parseInt(limit),
-      search, status, tier, state,
+      search, status, tier, state, city,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       dateFrom, dateTo,
     );
@@ -66,6 +67,12 @@ export class DealerController {
   @ApiOperation({ summary: 'Get all distinct dealer states for filter dropdown' })
   getDistinctStates() {
     return this.dealerService.getDistinctStates();
+  }
+
+  @Get('distinct-cities')
+  @ApiOperation({ summary: 'Get all distinct dealer cities for filter dropdown' })
+  getDistinctCities(@Query('state') state?: string) {
+    return this.dealerService.getDistinctCities(state);
   }
 
   @Get('stats')

@@ -142,6 +142,22 @@ export class MobileService {
   ) {
     return this.getUserRepositoryByRole(role, manager)
       .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.name',
+        'user.phone',
+        'user.walletBalance',
+        'user.totalPoints',
+        'user.tier',
+        'user.dealerId',
+        'user.status',
+        'user.bankLinked',
+        'user.upiId',
+        'user.bankAccount',
+        'user.ifsc',
+        'user.bankName',
+        'user.accountHolderName',
+      ])
       .setLock('pessimistic_write')
       .where('user.id = :userId', { userId })
       .getOne();
@@ -172,6 +188,16 @@ export class MobileService {
 
     return repository
       .createQueryBuilder(alias)
+      .select([
+        `${alias}.id`,
+        `${alias}.name`,
+        `${alias}.phone`,
+        `${alias}.walletBalance`,
+        `${alias}.totalPoints`,
+        `${alias}.tier`,
+        `${alias}.dealerId`,
+        `${alias}.status`,
+      ])
       .where(`${alias}.phone = :normalizedPhone`, { normalizedPhone })
       .orWhere(
         `RIGHT(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), 10) = :normalizedPhone`,
@@ -756,8 +782,34 @@ export class MobileService {
 
   async getDealerByPhone(phone: string) {
     if (!phone) throw new BadRequestException('Phone number is required');
-    const dealer = await this.findRecordByPhone(this.dealerRepository, 'dealer', phone);
+    const normalizedPhone = this.normalizePhone(phone);
+    if (normalizedPhone.length !== 10) {
+      throw new BadRequestException('Enter a valid 10-digit dealer number');
+    }
+    const dealer = await this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select([
+        'dealer.id',
+        'dealer.name',
+        'dealer.phone',
+        'dealer.dealerCode',
+        'dealer.town',
+        'dealer.district',
+        'dealer.state',
+        'dealer.electricianCount',
+        'dealer.status',
+      ])
+      .where('dealer.phone = :rawPhone', { rawPhone: phone })
+      .orWhere('dealer.phone = :normalizedPhone', { normalizedPhone })
+      .orWhere(
+        `RIGHT(regexp_replace(COALESCE(dealer.phone, ''), '\\D', '', 'g'), 10) = :normalizedPhone`,
+        { normalizedPhone },
+      )
+      .getOne();
     if (!dealer) throw new NotFoundException('Dealer not found');
+    if (!dealer.dealerCode?.trim()) {
+      throw new BadRequestException('Dealer code is missing for this account. Please contact admin.');
+    }
     const nextElectricianSerial = await this.getNextElectricianSerial(dealer.id, dealer.dealerCode);
     return {
       id: dealer.id,
@@ -1020,6 +1072,21 @@ export class MobileService {
       return this.dataSource.transaction(async (manager) => {
         const dealerLock = await manager.getRepository(Dealer)
           .createQueryBuilder('dealer')
+          .select([
+            'dealer.id',
+            'dealer.name',
+            'dealer.phone',
+            'dealer.walletBalance',
+            'dealer.totalPoints',
+            'dealer.tier',
+            'dealer.status',
+            'dealer.bonusPoints',
+            'dealer.upiId',
+            'dealer.bankAccount',
+            'dealer.ifsc',
+            'dealer.bankName',
+            'dealer.accountHolderName',
+          ])
           .setLock('pessimistic_write')
           .where('dealer.id = :id', { id: userId })
           .getOne();
@@ -1393,6 +1460,23 @@ export class MobileService {
     const skip = (page - 1) * limit;
     const qb = this.electricianRepository
       .createQueryBuilder('electrician')
+      .select([
+        'electrician.id',
+        'electrician.name',
+        'electrician.phone',
+        'electrician.walletBalance',
+        'electrician.totalPoints',
+        'electrician.tier',
+        'electrician.status',
+        'electrician.city',
+        'electrician.state',
+        'electrician.district',
+        'electrician.joinedDate',
+        'electrician.dealerId',
+        'electrician.electricianCode',
+        'electrician.totalScans',
+        'electrician.totalRedemptions',
+      ])
       .where('electrician.dealerId = :dealerId', { dealerId });
 
     if (search) {

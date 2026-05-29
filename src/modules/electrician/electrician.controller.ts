@@ -43,6 +43,7 @@ export class ElectricianController {
     @Query('status') status?: UserStatus,
     @Query('tier') tier?: MemberTier,
     @Query('state') state?: string,
+    @Query('city') city?: string,
     @Query('dealerId') dealerId?: string,
     @Query('subCategory') subCategory?: string,
     @Query('bankLinked') bankLinked?: string,
@@ -51,7 +52,7 @@ export class ElectricianController {
   ) {
     return this.electricianService.findAll(
       parseInt(page), parseInt(limit),
-      search, status, tier, state, dealerId, subCategory,
+      search, status, tier, state, city, dealerId, subCategory,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       dateFrom, dateTo,
     );
@@ -68,6 +69,12 @@ export class ElectricianController {
   @ApiOperation({ summary: 'Get all distinct electrician states for filter dropdown' })
   getDistinctStates() {
     return this.electricianService.getDistinctStates();
+  }
+
+  @Get('distinct-cities')
+  @ApiOperation({ summary: 'Get all distinct electrician cities for filter dropdown' })
+  getDistinctCities(@Query('state') state?: string) {
+    return this.electricianService.getDistinctCities(state);
   }
 
   @Get('distinct-categories')

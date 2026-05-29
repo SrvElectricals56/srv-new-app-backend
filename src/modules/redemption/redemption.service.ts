@@ -8,7 +8,8 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
-import { RedemptionStatus, TransactionSource, TransactionType, UserRole } from '../../common/enums';
+import { NotificationStatus, RedemptionStatus, TransactionSource, TransactionType, UserRole } from '../../common/enums';
+import { Notification } from '../../database/entities/notification.entity';
 
 @Injectable()
 export class RedemptionService {
@@ -26,6 +27,8 @@ export class RedemptionService {
     private counterboyRepository: Repository<CounterBoy>,
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
   ) {}
 
   private getUserRepositoryByRole(role: UserRole, manager?: EntityManager) {
@@ -266,7 +269,7 @@ export class RedemptionService {
 
     const reason = rejectionReason?.trim() || 'Rejected by admin';
 
-    return this.dataSource.transaction(async (manager) => {
+    await this.dataSource.transaction(async (manager) => {
       const redemption = await manager.getRepository(Redemption)
         .createQueryBuilder('redemption')
         .setLock('pessimistic_write')
@@ -293,9 +296,11 @@ export class RedemptionService {
         processedBy: nextStatus === RedemptionStatus.PENDING ? null : adminId,
         processedAt: nextStatus === RedemptionStatus.PENDING ? null : new Date(),
       });
-
-      return this.findOne(id);
     });
+
+    const updated = await this.findOne(id);
+    await this.sendRedemptionNotification(updated, nextStatus);
+    return updated;
   }
 
   async approve(id: string, adminId: string) {
@@ -348,6 +353,53 @@ export class RedemptionService {
         description: `5% commission on electrician withdrawal - ${electrician.name}`,
         referenceId: redemption.id,
         referenceType: 'redemption',
+      }),
+    );
+  }
+
+  private async sendRedemptionNotification(redemption: Redemption, status: RedemptionStatus) {
+    if (status !== RedemptionStatus.APPROVED && status !== RedemptionStatus.REJECTED) return;
+
+    const isWithdrawal = ['bank_transfer', 'dealer_bonus_bank_transfer', 'bonus_withdrawal'].includes(redemption.type);
+    const isGift = ['gift', 'gift_order'].includes(redemption.type);
+
+    let title: string;
+    let message: string;
+
+    if (status === RedemptionStatus.APPROVED) {
+      if (isWithdrawal) {
+        title = 'Withdrawal Approved';
+        message = `Your withdrawal of ₹${redemption.amount} has been approved and will be processed soon.`;
+      } else if (isGift) {
+        title = 'Gift Approved';
+        message = 'Your gift redemption has been approved.';
+      } else {
+        title = 'Redemption Approved';
+        message = 'Your redemption request has been approved.';
+      }
+    } else {
+      const reason = redemption.rejectionReason || 'N/A';
+      if (isWithdrawal) {
+        title = 'Withdrawal Rejected';
+        message = `Your withdrawal of ₹${redemption.amount} has been rejected. Reason: ${reason}`;
+      } else if (isGift) {
+        title = 'Gift Rejected';
+        message = `Your gift redemption has been rejected. Reason: ${reason}`;
+      } else {
+        title = 'Redemption Rejected';
+        message = `Your redemption request has been rejected. Reason: ${reason}`;
+      }
+    }
+
+    await this.notificationRepository.save(
+      this.notificationRepository.create({
+        title,
+        message,
+        targetUserIds: [redemption.userId],
+        targetRole: redemption.role,
+        status: NotificationStatus.SENT,
+        sentAt: new Date(),
+        totalSent: 1,
       }),
     );
   }

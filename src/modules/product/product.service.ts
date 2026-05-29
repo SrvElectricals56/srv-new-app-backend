@@ -46,6 +46,9 @@ export class ProductService {
     const skip = (page - 1) * limit;
     const queryBuilder = this.productRepository.createQueryBuilder('product');
 
+    // Always exclude gift products — they are managed via the Gift Management module
+    queryBuilder.andWhere('product.category != :giftCat', { giftCat: 'gift' });
+
     if (search) {
       queryBuilder.andWhere(
         '(product.name ILIKE :search OR product.category ILIKE :search OR product.sku ILIKE :search)',

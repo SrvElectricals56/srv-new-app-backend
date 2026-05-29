@@ -52,6 +52,11 @@ export class MobileJwtStrategy extends PassportStrategy(Strategy, 'mobile-jwt') 
       throw new UnauthorizedException();
     }
 
+    const tokenVersion = payload.tokenVersion ?? 0;
+    if (typeof user.tokenVersion === 'number' && user.tokenVersion !== tokenVersion) {
+      throw new UnauthorizedException('Session expired. Please login again.');
+    }
+
     return { id: user.id, phone: user.phone, role: payload.role };
   }
 }

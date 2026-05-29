@@ -37,8 +37,24 @@ export class AppUserController {
     @Query('limit') limit = '20',
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('state') state?: string,
+    @Query('city') city?: string,
   ) {
-    return this.appUserService.findAll(+page, +limit, search, status);
+    return this.appUserService.findAll(+page, +limit, search, status, state, city);
+  }
+
+  @Get('distinct-states')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Get app user states' })
+  getDistinctStates() {
+    return this.appUserService.getDistinctStates();
+  }
+
+  @Get('distinct-cities')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Get app user cities' })
+  getDistinctCities(@Query('state') state?: string) {
+    return this.appUserService.getDistinctCities(state);
   }
 
   @Get('stats')

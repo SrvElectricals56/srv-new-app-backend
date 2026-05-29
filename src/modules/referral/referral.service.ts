@@ -29,10 +29,25 @@ export class ReferralService {
   ) {
     const skip = (page - 1) * limit;
 
-    const electricianQb = this.electricianRepository.createQueryBuilder('e');
-    const dealerQb = this.dealerRepository.createQueryBuilder('d');
-    const appUserQb = this.appUserRepository.createQueryBuilder('u');
-    const counterboyQb = this.counterboyRepository.createQueryBuilder('c');
+    const electricianQb = this.electricianRepository.createQueryBuilder('e').select([
+      'e.id', 'e.name', 'e.phone', 'e.electricianCode', 'e.tier', 'e.status',
+      'e.totalPoints', 'e.walletBalance', 'e.totalScans', 'e.totalRedemptions',
+      'e.joinedDate', 'e.city', 'e.state', 'e.dealerId',
+    ]);
+    const dealerQb = this.dealerRepository.createQueryBuilder('d').select([
+      'd.id', 'd.name', 'd.phone', 'd.dealerCode', 'd.tier', 'd.status',
+      'd.walletBalance', 'd.joinedDate', 'd.town', 'd.state',
+    ]);
+    const appUserQb = this.appUserRepository.createQueryBuilder('u').select([
+      'u.id', 'u.name', 'u.phone', 'u.userCode', 'u.tier', 'u.status',
+      'u.totalPoints', 'u.walletBalance', 'u.totalRedemptions',
+      'u.joinedDate', 'u.city', 'u.state',
+    ]);
+    const counterboyQb = this.counterboyRepository.createQueryBuilder('c').select([
+      'c.id', 'c.name', 'c.phone', 'c.counterboyCode', 'c.tier', 'c.status',
+      'c.totalPoints', 'c.walletBalance', 'c.totalScans', 'c.totalRedemptions',
+      'c.joinedDate', 'c.city', 'c.state', 'c.dealerId',
+    ]);
 
     if (search) {
       electricianQb.andWhere(

@@ -47,9 +47,17 @@ export class MobileAuthService {
     return Math.floor(1000 + Math.random() * 9000).toString();
   }
 
-  private generateTokens(payload: { sub: string; phone: string; role: string }) {
-    const accessToken = this.jwtService.sign(payload);
-    const refreshToken = this.jwtService.sign(payload, {
+  private async generateTokens(payload: { sub: string; phone: string; role: string }) {
+    let tokenVersion = 0;
+    try {
+      const userRepo = this.getRepositoryByRole(payload.role);
+      const user: any = await userRepo.findOne({ where: { id: payload.sub } });
+      if (user && typeof user.tokenVersion === 'number') tokenVersion = user.tokenVersion;
+    } catch {}
+
+    const tokenPayload = { ...payload, tokenVersion };
+    const accessToken = this.jwtService.sign(tokenPayload);
+    const refreshToken = this.jwtService.sign(tokenPayload, {
       secret: this.configService.get('JWT_REFRESH_SECRET'),
       expiresIn: '30d',
     });
@@ -61,6 +69,10 @@ export class MobileAuthService {
     if (!trimmed) return null;
     const salt = await bcrypt.genSalt(10);
     return bcrypt.hash(trimmed, salt);
+  }
+
+  private normalizePhone(phone?: string | null): string {
+    return String(phone ?? '').replace(/\D/g, '').slice(-10);
   }
 
   private normalizeElectricianCode(code?: string | null): string | null {
@@ -111,18 +123,37 @@ export class MobileAuthService {
 
   /** Find user entity by phone + role */
   private async findUserByPhone(phone: string, role: MobileUserRole): Promise<any> {
-    switch (role) {
-      case 'electrician':
-        return this.electricianRepository.findOne({ where: { phone }, relations: ['dealer'] });
-      case 'dealer':
-        return this.dealerRepository.findOne({ where: { phone } });
-      case 'user':
-        return this.appUserRepository.findOne({ where: { phone } });
-      case 'counterboy':
-        return this.hydrateCounterBoyDealer(
-          await this.counterboyRepository.findOne({ where: { phone } }),
-        );
+    const normalizedPhone = this.normalizePhone(phone);
+    if (!normalizedPhone) return null;
+
+    const repo = this.getRepositoryByRole(role);
+    const alias =
+      role === 'electrician'
+        ? 'electrician'
+        : role === 'dealer'
+          ? 'dealer'
+          : role === 'user'
+            ? 'user'
+            : 'counterboy';
+
+    const query = repo
+      .createQueryBuilder(alias)
+      .where(`${alias}.phone = :rawPhone`, { rawPhone: phone })
+      .orWhere(
+        `RIGHT(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), 10) = :normalizedPhone`,
+        { normalizedPhone },
+      );
+
+    if (role === 'electrician') {
+      query.leftJoinAndSelect(`${alias}.dealer`, 'dealer');
     }
+
+    const user = await query.getOne();
+    if (role === 'counterboy') {
+      return this.hydrateCounterBoyDealer(user as CounterBoy | null);
+    }
+
+    return user;
   }
 
   private getRepositoryByRole(role: string) {
@@ -225,7 +256,7 @@ export class MobileAuthService {
     await this.touchActivity(user.id, role);
 
     const payload = { sub: user.id, phone: user.phone, role };
-    const tokens = this.generateTokens(payload);
+    const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(user, role) };
   }
 
@@ -296,7 +327,7 @@ export class MobileAuthService {
     const saved = await this.dealerRepository.save(dealer) as Dealer;
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'dealer' };
-    const tokens = this.generateTokens(payload);
+    const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(saved, 'dealer') };
   }
 
@@ -306,13 +337,13 @@ export class MobileAuthService {
     dealerPhone: string; password?: string; subCategory?: string; electricianCode?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician');
-    const existing = await this.electricianRepository.findOne({ where: { phone: data.phone } });
+    const existing = await this.findUserByPhone(data.phone, 'electrician');
     if (existing) throw new ConflictException('Phone number already registered.');
 
     let dealerId: string | undefined;
     let dealerCode: string | undefined;
     if (data.dealerPhone) {
-      const dealer = await this.dealerRepository.findOne({ where: { phone: data.dealerPhone } });
+      const dealer = await this.findUserByPhone(data.dealerPhone, 'dealer');
       if (!dealer) throw new NotFoundException('Dealer not found with this phone number.');
       dealerId = dealer.id;
       dealerCode = dealer.dealerCode;
@@ -340,7 +371,7 @@ export class MobileAuthService {
       dealerId,
       electricianCode,
       subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
-      status: UserStatus.PENDING,
+      status: UserStatus.ACTIVE,
     });
     (electrician as any).passwordHash = passwordHash;
 
@@ -355,7 +386,7 @@ export class MobileAuthService {
     });
 
     const payload = { sub: saved.id, phone: saved.phone, role: 'electrician' };
-    const tokens = this.generateTokens(payload);
+    const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(savedWithDealer ?? saved, 'electrician') };
   }
 
@@ -383,14 +414,14 @@ export class MobileAuthService {
       address: data.address,
       pincode: data.pincode,
       userCode,
-      status: UserStatus.PENDING,
+      status: UserStatus.ACTIVE,
       passwordHash,
     });
 
     const saved = await this.appUserRepository.save(appUser);
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
-    const tokens = this.generateTokens(payload);
+    const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(saved, 'user') };
   }
 
@@ -418,7 +449,7 @@ export class MobileAuthService {
       address: data.address,
       pincode: data.pincode,
       counterboyCode,
-      status: UserStatus.PENDING,
+      status: UserStatus.ACTIVE,
       passwordHash,
     });
 
@@ -429,7 +460,7 @@ export class MobileAuthService {
     );
 
     const payload = { sub: saved.id, phone: saved.phone, role: 'counterboy' };
-    const tokens = this.generateTokens(payload);
+    const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(savedWithDealer ?? saved, 'counterboy') };
   }
 
@@ -461,7 +492,7 @@ export class MobileAuthService {
     await this.touchActivity(user.id, role);
 
     const payload = { sub: user.id, phone: user.phone, role };
-    const tokens = this.generateTokens(payload);
+    const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(user, role) };
   }
 
@@ -476,9 +507,8 @@ export class MobileAuthService {
       const user = await this.findUserByPhone(payload.phone, payload.role as MobileUserRole);
       if (!user) throw new UnauthorizedException('User not found');
 
-      const newPayload = { sub: user.id, phone: user.phone, role: payload.role };
-      const accessToken = this.jwtService.sign(newPayload);
-      return { accessToken };
+      const tokens = await this.generateTokens({ sub: user.id, phone: user.phone, role: payload.role });
+      return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken };
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
@@ -598,6 +628,7 @@ export class MobileAuthService {
     await this.getRepositoryByRole(role).update(userId, {
       passwordHash,
     } as any);
+    await (this.getRepositoryByRole(role) as any).increment({ id: userId }, 'tokenVersion', 1);
 
     return { message: 'Password updated successfully' };
   }

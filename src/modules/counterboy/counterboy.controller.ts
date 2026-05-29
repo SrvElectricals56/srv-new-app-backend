@@ -37,8 +37,24 @@ export class CounterBoyController {
     @Query('limit') limit = '20',
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('state') state?: string,
+    @Query('city') city?: string,
   ) {
-    return this.counterboyService.findAll(+page, +limit, search, status);
+    return this.counterboyService.findAll(+page, +limit, search, status, state, city);
+  }
+
+  @Get('distinct-states')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Get counter boy states' })
+  getDistinctStates() {
+    return this.counterboyService.getDistinctStates();
+  }
+
+  @Get('distinct-cities')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Get counter boy cities' })
+  getDistinctCities(@Query('state') state?: string) {
+    return this.counterboyService.getDistinctCities(state);
   }
 
   @Get('stats')

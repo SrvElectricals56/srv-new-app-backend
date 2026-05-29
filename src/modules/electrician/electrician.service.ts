@@ -102,6 +102,9 @@ export class ElectricianService {
     if (!data.dealerId || data.dealerId.trim() === '') {
       data.dealerId = null;
     }
+    if (!data.status) {
+      data.status = UserStatus.ACTIVE;
+    }
     data.electricianCode = await this.resolveElectricianCode({
       electricianCode: data.electricianCode,
       dealerId: data.dealerId,
@@ -137,6 +140,7 @@ export class ElectricianService {
     status?: UserStatus,
     tier?: MemberTier,
     state?: string,
+    city?: string,
     dealerId?: string,
     subCategory?: string,
     bankLinked?: boolean,
@@ -165,6 +169,10 @@ export class ElectricianService {
 
     if (state) {
       queryBuilder.andWhere('electrician.state = :state', { state });
+    }
+
+    if (city) {
+      queryBuilder.andWhere('electrician.city = :city', { city });
     }
 
     if (dealerId) {
@@ -378,9 +386,39 @@ export class ElectricianService {
       .createQueryBuilder('electrician')
       .select('DISTINCT electrician.state', 'state')
       .where('electrician.state IS NOT NULL')
+      .andWhere(`TRIM(electrician.state) <> ''`)
       .orderBy('electrician.state', 'ASC')
       .getRawMany();
-    return { states: rows.map(r => r.state).filter(Boolean) };
+    return {
+      states: Array.from(
+        new Set(
+          rows
+            .map((r) => String(r.state ?? '').trim())
+            .filter((state) => state !== '' && state !== '?'),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    };
+  }
+
+  async getDistinctCities(state?: string): Promise<{ cities: string[] }> {
+    const query = this.electricianRepository
+      .createQueryBuilder('electrician')
+      .select('DISTINCT electrician.city', 'city')
+      .where('electrician.city IS NOT NULL')
+      .andWhere(`TRIM(electrician.city) <> ''`);
+    if (state) {
+      query.andWhere('electrician.state = :state', { state });
+    }
+    const rows = await query.orderBy('electrician.city', 'ASC').getRawMany();
+    return {
+      cities: Array.from(
+        new Set(
+          rows
+            .map((r) => String(r.city ?? '').trim())
+            .filter((city) => city !== '' && city !== '?'),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    };
   }
 
   async getDistinctCategories(): Promise<{ categories: string[] }> {
