@@ -200,7 +200,7 @@ export class MobileService {
       ])
       .where(`${alias}.phone = :normalizedPhone`, { normalizedPhone })
       .orWhere(
-        `RIGHT(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), 10) = :normalizedPhone`,
+        `regexp_replace(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), '^0+', '') = regexp_replace(:normalizedPhone, '^0+', '')`,
         { normalizedPhone },
       )
       .getOne();
@@ -1077,7 +1077,6 @@ export class MobileService {
             'dealer.name',
             'dealer.phone',
             'dealer.walletBalance',
-            'dealer.totalPoints',
             'dealer.tier',
             'dealer.status',
             'dealer.bonusPoints',
@@ -1514,7 +1513,7 @@ export class MobileService {
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new NotFoundException('Dealer not found');
 
-    const existing = await this.electricianRepository.findOne({ where: { phone: body.phone } });
+    const existing = await this.findRecordByPhone(this.electricianRepository, 'electrician', body.phone);
     if (existing) {
       if (existing.dealerId === dealerId) {
         return { message: 'Electrician already in your network', electrician: existing };

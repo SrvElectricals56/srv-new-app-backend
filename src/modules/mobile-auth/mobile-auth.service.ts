@@ -140,7 +140,7 @@ export class MobileAuthService {
       .createQueryBuilder(alias)
       .where(`${alias}.phone = :rawPhone`, { rawPhone: phone })
       .orWhere(
-        `RIGHT(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), 10) = :normalizedPhone`,
+        `regexp_replace(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), '^0+', '') = regexp_replace(:normalizedPhone, '^0+', '')`,
         { normalizedPhone },
       );
 
@@ -301,7 +301,7 @@ export class MobileAuthService {
     gstNumber?: string; password?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer');
-    const existing = await this.dealerRepository.findOne({ where: { phone: data.phone } });
+    const existing = await this.findUserByPhone(data.phone, 'dealer');
     if (existing) throw new ConflictException('Phone number already registered.');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
@@ -396,7 +396,7 @@ export class MobileAuthService {
     password?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user');
-    const existing = await this.appUserRepository.findOne({ where: { phone: data.phone } });
+    const existing = await this.findUserByPhone(data.phone, 'user');
     if (existing) throw new ConflictException('Phone number already registered.');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
@@ -431,7 +431,7 @@ export class MobileAuthService {
     password?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy');
-    const existing = await this.counterboyRepository.findOne({ where: { phone: data.phone } });
+    const existing = await this.findUserByPhone(data.phone, 'counterboy');
     if (existing) throw new ConflictException('Phone number already registered.');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';

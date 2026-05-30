@@ -457,7 +457,10 @@ export class FinanceService {
     if (!dealer) throw new Error('Dealer not found');
 
     const updatePayload: Partial<typeof dealer> = {};
-    if (data.bonusPoints !== undefined) updatePayload.bonusPoints = data.bonusPoints;
+    if (data.bonusPoints !== undefined) {
+      const currentBonus = Number((dealer as any).bonusPoints ?? 0);
+      updatePayload.bonusPoints = currentBonus + data.bonusPoints;
+    }
     if (data.electricianCount !== undefined) updatePayload.electricianCount = data.electricianCount;
     if (data.bonusStatus !== undefined) (updatePayload as any).bonusStatus = data.bonusStatus;
 
