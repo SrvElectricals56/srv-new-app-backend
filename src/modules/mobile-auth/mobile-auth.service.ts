@@ -17,6 +17,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
 import { ElectricianSubCategory, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
+import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<string, { otp: string; expiresAt: number }>();
@@ -34,6 +35,7 @@ export class MobileAuthService {
     @InjectRepository(CounterBoy)
     private counterboyRepository: Repository<CounterBoy>,
     private readonly tierService: TierService,
+    private readonly crossRolePhoneService: CrossRolePhoneService,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
@@ -215,6 +217,13 @@ export class MobileAuthService {
     const user = await this.findUserByPhone(phone, role);
 
     if (!user) {
+      const existingRegistration = await this.crossRolePhoneService.findPrimaryRegistrationByPhone(phone);
+      if (existingRegistration) {
+        throw new ConflictException(
+          this.crossRolePhoneService.buildLoginRoleMismatchMessage(existingRegistration.role),
+        );
+      }
+
       const roleLabel = role === 'electrician' ? 'Electrician not registered. Please contact your dealer.'
         : role === 'dealer' ? 'Dealer not registered. Please contact SRV admin.'
         : role === 'user' ? 'User not registered. Please sign up first.'
@@ -263,8 +272,7 @@ export class MobileAuthService {
   // ── Signup OTP ─────────────────────────────────────────────────────────────
 
   async sendSignupOtp(phone: string, role: MobileUserRole) {
-    const existing = await this.findUserByPhone(phone, role);
-    if (existing) throw new ConflictException('Phone number already registered.');
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, role);
 
     const otp = this.generateOtp();
     const key = this.buildSignupOtpKey(phone, role);
@@ -278,6 +286,8 @@ export class MobileAuthService {
   }
 
   async verifySignupOtp(phone: string, role: MobileUserRole, otp: string) {
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, role);
+
     const key = this.buildSignupOtpKey(phone, role);
     const stored = otpStore.get(key);
 
@@ -301,8 +311,7 @@ export class MobileAuthService {
     gstNumber?: string; password?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer');
-    const existing = await this.findUserByPhone(data.phone, 'dealer');
-    if (existing) throw new ConflictException('Phone number already registered.');
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'dealer');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
     const dealerCode = `DLR${stateCode}${Date.now().toString().slice(-6)}`;
@@ -337,8 +346,7 @@ export class MobileAuthService {
     dealerPhone: string; password?: string; subCategory?: string; electricianCode?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician');
-    const existing = await this.findUserByPhone(data.phone, 'electrician');
-    if (existing) throw new ConflictException('Phone number already registered.');
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'electrician');
 
     let dealerId: string | undefined;
     let dealerCode: string | undefined;
@@ -396,8 +404,7 @@ export class MobileAuthService {
     password?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user');
-    const existing = await this.findUserByPhone(data.phone, 'user');
-    if (existing) throw new ConflictException('Phone number already registered.');
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'user');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
     const userCode = `USR${stateCode}${Date.now().toString().slice(-6)}`;
@@ -431,8 +438,7 @@ export class MobileAuthService {
     password?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy');
-    const existing = await this.findUserByPhone(data.phone, 'counterboy');
-    if (existing) throw new ConflictException('Phone number already registered.');
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'counterboy');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
     const counterboyCode = `CBY${stateCode}${Date.now().toString().slice(-6)}`;
@@ -469,7 +475,15 @@ export class MobileAuthService {
   async passwordLogin(phone: string, role: MobileUserRole, password: string) {
     const user = await this.findUserByPhone(phone, role);
 
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) {
+      const existingRegistration = await this.crossRolePhoneService.findPrimaryRegistrationByPhone(phone);
+      if (existingRegistration) {
+        throw new ConflictException(
+          this.crossRolePhoneService.buildLoginRoleMismatchMessage(existingRegistration.role),
+        );
+      }
+      throw new NotFoundException('User not found.');
+    }
     if (user.status === 'suspended') throw new UnauthorizedException('Account is suspended.');
 
     const isDev = this.configService.get('NODE_ENV') === 'development';

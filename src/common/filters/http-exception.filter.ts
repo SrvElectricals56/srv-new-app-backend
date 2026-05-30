@@ -23,7 +23,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const res = exception.getResponse();
-      message = typeof res === 'string' ? res : (res as any).message || message;
+      if (typeof res === 'string') {
+        message = res;
+      } else {
+        const rawMessage = (res as { message?: string | string[] }).message;
+        if (Array.isArray(rawMessage)) {
+          message = rawMessage.join(', ');
+        } else if (typeof rawMessage === 'string') {
+          message = rawMessage;
+        }
+      }
     } else if (exception instanceof QueryFailedError) {
       const err = exception as any;
       // PostgreSQL error codes

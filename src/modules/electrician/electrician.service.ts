@@ -10,6 +10,7 @@ import { Scan } from '../../database/entities/scan.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { UserStatus, MemberTier } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
+import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
 @Injectable()
 export class ElectricianService {
@@ -23,6 +24,7 @@ export class ElectricianService {
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
     private readonly tierService: TierService,
+    private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
 
   private async hashPassword(password?: string) {
@@ -121,13 +123,10 @@ export class ElectricianService {
   }
 
   async create(createElectricianDto: CreateElectricianDto) {
-    const existingElectrician = await this.electricianRepository.findOne({
-      where: { phone: createElectricianDto.phone },
-    });
-
-    if (existingElectrician) {
-      throw new ConflictException('Electrician with this phone already exists');
-    }
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(
+      createElectricianDto.phone,
+      'electrician',
+    );
 
     const data: any = { ...createElectricianDto };
     if (!data.dealerId || data.dealerId.trim() === '') {
@@ -263,12 +262,11 @@ export class ElectricianService {
     const electrician = await this.findOne(id);
 
     if (updateElectricianDto.phone && updateElectricianDto.phone !== electrician.phone) {
-      const existingElectrician = await this.electricianRepository.findOne({
-        where: { phone: updateElectricianDto.phone },
-      });
-      if (existingElectrician) {
-        throw new ConflictException('Electrician with this phone already exists');
-      }
+      await this.crossRolePhoneService.assertPhoneAvailableForRole(
+        updateElectricianDto.phone,
+        'electrician',
+        { role: 'electrician', id },
+      );
     }
 
     const passwordHash = await this.hashPassword(updateElectricianDto.password);
@@ -404,6 +402,7 @@ export class ElectricianService {
           await this.electricianRepository.update(existing.id, updateData);
           updated++;
         } else {
+          await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'electrician');
           const data: any = { ...record };
           if (!data.dealerId || data.dealerId.trim() === '') data.dealerId = null;
           data.electricianCode = await this.resolveElectricianCode({

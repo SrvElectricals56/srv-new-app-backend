@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { UserStatus } from '../../common/enums';
+import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
 @Injectable()
 export class CounterBoyService {
@@ -13,6 +14,7 @@ export class CounterBoyService {
     private counterboyRepository: Repository<CounterBoy>,
     @InjectRepository(Dealer)
     private dealerRepository: Repository<Dealer>,
+    private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
 
   private async generateUniqueCounterBoyCode() {
@@ -104,6 +106,7 @@ export class CounterBoyService {
           await this.counterboyRepository.update(existing.id, payload);
           updated++;
         } else {
+          await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'counterboy');
           const data: any = { ...record };
 
           if (!data.counterboyCode) {
@@ -212,10 +215,7 @@ export class CounterBoyService {
     const phone = data.phone.trim();
     const email = data.email?.trim() || null;
 
-    const existingPhone = await this.counterboyRepository.exists({ where: { phone } });
-    if (existingPhone) {
-      throw new BadRequestException('Phone number already exists');
-    }
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'counterboy');
 
     if (email) {
       const existingEmail = await this.counterboyRepository.exists({ where: { email } });
@@ -264,7 +264,15 @@ export class CounterBoyService {
   }
 
   async update(id: string, data: Partial<CounterBoy>) {
-    await this.findOnePlain(id);
+    const existing = await this.findOnePlain(id);
+
+    if (data.phone?.trim() && data.phone.trim() !== existing.phone) {
+      await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone.trim(), 'counterboy', {
+        role: 'counterboy',
+        id,
+      });
+    }
+
     const passwordHash = await this.hashPassword((data as Partial<CounterBoy> & { password?: string }).password);
     const payload = { ...data } as Partial<CounterBoy> & { password?: string };
     const requestedCode = this.normalizeRequestedCode(payload.counterboyCode);

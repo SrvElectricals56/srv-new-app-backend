@@ -9,6 +9,7 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { UserStatus, MemberTier } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
+import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
 @Injectable()
 export class DealerService {
@@ -20,6 +21,7 @@ export class DealerService {
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
     private readonly tierService: TierService,
+    private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
 
   private async hashPassword(password?: string) {
@@ -49,15 +51,14 @@ export class DealerService {
   }
 
   async create(createDealerDto: CreateDealerDto) {
-    const existingDealer = await this.dealerRepository.findOne({
-      where: [
-        { phone: createDealerDto.phone },
-        { dealerCode: createDealerDto.dealerCode },
-      ],
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(createDealerDto.phone, 'dealer');
+
+    const existingCode = await this.dealerRepository.findOne({
+      where: { dealerCode: createDealerDto.dealerCode },
     });
 
-    if (existingDealer) {
-      throw new ConflictException('Dealer with this phone or code already exists');
+    if (existingCode) {
+      throw new ConflictException('Dealer with this code already exists');
     }
 
     // New dealer starts with 0 electricians → Silver tier
@@ -151,12 +152,10 @@ export class DealerService {
     const dealer = await this.findOne(id);
 
     if (updateDealerDto.phone && updateDealerDto.phone !== dealer.phone) {
-      const existingDealer = await this.dealerRepository.findOne({
-        where: { phone: updateDealerDto.phone },
+      await this.crossRolePhoneService.assertPhoneAvailableForRole(updateDealerDto.phone, 'dealer', {
+        role: 'dealer',
+        id,
       });
-      if (existingDealer) {
-        throw new ConflictException('Dealer with this phone already exists');
-      }
     }
 
     // Strip tier from update payload — tier is always auto-calculated
@@ -312,6 +311,7 @@ export class DealerService {
           await this.tierService.syncDealerTier(existing.id);
           updated++;
         } else {
+          await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'dealer');
           const data: any = { ...mapped };
           if (!data.dealerCode) {
             data.dealerCode = `DLR${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 900 + 100)}`;

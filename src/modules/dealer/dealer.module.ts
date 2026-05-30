@@ -6,9 +6,10 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { TierModule } from '../../common/services/tier.module';
+import { CrossRolePhoneModule } from '../../common/services/cross-role-phone.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Dealer, Electrician, Wallet]), TierModule],
+  imports: [TypeOrmModule.forFeature([Dealer, Electrician, Wallet]), TierModule, CrossRolePhoneModule],
   controllers: [DealerController],
   providers: [DealerService],
   exports: [DealerService],

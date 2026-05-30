@@ -11,11 +11,13 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TierModule } from '../../common/services/tier.module';
+import { CrossRolePhoneModule } from '../../common/services/cross-role-phone.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Electrician, Dealer, AppUser, CounterBoy]),
     TierModule,
+    CrossRolePhoneModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

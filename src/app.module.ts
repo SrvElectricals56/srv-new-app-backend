@@ -55,6 +55,7 @@ import { AppUserModule } from './modules/app-user/app-user.module';
 import { CounterBoyModule } from './modules/counterboy/counterboy.module';
 import { PlayModule } from './modules/play/play.module';
 import { AppIconModule } from './modules/app-icon/app-icon.module';
+import { CrossRolePhoneModule } from './common/services/cross-role-phone.module';
 
 @Module({
   imports: [
@@ -101,6 +102,8 @@ import { AppIconModule } from './modules/app-icon/app-icon.module';
 
     // Scheduling
     ScheduleModule.forRoot(),
+
+    CrossRolePhoneModule,
 
     // Feature Modules
     AuthModule,

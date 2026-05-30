@@ -4,12 +4,14 @@ import { Repository, Like } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { UserStatus } from '../../common/enums';
+import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
 @Injectable()
 export class AppUserService {
   constructor(
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
+    private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
 
   private async generateUniqueUserCode() {
@@ -63,10 +65,7 @@ export class AppUserService {
     const phone = data.phone.trim();
     const email = data.email?.trim() || null;
 
-    const existingPhone = await this.appUserRepository.exists({ where: { phone } });
-    if (existingPhone) {
-      throw new BadRequestException('Phone number already exists');
-    }
+    await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'user');
 
     if (email) {
       const existingEmail = await this.appUserRepository.exists({ where: { email } });
@@ -137,6 +136,7 @@ export class AppUserService {
           await this.appUserRepository.update(existing.id, payload);
           updated++;
         } else {
+          await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'user');
           const data: any = { ...record };
           if (!data.userCode) data.userCode = await this.generateUniqueUserCode();
           const passwordHash = await this.hashPassword(data.password);
@@ -231,7 +231,15 @@ export class AppUserService {
   }
 
   async update(id: string, data: Partial<AppUser>) {
-    await this.findOnePlain(id);
+    const existing = await this.findOnePlain(id);
+
+    if (data.phone?.trim() && data.phone.trim() !== existing.phone) {
+      await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone.trim(), 'user', {
+        role: 'user',
+        id,
+      });
+    }
+
     const passwordHash = await this.hashPassword((data as Partial<AppUser> & { password?: string }).password);
     const payload = { ...data } as Partial<AppUser> & { password?: string };
     const requestedCode = this.normalizeRequestedCode(payload.userCode);
