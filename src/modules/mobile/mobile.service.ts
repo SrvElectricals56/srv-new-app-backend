@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
@@ -32,6 +33,7 @@ export class MobileService {
 
   constructor(
     private dataSource: DataSource,
+    private readonly configService: ConfigService,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
     @InjectRepository(Banner)
@@ -68,6 +70,37 @@ export class MobileService {
     private productCategoryRepository: Repository<ProductCategory>,
     private readonly tierService: TierService,
   ) {}
+
+  private getPublicBaseUrl() {
+    const appUrl = this.configService.get<string>('APP_URL')?.trim();
+    if (appUrl) return appUrl.replace(/\/$/, '');
+
+    const host = this.configService.get<string>('SERVER_HOST')?.trim() || 'localhost';
+    if (/^https?:\/\//i.test(host)) return host.replace(/\/$/, '');
+
+    const port = this.configService.get<string>('PORT') || '3001';
+    return `http://${host}:${port}`;
+  }
+
+  private normalizeUploadUrl(value?: string | null) {
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+
+    const publicBaseUrl = this.getPublicBaseUrl();
+    if (trimmed.startsWith('/uploads/')) return `${publicBaseUrl}${trimmed}`;
+
+    try {
+      const parsed = new URL(trimmed);
+      if (['localhost', '127.0.0.1', '10.0.2.2'].includes(parsed.hostname) && parsed.pathname.startsWith('/uploads/')) {
+        return `${publicBaseUrl}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      }
+    } catch {
+      const uploadPathIndex = trimmed.indexOf('/uploads/');
+      if (uploadPathIndex >= 0) return `${publicBaseUrl}${trimmed.slice(uploadPathIndex)}`;
+    }
+
+    return trimmed;
+  }
 
   private async ensurePersistenceArtifacts() {
     if (!this.persistenceSetupPromise) {
@@ -627,9 +660,9 @@ export class MobileService {
       dealerCanAddElectrician: map['dealerCanAddElectrician'] !== 'false',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
-      generalCatalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
-      dealerCatalogPdfUrl: map['dealerCatalogPdfUrl'] ?? null,
-      catalogPdfUrl: map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl'] ?? null,
+      generalCatalogPdfUrl: this.normalizeUploadUrl(map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl']),
+      dealerCatalogPdfUrl: this.normalizeUploadUrl(map['dealerCatalogPdfUrl']),
+      catalogPdfUrl: this.normalizeUploadUrl(map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl']),
       rolePageControls,
       appPageContent,
       pageSectionOrder,
@@ -1033,16 +1066,22 @@ export class MobileService {
   }
 
   async saveBankAccount(userId: string, role: string, data: {
-    accountHolderName: string; bankName: string; accountNumber: string; ifsc: string; upiId?: string;
+    accountHolderName: string; upiId: string; bankName?: string | null; accountNumber?: string | null; ifsc?: string | null;
   }) {
+    const accountHolderName = data.accountHolderName?.trim();
+    const upiId = data.upiId?.trim();
+    if (!accountHolderName || !upiId) {
+      throw new BadRequestException('Account holder name and UPI ID are required');
+    }
+
     const updateData: any = {
-      accountHolderName: data.accountHolderName,
-      bankName: data.bankName,
-      bankAccount: data.accountNumber,
-      ifsc: data.ifsc,
+      accountHolderName,
+      upiId,
+      bankName: data.bankName?.trim() || null,
+      bankAccount: data.accountNumber?.trim() || null,
+      ifsc: data.ifsc?.trim().toUpperCase() || null,
       bankLinked: true,
     };
-    if (data.upiId) updateData.upiId = data.upiId;
 
     await this.updateUserByRole(userId, role, updateData);
     return { message: 'Bank account saved successfully' };
@@ -1059,7 +1098,7 @@ export class MobileService {
     if (normalizedRole === UserRole.DEALER) {
       const dealer = await this.dealerRepository.findOne({ where: { id: userId } });
       if (!dealer) throw new NotFoundException('Dealer not found');
-      if (!dealer.bankLinked || !dealer.accountHolderName || !dealer.bankAccount || !dealer.ifsc) {
+      if (!dealer.bankLinked || !dealer.accountHolderName || !dealer.upiId) {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
 
@@ -1150,8 +1189,7 @@ export class MobileService {
       if (
         !(user as any).bankLinked ||
         !(user as any).accountHolderName ||
-        !(user as any).bankAccount ||
-        !(user as any).ifsc
+        !(user as any).upiId
       ) {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }

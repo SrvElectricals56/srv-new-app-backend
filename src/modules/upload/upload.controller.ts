@@ -45,12 +45,9 @@ export class UploadController {
     return `http://${host}:${port}`;
   }
 
-  // Build URL using the actual request host — so admin browser gets localhost URL
-  // and mobile app gets the LAN IP URL automatically.
-  private buildFileUrl(req: Request, subPath: string): string {
-    const proto = req.protocol || 'http';
-    const host = req.get('host') || `localhost:${this.configService.get('PORT') || '3001'}`;
-    return `${proto}://${host}/uploads/${subPath}`;
+  // Build URLs from configured public host so mobile devices never receive localhost links.
+  private buildFileUrl(_req: Request, subPath: string): string {
+    return `${this.getBaseUrl()}/uploads/${subPath}`;
   }
 
   // ── Admin-only endpoints (JwtAuthGuard — validates against admins table) ──
