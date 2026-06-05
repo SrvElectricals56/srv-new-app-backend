@@ -187,9 +187,7 @@ export class WalletService {
     if (pointsDelta !== undefined && userRole !== UserRole.DEALER) {
       const syncedPoints = Math.max(0, Number(newBalance ?? 0));
       updateData.totalPoints = syncedPoints;
-      if (userRole === UserRole.ELECTRICIAN) {
-        updateData.tier = this.calculateTier(syncedPoints);
-      }
+      updateData.tier = this.calculateTier(syncedPoints);
     }
 
     switch (userRole) {

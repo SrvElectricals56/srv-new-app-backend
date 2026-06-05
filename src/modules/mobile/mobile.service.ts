@@ -203,6 +203,11 @@ export class MobileService {
         select.push('user.totalPoints', 'user.dealerId', 'user.counterboyCode');
         break;
     }
+
+    select.push(
+      'user.bankLinked', 'user.accountHolderName', 'user.upiId',
+      'user.bankAccount', 'user.ifsc', 'user.bankName',
+    );
     return this.getUserRepositoryByRole(role, manager)
       .createQueryBuilder('user')
       .select(select)

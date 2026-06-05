@@ -64,6 +64,7 @@ export enum TransactionSource {
   TRANSFER = 'transfer',
   REFUND = 'refund',
   COMMISSION = 'commission',
+  PURCHASE = 'purchase',
 }
 
 export enum OrderStatus {

@@ -1,13 +1,27 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ProductOrder, ProductOrderStatus } from '../../database/entities/product-order.entity';
+import { PointsConfig } from '../../database/entities/points-config.entity';
+import { Wallet } from '../../database/entities/wallet.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { TransactionType, TransactionSource, UserRole } from '../../common/enums';
 
 @Injectable()
 export class ProductOrderService {
   constructor(
     @InjectRepository(ProductOrder)
     private productOrderRepository: Repository<ProductOrder>,
+    @InjectRepository(PointsConfig)
+    private pointsConfigRepository: Repository<PointsConfig>,
+    @InjectRepository(Wallet)
+    private walletRepository: Repository<Wallet>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterBoyRepository: Repository<CounterBoy>,
+    private dataSource: DataSource,
   ) {}
 
   async findAll(page = 1, limit = 20, status?: string, role?: string, search?: string) {
@@ -92,8 +106,75 @@ export class ProductOrderService {
       updateData.trackingNumber = extra.trackingNumber;
     }
 
+    // ── Credit points to user/counterboy wallet on delivery ──
+    if (
+      status === ProductOrderStatus.DELIVERED &&
+      (order.userRole === UserRole.USER || order.userRole === UserRole.COUNTERBOY)
+    ) {
+      const pointsConfig = await this.pointsConfigRepository.findOne({
+        where: { productId: order.productId, isActive: true },
+      });
+      const pointsPerUnit = pointsConfig?.basePoints ?? 0;
+      const totalPoints = pointsPerUnit * order.quantity;
+
+      if (totalPoints > 0) {
+        await this.dataSource.transaction(async (manager) => {
+          await manager.getRepository(ProductOrder).update(id, updateData);
+
+          let user: any;
+          if (order.userRole === UserRole.USER) {
+            user = await manager.getRepository(AppUser).findOne({ where: { id: order.userId } });
+          } else {
+            user = await manager.getRepository(CounterBoy).findOne({ where: { id: order.userId } });
+          }
+          if (!user) return;
+
+          const balanceBefore = Number(user.walletBalance ?? 0);
+          const newBalance = balanceBefore + totalPoints;
+          const newTotalPoints = Math.max(0, newBalance);
+
+          const updateUserData: any = {
+            walletBalance: newBalance,
+            totalPoints: newTotalPoints,
+          };
+
+          updateUserData.tier = this.calculateTier(newTotalPoints);
+
+          if (order.userRole === UserRole.USER) {
+            await manager.getRepository(AppUser).update(order.userId, updateUserData);
+          } else {
+            await manager.getRepository(CounterBoy).update(order.userId, updateUserData);
+          }
+
+          await manager.getRepository(Wallet).save(
+            manager.getRepository(Wallet).create({
+              userId: order.userId,
+              userRole: order.userRole,
+              type: TransactionType.CREDIT,
+              source: TransactionSource.PURCHASE,
+              amount: totalPoints,
+              balanceBefore,
+              balanceAfter: newBalance,
+              description: `Product purchase: ${order.productName} × ${order.quantity}`,
+              referenceId: order.id,
+              referenceType: 'product_order',
+            }),
+          );
+        });
+
+        return { message: 'Order delivered & points credited successfully' };
+      }
+    }
+
     await this.productOrderRepository.update(id, updateData);
     return { message: 'Order status updated successfully' };
+  }
+
+  private calculateTier(points: number): string {
+    if (points >= 10000) return 'Diamond';
+    if (points >= 5001) return 'Platinum';
+    if (points >= 1001) return 'Gold';
+    return 'Silver';
   }
 
   async remove(id: string) {
