@@ -86,7 +86,7 @@ export class RedemptionService {
 
     const isDealerBonus =
       redemption.role === UserRole.DEALER &&
-      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
+      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal' || redemption.type === 'gift');
 
     const balanceBefore = Number(
       isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
@@ -135,7 +135,7 @@ export class RedemptionService {
 
     const isDealerBonus =
       redemption.role === UserRole.DEALER &&
-      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
+      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal' || redemption.type === 'gift');
 
     const balanceBefore = Number(
       isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,

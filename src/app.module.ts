@@ -15,6 +15,8 @@ import { Notification } from './database/entities/notification.entity';
 import { Offer } from './database/entities/offer.entity';
 import { PointsConfig } from './database/entities/points-config.entity';
 import { Product } from './database/entities/product.entity';
+import { ProductCartItem } from './database/entities/product-cart-item.entity';
+import { ProductOrder } from './database/entities/product-order.entity';
 import { QrCode } from './database/entities/qr-code.entity';
 import { Redemption } from './database/entities/redemption.entity';
 import { Scan } from './database/entities/scan.entity';
@@ -55,6 +57,8 @@ import { AppUserModule } from './modules/app-user/app-user.module';
 import { CounterBoyModule } from './modules/counterboy/counterboy.module';
 import { PlayModule } from './modules/play/play.module';
 import { AppIconModule } from './modules/app-icon/app-icon.module';
+import { CartModule } from './modules/cart/cart.module';
+import { ProductOrderModule } from './modules/product-order/product-order.module';
 import { CrossRolePhoneModule } from './common/services/cross-role-phone.module';
 
 @Module({
@@ -77,7 +81,7 @@ import { CrossRolePhoneModule } from './common/services/cross-role-phone.module'
         database: configService.get<string>('DB_DATABASE', 'srv_admin'),
         entities: [
           Admin, Banner, Dealer, Electrician, AppUser, CounterBoy,
-          Notification, Offer, PointsConfig, Product, QrCode, Redemption,
+          Notification, Offer, PointsConfig, Product, ProductCartItem, ProductOrder, QrCode, Redemption,
           Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play, AppIcon,
         ],
         synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
@@ -133,6 +137,8 @@ import { CrossRolePhoneModule } from './common/services/cross-role-phone.module'
     CounterBoyModule,
     PlayModule,
     AppIconModule,
+    CartModule,
+    ProductOrderModule,
   ],
 })
 export class AppModule {}

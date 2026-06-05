@@ -4,6 +4,8 @@ import { MobileController } from './mobile.controller';
 import { MobileService } from './mobile.service';
 import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
 import { Product } from '../../database/entities/product.entity';
+import { ProductCartItem } from '../../database/entities/product-cart-item.entity';
+import { ProductOrder } from '../../database/entities/product-order.entity';
 import { Banner } from '../../database/entities/banner.entity';
 import { Notification } from '../../database/entities/notification.entity';
 import { Offer } from '../../database/entities/offer.entity';
@@ -25,7 +27,7 @@ import { TierModule } from '../../common/services/tier.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-      Product, Banner, Notification, Offer, Testimonial,
+      Product, ProductCartItem, ProductOrder, Banner, Notification, Offer, Testimonial,
       QrCode, Scan, Wallet, Electrician, Dealer, AppUser, CounterBoy, Redemption,
       Settings, SupportTicket, GiftOrder, ProductCategory,
     ]),

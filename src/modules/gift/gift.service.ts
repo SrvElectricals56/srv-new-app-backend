@@ -5,6 +5,9 @@ import { CreateGiftProductDto } from './dto/create-gift-product.dto';
 import { UpdateGiftProductDto } from './dto/update-gift-product.dto';
 import { Product } from '../../database/entities/product.entity';
 import { GiftOrder, GiftOrderStatus } from '../../database/entities/gift-order.entity';
+import { Redemption } from '../../database/entities/redemption.entity';
+import { RedemptionService } from '../redemption/redemption.service';
+import { RedemptionStatus } from '../../common/enums';
 
 @Injectable()
 export class GiftService {
@@ -13,6 +16,9 @@ export class GiftService {
     private productRepository: Repository<Product>,
     @InjectRepository(GiftOrder)
     private giftOrderRepository: Repository<GiftOrder>,
+    @InjectRepository(Redemption)
+    private redemptionRepository: Repository<Redemption>,
+    private redemptionService: RedemptionService,
   ) {}
 
   // ─── Gift Products ────────────────────────────────────────────────────────
@@ -244,9 +250,26 @@ export class GiftService {
       updateData.processedAt = new Date();
     }
 
-    // If rejected, restore stock
+    // If rejected, restore stock and refund points via Redemption
     if (status === GiftOrderStatus.REJECTED && order.status !== GiftOrderStatus.REJECTED) {
       await this.productRepository.increment({ id: order.giftProductId }, 'stock', 1);
+
+      const redemption = await this.redemptionRepository.findOne({
+        where: {
+          userId: order.userId,
+          points: order.pointsUsed,
+          type: 'gift',
+          status: RedemptionStatus.PENDING,
+        },
+        order: { requestedAt: 'DESC' },
+      });
+      if (redemption) {
+        await this.redemptionService.reject(
+          redemption.id,
+          extra?.rejectionReason || 'Gift order rejected by admin',
+          extra?.processedBy || 'admin',
+        );
+      }
     }
 
     await this.giftOrderRepository.update(id, updateData);

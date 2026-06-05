@@ -8,6 +8,8 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
+import { ProductCartItem } from '../../database/entities/product-cart-item.entity';
+import { ProductOrder, ProductOrderStatus } from '../../database/entities/product-order.entity';
 import { Banner } from '../../database/entities/banner.entity';
 import { Notification } from '../../database/entities/notification.entity';
 import { Offer } from '../../database/entities/offer.entity';
@@ -36,6 +38,10 @@ export class MobileService {
     private readonly configService: ConfigService,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
+    @InjectRepository(ProductCartItem)
+    private productCartItemRepository: Repository<ProductCartItem>,
+    @InjectRepository(ProductOrder)
+    private productOrderRepository: Repository<ProductOrder>,
     @InjectRepository(Banner)
     private bannerRepository: Repository<Banner>,
     @InjectRepository(Notification)
@@ -173,24 +179,33 @@ export class MobileService {
     role: string,
     manager: EntityManager,
   ) {
+    const normalizedRole = this.normalizeRole(role);
+    const select = [
+      'user.id',
+      'user.name',
+      'user.phone',
+      'user.walletBalance',
+      'user.tier',
+      'user.status',
+      'user.address',
+    ];
+    switch (normalizedRole) {
+      case UserRole.DEALER:
+        select.push('user.bonusPoints', 'user.dealerCode');
+        break;
+      case UserRole.ELECTRICIAN:
+        select.push('user.totalPoints', 'user.dealerId', 'user.electricianCode');
+        break;
+      case UserRole.USER:
+        select.push('user.totalPoints', 'user.userCode');
+        break;
+      case UserRole.COUNTERBOY:
+        select.push('user.totalPoints', 'user.dealerId', 'user.counterboyCode');
+        break;
+    }
     return this.getUserRepositoryByRole(role, manager)
       .createQueryBuilder('user')
-      .select([
-        'user.id',
-        'user.name',
-        'user.phone',
-        'user.walletBalance',
-        'user.totalPoints',
-        'user.tier',
-        'user.dealerId',
-        'user.status',
-        'user.bankLinked',
-        'user.upiId',
-        'user.bankAccount',
-        'user.ifsc',
-        'user.bankName',
-        'user.accountHolderName',
-      ])
+      .select(select)
       .setLock('pessimistic_write')
       .where('user.id = :userId', { userId })
       .getOne();
@@ -354,7 +369,11 @@ export class MobileService {
       .getRawOne();
 
     const balance = Number((user as any)?.walletBalance ?? 0);
-    const effectivePoints = normalizedRole === UserRole.DEALER ? 0 : balance;
+    // Dealers earn via bonusPoints (commission from electrician activity), not walletBalance
+    const isDealer = normalizedRole === UserRole.DEALER;
+    const totalPoints = isDealer
+      ? Number((user as any)?.bonusPoints ?? 0)
+      : balance;
 
     return {
       balance,
@@ -365,7 +384,7 @@ export class MobileService {
       totalwallet_amount: balance,
       totalearnedwallet_amount: Number(totals?.totalEarned ?? 0),
       totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
-      totalPoints: effectivePoints,
+      totalPoints,
       totalScans: Number((user as any)?.totalScans ?? 0),
     };
   }
@@ -497,7 +516,92 @@ export class MobileService {
       where: { id, isActive: true },
     });
     if (!product) throw new NotFoundException('Product not found');
-    return product;
+    const imageValue = this.normalizeUploadUrl(product.image) ?? product.image?.trim() ?? null;
+    return {
+      ...product,
+      image: imageValue,
+      imageUrl: imageValue,
+    };
+  }
+
+  private getUserCodeForRole(user: any, role: UserRole) {
+    if (role === UserRole.ELECTRICIAN) return user?.electricianCode ?? '';
+    if (role === UserRole.DEALER) return user?.dealerCode ?? '';
+    if (role === UserRole.COUNTERBOY) return user?.counterboyCode ?? '';
+    return user?.userCode ?? '';
+  }
+
+  async addProductToCart(userId: string, role: string, body: { productId: string; quantity?: number }) {
+    const quantity = Math.max(1, Number(body.quantity ?? 1));
+    if (!body.productId) throw new BadRequestException('Product is required');
+
+    const normalizedRole = this.normalizeRole(role);
+    const [user, product] = await Promise.all([
+      this.getUserByRole(userId, normalizedRole),
+      this.productRepository.findOne({ where: { id: body.productId, isActive: true } }),
+    ]);
+
+    if (!user) throw new NotFoundException('User not found');
+    if (!product || product.category === 'gift') throw new NotFoundException('Product not found');
+
+    const existing = await this.productCartItemRepository.findOne({
+      where: { userId, userRole: normalizedRole, productId: product.id },
+    });
+
+    const itemData = {
+      userId,
+      userRole: normalizedRole,
+      userName: (user as any).name ?? '',
+      userPhone: (user as any).phone ?? '',
+      userCode: this.getUserCodeForRole(user, normalizedRole),
+      productId: product.id,
+      productName: product.name,
+      productImage: this.normalizeUploadUrl(product.image) ?? product.image ?? '',
+      quantity,
+      price: Number(product.price ?? 0),
+    };
+
+    const saved = existing
+      ? await this.productCartItemRepository.save({ ...existing, ...itemData, quantity: existing.quantity + quantity })
+      : await this.productCartItemRepository.save(this.productCartItemRepository.create(itemData));
+
+    return { message: 'Product added to cart', item: saved };
+  }
+
+  async createProductOrder(userId: string, role: string, body: { productId: string; quantity?: number; shippingAddress?: string }) {
+    const quantity = Math.max(1, Number(body.quantity ?? 1));
+    if (!body.productId) throw new BadRequestException('Product is required');
+
+    const normalizedRole = this.normalizeRole(role);
+    const [user, product] = await Promise.all([
+      this.getUserByRole(userId, normalizedRole),
+      this.productRepository.findOne({ where: { id: body.productId, isActive: true } }),
+    ]);
+
+    if (!user) throw new NotFoundException('User not found');
+    if (!product || product.category === 'gift') throw new NotFoundException('Product not found');
+    if (Number(product.stock ?? 0) <= 0) throw new BadRequestException('Product is out of stock');
+
+    const order = await this.productOrderRepository.save(
+      this.productOrderRepository.create({
+        userId,
+        userRole: normalizedRole,
+        userName: (user as any).name ?? '',
+        userPhone: (user as any).phone ?? '',
+        userCode: this.getUserCodeForRole(user, normalizedRole),
+        productId: product.id,
+        productName: product.name,
+        productImage: this.normalizeUploadUrl(product.image) ?? product.image ?? '',
+        quantity,
+        price: Number(product.price ?? 0),
+        status: ProductOrderStatus.PENDING,
+        shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
+      }),
+    );
+
+    await this.productRepository.decrement({ id: product.id }, 'stock', quantity);
+
+    return { message: 'Product order submitted successfully', order };
   }
 
   // ── Banners ────────────────────────────────────────────────────────────────
@@ -658,6 +762,7 @@ export class MobileService {
       testimonialsEnabled: map['testimonialsEnabled'] !== 'false',
       playEnabled: map['playEnabled'] !== 'false',
       dealerCanAddElectrician: map['dealerCanAddElectrician'] !== 'false',
+      upiOnlyMode: map['upiOnlyMode'] === 'true',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
       generalCatalogPdfUrl: this.normalizeUploadUrl(map['generalCatalogPdfUrl'] ?? map['catalogPdfUrl']),
@@ -715,10 +820,17 @@ export class MobileService {
 
     if (role) {
       // 'user' role in app = 'customer' in admin panel — treat as aliases
+      // 'counterboy' shares gifts with 'electrician' — both earn by scanning
       const normalizedRole = role === 'user' ? 'customer' : role;
+      const electricianAlias = role === 'counterboy' ? 'electrician' : null;
       qb.andWhere(
-        '(p.subCategory IS NULL OR p.subCategory = :role OR p.subCategory = :alias OR p.subCategory = :all)',
-        { role: normalizedRole, alias: role, all: 'all' },
+        `(p.subCategory IS NULL OR p.subCategory = :role OR p.subCategory = :alias OR p.subCategory = :all${electricianAlias ? ' OR p.subCategory = :elecAlias' : ''})`,
+        {
+          role: normalizedRole,
+          alias: role,
+          all: 'all',
+          ...(electricianAlias ? { elecAlias: electricianAlias } : {}),
+        },
       );
     }
 
@@ -1265,7 +1377,13 @@ export class MobileService {
       if (!user) throw new NotFoundException('User not found');
 
       const pointsRequired = Number(product.points ?? 0);
-      const currentBalance = Number((user as any).walletBalance ?? 0);
+
+      // Dealers spend from bonusPoints; all other roles spend from walletBalance
+      const isDealerRole = normalizedRole === UserRole.DEALER;
+      const currentBalance = isDealerRole
+        ? Number((user as any).bonusPoints ?? 0)
+        : Number((user as any).walletBalance ?? 0);
+
       if (currentBalance < pointsRequired) {
         throw new BadRequestException('Insufficient points for this redemption');
       }
@@ -1287,17 +1405,19 @@ export class MobileService {
         }),
       );
 
-      await this.updateUserByRole(
-        userId,
-        role,
-        this.buildTransferBalanceUpdate(
-          user,
-          normalizedRole,
-          newBalance,
-          -pointsRequired,
-        ),
-        manager,
-      );
+      // Update the correct balance field depending on role
+      if (isDealerRole) {
+        await manager.getRepository(Dealer).update(userId, {
+          bonusPoints: newBalance,
+        });
+      } else {
+        await this.updateUserByRole(
+          userId,
+          role,
+          this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -pointsRequired),
+          manager,
+        );
+      }
 
       const walletTransaction = await manager.getRepository(Wallet).save(
         manager.getRepository(Wallet).create({
@@ -1666,21 +1786,52 @@ export class MobileService {
   // ── Orders ─────────────────────────────────────────────────────────────────
 
   async getMyOrders(userId: string) {
-    const orders = await this.giftOrderRepository.find({
-      where: { userId },
-      order: { orderedAt: 'DESC' },
-    });
+    const [giftOrders, productOrders] = await Promise.all([
+      this.giftOrderRepository.find({
+        where: { userId },
+        order: { orderedAt: 'DESC' },
+      }),
+      this.productOrderRepository.find({
+        where: { userId },
+        order: { orderedAt: 'DESC' },
+      }),
+    ]);
 
-    return orders.map(o => ({
+    const giftMapped = giftOrders.map(o => ({
       id: o.id,
+      type: 'gift' as const,
       status: o.status,
       title: o.giftName,
+      productName: o.giftName,
+      quantity: 1,
+      price: o.pointsUsed,
+      total: o.pointsUsed,
       userId: o.userId,
       userName: o.userName,
       points: o.pointsUsed,
       deliveredAt: o.processedAt?.toISOString() ?? null,
       createdAt: o.orderedAt.toISOString(),
     }));
+
+    const productMapped = productOrders.map(o => ({
+      id: o.id,
+      type: 'product' as const,
+      status: o.status,
+      title: o.productName,
+      productName: o.productName,
+      quantity: o.quantity,
+      price: parseFloat(o.price.toString()),
+      total: parseFloat(o.price.toString()) * o.quantity,
+      userId: o.userId,
+      userName: o.userName,
+      points: parseFloat(o.price.toString()) * o.quantity,
+      deliveredAt: o.orderedAt?.toISOString() ?? null,
+      createdAt: o.orderedAt.toISOString(),
+    }));
+
+    return [...giftMapped, ...productMapped].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
   }
 
   // ── Rating ─────────────────────────────────────────────────────────────────
