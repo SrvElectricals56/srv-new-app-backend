@@ -13,10 +13,9 @@ import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { Request } from 'express';
+import { ConfigService } from '@nestjs/config';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
-import { ConfigService } from '@nestjs/config';
-
 const UPLOAD_DIR = join(process.cwd(), 'uploads');
 const BANNER_DIR = join(UPLOAD_DIR, 'banners');
 const PRODUCT_DIR = join(UPLOAD_DIR, 'products');
@@ -45,9 +44,9 @@ export class UploadController {
     return `http://${host}:${port}`;
   }
 
-  // Build URLs from configured public host so mobile devices never receive localhost links.
+  // Admin endpoints return relative paths so stored URLs don't depend on server IP
   private buildFileUrl(_req: Request, subPath: string): string {
-    return `${this.getBaseUrl()}/uploads/${subPath}`;
+    return `/uploads/${subPath}`;
   }
 
   // ── Admin-only endpoints (JwtAuthGuard — validates against admins table) ──
@@ -220,7 +219,7 @@ export class UploadController {
   )
   uploadAadharImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
-    const imageUrl = this.buildFileUrl(req, `aadhar/${file.filename}`);
+    const imageUrl = `${this.getBaseUrl()}/uploads/aadhar/${file.filename}`;
     return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 }

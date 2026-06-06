@@ -93,19 +93,24 @@ export class MobileService {
     if (!trimmed) return null;
 
     const publicBaseUrl = this.getPublicBaseUrl();
+
+    // Already a relative path → prepend current base URL
     if (trimmed.startsWith('/uploads/')) return `${publicBaseUrl}${trimmed}`;
 
     try {
       const parsed = new URL(trimmed);
-      if (['localhost', '127.0.0.1', '10.0.2.2'].includes(parsed.hostname) && parsed.pathname.startsWith('/uploads/')) {
+      // Rewrite any private/local IP to the current public base URL
+      const isPrivate = /^(localhost|127\.0\.0\.1|10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.)/.test(parsed.hostname);
+      if (isPrivate && parsed.pathname.startsWith('/uploads/')) {
         return `${publicBaseUrl}${parsed.pathname}${parsed.search}${parsed.hash}`;
       }
+      return trimmed;
     } catch {
+      // Invalid URL but contains /uploads/ → extract and rebuild
       const uploadPathIndex = trimmed.indexOf('/uploads/');
       if (uploadPathIndex >= 0) return `${publicBaseUrl}${trimmed.slice(uploadPathIndex)}`;
+      return trimmed;
     }
-
-    return trimmed;
   }
 
   private async ensurePersistenceArtifacts() {
@@ -495,7 +500,7 @@ export class MobileService {
         label: category.label,
         slug,
         glyph: category.glyph ?? null,
-        imageUrl: category.imageUrl ?? null,
+        imageUrl: this.normalizeUploadUrl(category.imageUrl) ?? category.imageUrl ?? null,
       });
     }
 
@@ -643,7 +648,12 @@ export class MobileService {
       return false;
     });
 
-    return { data: filtered };
+    return {
+      data: filtered.map((banner) => ({
+        ...banner,
+        imageUrl: this.normalizeUploadUrl(banner.imageUrl),
+      })),
+    };
   }
 
   // ── Notifications ──────────────────────────────────────────────────────────
@@ -702,7 +712,12 @@ export class MobileService {
       return targetRole === normalizedRole;
     });
 
-    return { data: filteredNotifications };
+    return {
+      data: filteredNotifications.map((n) => ({
+        ...n,
+        imageUrl: this.normalizeUploadUrl((n as any).imageUrl) ?? (n as any).imageUrl ?? null,
+      })),
+    };
   }
 
   async deleteNotification(id: string) {
@@ -800,7 +815,12 @@ export class MobileService {
 
     qb.orderBy('offer.createdAt', 'DESC');
     const offers = await qb.getMany();
-    return { data: offers };
+    return {
+      data: offers.map((o) => ({
+        ...o,
+        imageUrl: this.normalizeUploadUrl((o as any).imageUrl) ?? (o as any).imageUrl ?? null,
+      })),
+    };
   }
 
   // ── Testimonials ───────────────────────────────────────────────────────────
@@ -811,7 +831,12 @@ export class MobileService {
       where: { isActive: true },
       order: { displayOrder: 'ASC', createdAt: 'DESC' },
     });
-    return { data: testimonials };
+    return {
+      data: testimonials.map((t) => ({
+        ...t,
+        imageUrl: this.normalizeUploadUrl((t as any).imageUrl) ?? (t as any).imageUrl ?? null,
+      })),
+    };
   }
 
   // ── Gift Products ──────────────────────────────────────────────────────────
@@ -847,7 +872,7 @@ export class MobileService {
         id: p.id,
         name: p.name,
         description: p.description ?? '',
-        imageUrl: p.image ?? null,
+        imageUrl: this.normalizeUploadUrl(p.image) ?? p.image ?? null,
         pointsRequired: p.points ?? 0,
         mrp: p.mrp ?? 0,
         stock: p.stock ?? 0,
@@ -885,7 +910,7 @@ export class MobileService {
         description: p.description ?? '',
         pointsCost: p.points ?? 0,
         category: p.subCategory ?? 'general',
-        imageUrl: p.image ?? null,
+        imageUrl: this.normalizeUploadUrl(p.image) ?? p.image ?? null,
         mrp: p.mrp ?? null,
         active: p.isActive,
       })),
@@ -1129,7 +1154,7 @@ export class MobileService {
       msg: 'QR code scan successfully.',
       productId: qr.product.id,
       productName: qr.product.name,
-      productImage: qr.product.image ?? null,
+      productImage: this.normalizeUploadUrl(qr.product.image) ?? qr.product.image ?? null,
       qrcodeprice: points,
       points,
       batchId: qr.batchId ?? null,
@@ -1469,7 +1494,7 @@ export class MobileService {
           role: normalizedRole,
           giftProductId: product.id,
           giftName: product.name,
-          giftImage: product.image ?? '',
+          giftImage: this.normalizeUploadUrl(product.image) ?? product.image ?? '',
           pointsUsed: pointsRequired,
           status: GiftOrderStatus.PENDING,
           shippingAddress: (user as any).address ?? undefined,

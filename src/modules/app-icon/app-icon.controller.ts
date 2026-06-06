@@ -15,8 +15,6 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminRole } from '../../common/enums';
-import { ConfigService } from '@nestjs/config';
-
 const ICON_UPLOAD_DIR = join(process.cwd(), 'uploads', 'icons');
 if (!existsSync(ICON_UPLOAD_DIR)) {
   mkdirSync(ICON_UPLOAD_DIR, { recursive: true });
@@ -29,12 +27,7 @@ if (!existsSync(ICON_UPLOAD_DIR)) {
 export class AppIconController {
   constructor(
     private readonly appIconService: AppIconService,
-    private configService: ConfigService,
   ) {}
-
-  private getBaseUrl() {
-    return this.configService.get<string>('APP_URL') || `http://${this.configService.get<string>('SERVER_HOST') || 'localhost'}:${this.configService.get<string>('PORT') || '3001'}`;
-  }
 
   @Post()
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
@@ -76,7 +69,7 @@ export class AppIconController {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
-    const iconUrl = `${this.getBaseUrl()}/uploads/icons/${file.filename}`;
+    const iconUrl = `/uploads/icons/${file.filename}`;
     return {
       url: iconUrl,
       filename: file.filename,
