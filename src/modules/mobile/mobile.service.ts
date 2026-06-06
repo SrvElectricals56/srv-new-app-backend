@@ -360,6 +360,9 @@ export class MobileService {
     const walletRepo = manager
       ? manager.getRepository(Wallet)
       : this.walletRepository;
+    const scanRepo = manager
+      ? manager.getRepository(Scan)
+      : this.scanRepository;
 
     const totals = await walletRepo
       .createQueryBuilder('wallet')
@@ -378,6 +381,14 @@ export class MobileService {
       })
       .getRawOne();
 
+    // Count actual scan records so that multi-scan products are all counted
+    const actualScanCount = await scanRepo.count({ where: { userId } });
+
+    // Keep user row in sync if it drifted
+    if (Number((user as any)?.totalScans ?? 0) !== actualScanCount) {
+      await this.updateUserByRole(userId, role, { totalScans: actualScanCount });
+    }
+
     const balance = Number((user as any)?.walletBalance ?? 0);
     // Dealers earn via bonusPoints (commission from electrician activity), not walletBalance
     const isDealer = normalizedRole === UserRole.DEALER;
@@ -395,7 +406,7 @@ export class MobileService {
       totalearnedwallet_amount: Number(totals?.totalEarned ?? 0),
       totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
       totalPoints,
-      totalScans: Number((user as any)?.totalScans ?? 0),
+      totalScans: actualScanCount,
     };
   }
 
@@ -1112,7 +1123,9 @@ export class MobileService {
           productName: qr.product.name,
           points,
           mode,
-          scannedAt: scan.scannedAt,
+          scannedAt: scan.scannedAt instanceof Date
+            ? scan.scannedAt.toISOString()
+            : scan.scannedAt,
         },
         pointsEarned: points,
         qrcodeprice: points,
@@ -1170,7 +1183,11 @@ export class MobileService {
       skip,
       take: limit,
     });
-    return { data: scans, total, page, limit, totalPages: Math.ceil(total / limit) };
+    const data = scans.map(s => ({
+      ...s,
+      scannedAt: s.scannedAt instanceof Date ? s.scannedAt.toISOString() : s.scannedAt,
+    }));
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   // ── Wallet ─────────────────────────────────────────────────────────────────

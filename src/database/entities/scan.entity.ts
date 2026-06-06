@@ -60,6 +60,6 @@ export class Scan {
   @JoinColumn({ name: 'productId' })
   product: Product;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   scannedAt: Date;
 }

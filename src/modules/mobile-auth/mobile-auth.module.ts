@@ -10,12 +10,13 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { Scan } from '../../database/entities/scan.entity';
 import { TierModule } from '../../common/services/tier.module';
 import { CrossRolePhoneModule } from '../../common/services/cross-role-phone.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Electrician, Dealer, AppUser, CounterBoy]),
+    TypeOrmModule.forFeature([Electrician, Dealer, AppUser, CounterBoy, Scan]),
     TierModule,
     CrossRolePhoneModule,
     PassportModule,

@@ -55,7 +55,7 @@ export class Offer {
   @Column({ nullable: true })
   maxUsage: number;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

@@ -158,7 +158,7 @@ export class Dealer {
   @Column({ nullable: true })
   lastActivityAt: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   joinedDate: Date;
 
   @UpdateDateColumn()

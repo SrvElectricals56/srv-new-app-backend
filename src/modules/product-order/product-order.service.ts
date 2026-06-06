@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ProductOrder, ProductOrderStatus } from '../../database/entities/product-order.entity';
 import { PointsConfig } from '../../database/entities/points-config.entity';
+import { Product } from '../../database/entities/product.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
@@ -15,6 +16,8 @@ export class ProductOrderService {
     private productOrderRepository: Repository<ProductOrder>,
     @InjectRepository(PointsConfig)
     private pointsConfigRepository: Repository<PointsConfig>,
+    @InjectRepository(Product)
+    private productRepository: Repository<Product>,
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
     @InjectRepository(AppUser)
@@ -114,7 +117,11 @@ export class ProductOrderService {
       const pointsConfig = await this.pointsConfigRepository.findOne({
         where: { productId: order.productId, isActive: true },
       });
-      const pointsPerUnit = pointsConfig?.basePoints ?? 0;
+      let pointsPerUnit = pointsConfig?.basePoints ?? 0;
+      if (pointsPerUnit === 0) {
+        const product = await this.productRepository.findOne({ where: { id: order.productId } });
+        pointsPerUnit = product?.points ?? 0;
+      }
       const totalPoints = pointsPerUnit * order.quantity;
 
       if (totalPoints > 0) {

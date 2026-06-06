@@ -66,7 +66,10 @@ export class ScanService {
     const totalMulti = parseInt(modeCounts.find(r => r.mode === 'multi')?.count || '0');
 
     return {
-      data,
+      data: data.map(s => ({
+        ...s,
+        scannedAt: s.scannedAt instanceof Date ? s.scannedAt.toISOString() : s.scannedAt,
+      })),
       total,
       page,
       limit,

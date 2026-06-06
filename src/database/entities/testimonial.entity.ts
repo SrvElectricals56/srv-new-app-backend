@@ -63,7 +63,7 @@ export class Testimonial {
   @Column({ nullable: true })
   imageUrl: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

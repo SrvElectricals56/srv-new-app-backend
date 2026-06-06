@@ -351,12 +351,16 @@ export class ElectricianService {
 
   async getElectricianScans(id: string, page: number = 1, limit: number = 20) {
     const skip = (page - 1) * limit;
-    const [data, total] = await this.scanRepository.findAndCount({
+    const [rawData, total] = await this.scanRepository.findAndCount({
       where: { userId: id },
       skip,
       take: limit,
       order: { scannedAt: 'DESC' },
     });
+    const data = rawData.map(s => ({
+      ...s,
+      scannedAt: s.scannedAt instanceof Date ? s.scannedAt.toISOString() : s.scannedAt,
+    }));
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 

@@ -57,7 +57,7 @@ export class SupportTicket {
   @Column({ type: 'json', nullable: true })
   replies: { sender: string; senderName: string; message: string; timestamp: Date }[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

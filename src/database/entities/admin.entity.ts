@@ -46,7 +46,7 @@ export class Admin {
   @Column({ type: 'integer', default: 0 })
   tokenVersion: number;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

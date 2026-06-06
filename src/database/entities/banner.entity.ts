@@ -47,7 +47,7 @@ export class Banner {
   @Column({ default: 0 })
   viewCount: number;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

@@ -35,7 +35,7 @@ export class PointsConfig {
   @JoinColumn({ name: 'productId' })
   product: Product;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

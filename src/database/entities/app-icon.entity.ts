@@ -20,7 +20,7 @@ export class AppIcon {
   @Column({ nullable: true })
   updatedBy: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

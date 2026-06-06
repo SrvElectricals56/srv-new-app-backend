@@ -74,7 +74,7 @@ export class GiftOrder {
   @Column({ nullable: true })
   trackingNumber: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   orderedAt: Date;
 
   @UpdateDateColumn()

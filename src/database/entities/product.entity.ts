@@ -65,7 +65,7 @@ export class Product {
   @OneToMany(() => PointsConfig, (config) => config.product)
   pointsConfigs: PointsConfig[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

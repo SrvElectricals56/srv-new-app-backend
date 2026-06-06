@@ -60,7 +60,7 @@ export class QrCode {
   @Column({ nullable: true })
   createdBy: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()

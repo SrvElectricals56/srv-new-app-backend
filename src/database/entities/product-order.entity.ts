@@ -69,7 +69,7 @@ export class ProductOrder {
   @Column({ type: 'text', nullable: true })
   rejectionReason: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   orderedAt: Date;
 
   @UpdateDateColumn()

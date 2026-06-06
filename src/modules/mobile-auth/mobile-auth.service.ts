@@ -14,6 +14,7 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { Scan } from '../../database/entities/scan.entity';
 import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
 import { ElectricianSubCategory, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
@@ -34,6 +35,8 @@ export class MobileAuthService {
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(CounterBoy)
     private counterboyRepository: Repository<CounterBoy>,
+    @InjectRepository(Scan)
+    private scanRepository: Repository<Scan>,
     private readonly tierService: TierService,
     private readonly crossRolePhoneService: CrossRolePhoneService,
     private jwtService: JwtService,
@@ -551,6 +554,20 @@ export class MobileAuthService {
         throw new NotFoundException('Unknown role');
     }
     if (!user) throw new NotFoundException('User not found');
+
+    // Get actual scan count from scans table — correct for single and multi mode
+    const actualScanCount = await this.scanRepository.count({ where: { userId } });
+
+    // Sync denormalized counter if drifted
+    if ((user.totalScans ?? 0) !== actualScanCount) {
+      user.totalScans = actualScanCount;
+      switch (role) {
+        case 'electrician': await this.electricianRepository.update(userId, { totalScans: actualScanCount }); break;
+        case 'counterboy':  await this.counterboyRepository.update(userId, { totalScans: actualScanCount }); break;
+        default: break;
+      }
+    }
+
     return this.formatUserProfile(user, role);
   }
 
@@ -564,6 +581,11 @@ export class MobileAuthService {
     commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
     if (data.profileImage !== undefined) updateData.profileImage = data.profileImage;
 
+    // Handle plain-text password field (used by setPasswordFallback on the client)
+    if (data.password !== undefined && typeof data.password === 'string' && data.password.trim()) {
+      updateData.passwordHash = await this.hashPassword(data.password);
+    }
+
     // Dealer-specific fields
     if (role === 'dealer') {
       if (data.town !== undefined) updateData.town = data.town;
@@ -574,11 +596,13 @@ export class MobileAuthService {
     const kycDocFields = ['aadharFrontImage', 'panDocument', 'gstDocument'];
     const hasKycDoc = kycDocFields.some(k => data[k] !== undefined && data[k] !== null && data[k] !== '');
     if (hasKycDoc) {
-      // Only move to pending if currently not_submitted or rejected
+      // Move to pending for any status except already pending
+      // This covers: not_submitted, rejected, AND verified (re-verification after doc change)
       const currentUser = await this.getProfile(userId, role);
       const currentKycStatus = (currentUser as any).kycStatus;
-      if (currentKycStatus === 'not_submitted' || currentKycStatus === 'rejected') {
+      if (currentKycStatus !== 'pending') {
         updateData.kycStatus = 'pending';
+        updateData.kycRejectionReason = null;
       }
     }
 
@@ -708,6 +732,7 @@ export class MobileAuthService {
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
+          hasPassword: !!user.passwordHash,
           role: 'electrician',
         };
 
@@ -743,6 +768,7 @@ export class MobileAuthService {
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
+          hasPassword: !!user.passwordHash,
           role: 'dealer',
         };
 
@@ -775,6 +801,7 @@ export class MobileAuthService {
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
+          hasPassword: !!user.passwordHash,
           role: 'user',
         };
 
@@ -812,6 +839,7 @@ export class MobileAuthService {
           aadharFrontImage: user.aadharFrontImage ?? null,
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
+          hasPassword: !!user.passwordHash,
           role: 'counterboy',
         };
 

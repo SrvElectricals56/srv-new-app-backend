@@ -45,7 +45,7 @@ export class ProductCartItem {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   price: number;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   addedAt: Date;
 
   @UpdateDateColumn()

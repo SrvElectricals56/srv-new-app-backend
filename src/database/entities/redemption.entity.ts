@@ -64,7 +64,7 @@ export class Redemption {
   @Column({ nullable: true })
   processedAt: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   requestedAt: Date;
 
   @UpdateDateColumn()

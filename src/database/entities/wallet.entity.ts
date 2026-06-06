@@ -50,6 +50,6 @@ export class Wallet {
   @Column({ nullable: true })
   referenceType: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

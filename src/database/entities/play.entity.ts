@@ -79,7 +79,7 @@ export class Play {
   @Column({ type: 'jsonb', default: '[]' })
   comments: PlayComment[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @UpdateDateColumn()
