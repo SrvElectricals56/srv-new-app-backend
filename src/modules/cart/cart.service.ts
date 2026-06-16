@@ -4,7 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ProductCartItem } from '../../database/entities/product-cart-item.entity';
 import { ProductOrder, ProductOrderStatus } from '../../database/entities/product-order.entity';
 import { Product } from '../../database/entities/product.entity';
@@ -233,18 +233,21 @@ export class CartService {
     const user = await this.getUserByRole(userId, normalizedRole);
     if (!user) throw new NotFoundException('User not found');
 
-    const orders: ProductOrder[] = [];
+    const productIds = [...new Set(cartItems.map((item) => item.productId))];
+    const products = await this.productRepo.find({
+      where: { id: In(productIds), isActive: true } as any,
+    });
+    const productById = new Map(products.map((product) => [product.id, product]));
+    const orderDrafts: ProductOrder[] = [];
 
     for (const item of cartItems) {
-      const product = await this.productRepo.findOne({
-        where: { id: item.productId, isActive: true } as any,
-      });
+      const product = productById.get(item.productId);
       if (!product || product.category === 'gift') continue;
       if (Number(product.stock ?? 0) < item.quantity) {
         throw new BadRequestException(`Product "${product.name}" has insufficient stock`);
       }
 
-      const order = await this.orderRepo.save(
+      orderDrafts.push(
         this.orderRepo.create({
           userId,
           userRole: normalizedRole,
@@ -260,9 +263,12 @@ export class CartService {
           shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
         }),
       );
+    }
 
-      await this.productRepo.decrement({ id: product.id }, 'stock', item.quantity);
-      orders.push(order);
+    const orders = orderDrafts.length ? await this.orderRepo.save(orderDrafts) : [];
+
+    for (const order of orders) {
+      await this.productRepo.decrement({ id: order.productId }, 'stock', order.quantity);
     }
 
     // Clear cart after successful checkout

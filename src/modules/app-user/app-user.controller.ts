@@ -39,8 +39,10 @@ export class AppUserController {
     @Query('status') status?: string,
     @Query('state') state?: string,
     @Query('city') city?: string,
+    @Query('appInstalled') appInstalled?: string,
   ) {
-    return this.appUserService.findAll(+page, +limit, search, status, state, city);
+    const appInstalledFilter = appInstalled === undefined ? undefined : appInstalled === 'true';
+    return this.appUserService.findAll(+page, +limit, search, status, state, city, appInstalledFilter);
   }
 
   @Get('distinct-states')

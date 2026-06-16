@@ -8,11 +8,26 @@ import { CrossRolePhoneService } from '../../common/services/cross-role-phone.se
 
 @Injectable()
 export class AppUserService {
+  private appInstallColumnsEnsured = false;
+
   constructor(
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
     private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
+
+  private async ensureAppInstallColumns() {
+    if (this.appInstallColumnsEnsured) return;
+    await this.appUserRepository.query(`
+      ALTER TABLE "app_users"
+      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
+    `);
+    await this.appUserRepository.query(`
+      ALTER TABLE "app_users"
+      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
+    `);
+    this.appInstallColumnsEnsured = true;
+  }
 
   private async generateUniqueUserCode() {
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -47,17 +62,21 @@ export class AppUserService {
     const { passwordHash, ...rest } = user;
     return {
       ...rest,
+      appInstalled: Boolean(user.appInstalled),
+      firstAppLoginAt: user.firstAppLoginAt ?? null,
       hasPassword: Boolean(passwordHash),
     };
   }
 
   private async findOnePlain(id: string) {
+    await this.ensureAppInstallColumns();
     const user = await this.appUserRepository.findOne({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
     return user;
   }
 
   async create(data: Partial<AppUser>) {
+    await this.ensureAppInstallColumns();
     if (!data.name?.trim() || !data.phone?.trim()) {
       throw new BadRequestException('Name and phone are required');
     }
@@ -106,6 +125,7 @@ export class AppUserService {
   }
 
   async importMany(records: any[]) {
+    await this.ensureAppInstallColumns();
     let created = 0, updated = 0, failed = 0, errors: string[] = [];
 
     for (const record of records) {
@@ -180,7 +200,8 @@ export class AppUserService {
     ).sort((a, b) => a.localeCompare(b));
   }
 
-  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string) {
+  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean) {
+    await this.ensureAppInstallColumns();
     const skip = (page - 1) * limit;
     const where: any[] = [];
 
@@ -208,6 +229,9 @@ export class AppUserService {
     }
     if (city) {
       query.andWhere('u.city = :city', { city });
+    }
+    if (appInstalled !== undefined) {
+      query.andWhere('u.appInstalled = :appInstalled', { appInstalled });
     }
 
     const [data, total] = await query
@@ -269,11 +293,25 @@ export class AppUserService {
   }
 
   async getStats() {
-    const total = await this.appUserRepository.count();
-    const active = await this.appUserRepository.count({ where: { status: UserStatus.ACTIVE } });
-    const pending = await this.appUserRepository.count({ where: { status: UserStatus.PENDING } });
-    const inactive = await this.appUserRepository.count({ where: { status: UserStatus.INACTIVE } });
-    return { total, active, pending, inactive };
+    const row = await this.appUserRepository
+      .createQueryBuilder('u')
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE u.status = :active)::int', 'active')
+      .addSelect('COUNT(*) FILTER (WHERE u.status = :pending)::int', 'pending')
+      .addSelect('COUNT(*) FILTER (WHERE u.status = :inactive)::int', 'inactive')
+      .setParameters({
+        active: UserStatus.ACTIVE,
+        pending: UserStatus.PENDING,
+        inactive: UserStatus.INACTIVE,
+      })
+      .getRawOne();
+
+    return {
+      total: Number(row?.total ?? 0),
+      active: Number(row?.active ?? 0),
+      pending: Number(row?.pending ?? 0),
+      inactive: Number(row?.inactive ?? 0),
+    };
   }
 
   async getDistinctStates(): Promise<{ states: string[] }> {

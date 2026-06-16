@@ -26,6 +26,9 @@ const SIGNUP_OTP_VERIFIED = 'VERIFIED';
 
 @Injectable()
 export class MobileAuthService {
+  private appUserInstallColumnsEnsured = false;
+  private counterboyInstallColumnsEnsured = false;
+
   constructor(
     @InjectRepository(Electrician)
     private electricianRepository: Repository<Electrician>,
@@ -176,6 +179,32 @@ export class MobileAuthService {
     }
   }
 
+  private async ensureAppUserInstallColumns() {
+    if (this.appUserInstallColumnsEnsured) return;
+    await this.appUserRepository.query(`
+      ALTER TABLE "app_users"
+      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
+    `);
+    await this.appUserRepository.query(`
+      ALTER TABLE "app_users"
+      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
+    `);
+    this.appUserInstallColumnsEnsured = true;
+  }
+
+  private async ensureCounterboyInstallColumns() {
+    if (this.counterboyInstallColumnsEnsured) return;
+    await this.counterboyRepository.query(`
+      ALTER TABLE "counterboys"
+      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
+    `);
+    await this.counterboyRepository.query(`
+      ALTER TABLE "counterboys"
+      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
+    `);
+    this.counterboyInstallColumnsEnsured = true;
+  }
+
   private async getUserEntityByRole(userId: string, role: string): Promise<any> {
     return this.getRepositoryByRole(role).findOne({
       where: { id: userId } as any,
@@ -206,8 +235,28 @@ export class MobileAuthService {
         await this.dealerRepository.update(id, update);
         break;
       }
-      case 'user':        await this.appUserRepository.update(id, { lastActivityAt: now }); break;
-      case 'counterboy':  await this.counterboyRepository.update(id, { lastActivityAt: now }); break;
+      case 'user': {
+        await this.ensureAppUserInstallColumns();
+        const existing = await this.appUserRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const update: any = { lastActivityAt: now };
+        if (existing && !existing.appInstalled) {
+          update.appInstalled = true;
+          update.firstAppLoginAt = now;
+        }
+        await this.appUserRepository.update(id, update);
+        break;
+      }
+      case 'counterboy': {
+        await this.ensureCounterboyInstallColumns();
+        const existing = await this.counterboyRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const update: any = { lastActivityAt: now };
+        if (existing && !existing.appInstalled) {
+          update.appInstalled = true;
+          update.firstAppLoginAt = now;
+        }
+        await this.counterboyRepository.update(id, update);
+        break;
+      }
     }
   }
 
@@ -430,6 +479,7 @@ export class MobileAuthService {
     state?: string; district?: string; address?: string; pincode?: string;
     password?: string;
   }) {
+    await this.ensureAppUserInstallColumns();
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user');
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'user');
 
@@ -450,6 +500,8 @@ export class MobileAuthService {
       userCode,
       status: UserStatus.ACTIVE,
       passwordHash,
+      appInstalled: true,
+      firstAppLoginAt: new Date(),
     });
 
     const saved = await this.appUserRepository.save(appUser);
@@ -464,6 +516,7 @@ export class MobileAuthService {
     state?: string; district?: string; address?: string; pincode?: string;
     password?: string;
   }) {
+    await this.ensureCounterboyInstallColumns();
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy');
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'counterboy');
 
@@ -484,6 +537,8 @@ export class MobileAuthService {
       counterboyCode,
       status: UserStatus.ACTIVE,
       passwordHash,
+      appInstalled: true,
+      firstAppLoginAt: new Date(),
     });
 
     const saved = await this.counterboyRepository.save(counterboy);
@@ -830,6 +885,8 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
+          appInstalled: user.appInstalled ?? false,
+          firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'user',
         };
 
@@ -868,6 +925,8 @@ export class MobileAuthService {
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
           hasPassword: !!user.passwordHash,
+          appInstalled: user.appInstalled ?? false,
+          firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'counterboy',
         };
 

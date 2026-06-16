@@ -45,6 +45,7 @@ export class DealerController {
     @Query('state') state?: string,
     @Query('city') city?: string,
     @Query('bankLinked') bankLinked?: string,
+    @Query('appInstalled') appInstalled?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
@@ -52,6 +53,7 @@ export class DealerController {
       parseInt(page), parseInt(limit),
       search, status, tier, state, city,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
+      appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       dateFrom, dateTo,
     );
   }

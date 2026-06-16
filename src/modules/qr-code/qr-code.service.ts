@@ -147,12 +147,18 @@ export class QrCodeService implements OnModuleInit {
   async getStats() {
     await this.ensureLegacyColumns();
 
-    const [total, active, used] = await Promise.all([
-      this.qrCodeRepository.count(),
-      this.qrCodeRepository.count({ where: { isScanned: false } }),
-      this.qrCodeRepository.count({ where: { isScanned: true } }),
-    ]);
-    return { total, active, used };
+    const row = await this.qrCodeRepository
+      .createQueryBuilder('qr')
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = false)::int', 'active')
+      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = true)::int', 'used')
+      .getRawOne();
+
+    return {
+      total: Number(row?.total ?? 0),
+      active: Number(row?.active ?? 0),
+      used: Number(row?.used ?? 0),
+    };
   }
 
   async findBatches(page: number = 1, limit: number = 20, search?: string) {

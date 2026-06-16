@@ -100,6 +100,7 @@ export class DealerService {
     state?: string,
     city?: string,
     bankLinked?: boolean,
+    appInstalled?: boolean,
     dateFrom?: string,
     dateTo?: string,
   ) {
@@ -131,6 +132,10 @@ export class DealerService {
 
     if (bankLinked !== undefined) {
       queryBuilder.andWhere('dealer.bankLinked = :bankLinked', { bankLinked });
+    }
+
+    if (appInstalled !== undefined) {
+      queryBuilder.andWhere('dealer.appInstalled = :appInstalled', { appInstalled });
     }
 
     if (dateFrom) {
@@ -358,14 +363,16 @@ export class DealerService {
         Number(orderInterest.get(row.productId)?.orderQuantity ?? 0) * 8,
     }));
 
+    const productsById = new Map(products.map((product) => [product.productId, product]));
+
     for (const row of topViewedProducts) {
-      const existing = products.find((product) => product.productId === row.productId);
+      const existing = productsById.get(row.productId);
       if (existing) {
         (existing as any).viewCount = Number(row.viewCount ?? 0);
         (existing as any).durationMs = Number(row.durationMs ?? 0);
         existing.intentScore += Number(row.viewCount ?? 0) * 2 + Math.floor(Number(row.durationMs ?? 0) / 30000);
       } else {
-        products.push({
+        const product = {
           productId: row.productId,
           productName: row.productName,
           category: row.category ?? '—',
@@ -376,13 +383,15 @@ export class DealerService {
           viewCount: Number(row.viewCount ?? 0),
           durationMs: Number(row.durationMs ?? 0),
           intentScore: Number(row.viewCount ?? 0) * 2 + Math.floor(Number(row.durationMs ?? 0) / 30000),
-        } as any);
+        } as any;
+        products.push(product);
+        productsById.set(product.productId, product);
       }
     }
 
     for (const item of [...cartInterest.values(), ...orderInterest.values()]) {
-      if (products.some((product) => product.productId === item.productId)) continue;
-      products.push({
+      if (productsById.has(item.productId)) continue;
+      const product = {
         productId: item.productId,
         productName: item.productName,
         category: '—',
@@ -391,7 +400,9 @@ export class DealerService {
         cartQuantity: Number(item.cartQuantity ?? 0),
         orderQuantity: Number(item.orderQuantity ?? 0),
         intentScore: Number(item.cartQuantity ?? 0) * 5 + Number(item.orderQuantity ?? 0) * 8,
-      });
+      };
+      products.push(product);
+      productsById.set(product.productId, product);
     }
 
     products.sort((a, b) => b.intentScore - a.intentScore);
@@ -669,12 +680,24 @@ export class DealerService {
   }
 
   async getStats() {
-    const [total, active, pending, inactive] = await Promise.all([
-      this.dealerRepository.count(),
-      this.dealerRepository.count({ where: { status: UserStatus.ACTIVE } }),
-      this.dealerRepository.count({ where: { status: UserStatus.PENDING } }),
-      this.dealerRepository.count({ where: { status: UserStatus.INACTIVE } }),
-    ]);
-    return { total, active, pending, inactive };
+    const row = await this.dealerRepository
+      .createQueryBuilder('d')
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE d.status = :active)::int', 'active')
+      .addSelect('COUNT(*) FILTER (WHERE d.status = :pending)::int', 'pending')
+      .addSelect('COUNT(*) FILTER (WHERE d.status = :inactive)::int', 'inactive')
+      .setParameters({
+        active: UserStatus.ACTIVE,
+        pending: UserStatus.PENDING,
+        inactive: UserStatus.INACTIVE,
+      })
+      .getRawOne();
+
+    return {
+      total: Number(row?.total ?? 0),
+      active: Number(row?.active ?? 0),
+      pending: Number(row?.pending ?? 0),
+      inactive: Number(row?.inactive ?? 0),
+    };
   }
 }

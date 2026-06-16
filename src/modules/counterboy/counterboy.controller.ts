@@ -39,8 +39,10 @@ export class CounterBoyController {
     @Query('status') status?: string,
     @Query('state') state?: string,
     @Query('city') city?: string,
+    @Query('appInstalled') appInstalled?: string,
   ) {
-    return this.counterboyService.findAll(+page, +limit, search, status, state, city);
+    const appInstalledFilter = appInstalled === undefined ? undefined : appInstalled === 'true';
+    return this.counterboyService.findAll(+page, +limit, search, status, state, city, appInstalledFilter);
   }
 
   @Get('distinct-states')

@@ -191,29 +191,30 @@ export class ProductOrderService {
   }
 
   async getStats() {
-    const [
-      { total },
-      pending,
-      approved,
-      shipped,
-      delivered,
-      rejected,
-    ] = await Promise.all([
-      this.productOrderRepository.createQueryBuilder('o').select('COUNT(*)', 'total').getRawOne(),
-      this.productOrderRepository.count({ where: { status: ProductOrderStatus.PENDING } }),
-      this.productOrderRepository.count({ where: { status: ProductOrderStatus.APPROVED } }),
-      this.productOrderRepository.count({ where: { status: ProductOrderStatus.SHIPPED } }),
-      this.productOrderRepository.count({ where: { status: ProductOrderStatus.DELIVERED } }),
-      this.productOrderRepository.count({ where: { status: ProductOrderStatus.REJECTED } }),
-    ]);
+    const row = await this.productOrderRepository
+      .createQueryBuilder('o')
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :pending)::int', 'pending')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :approved)::int', 'approved')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :shipped)::int', 'shipped')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :delivered)::int', 'delivered')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :rejected)::int', 'rejected')
+      .setParameters({
+        pending: ProductOrderStatus.PENDING,
+        approved: ProductOrderStatus.APPROVED,
+        shipped: ProductOrderStatus.SHIPPED,
+        delivered: ProductOrderStatus.DELIVERED,
+        rejected: ProductOrderStatus.REJECTED,
+      })
+      .getRawOne();
 
     return {
-      total: parseInt(total ?? '0'),
-      pending,
-      approved,
-      shipped,
-      delivered,
-      rejected,
+      total: Number(row?.total ?? 0),
+      pending: Number(row?.pending ?? 0),
+      approved: Number(row?.approved ?? 0),
+      shipped: Number(row?.shipped ?? 0),
+      delivered: Number(row?.delivered ?? 0),
+      rejected: Number(row?.rejected ?? 0),
     };
   }
 }

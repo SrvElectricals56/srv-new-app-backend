@@ -9,6 +9,8 @@ import { CrossRolePhoneService } from '../../common/services/cross-role-phone.se
 
 @Injectable()
 export class CounterBoyService {
+  private appInstallColumnsEnsured = false;
+
   constructor(
     @InjectRepository(CounterBoy)
     private counterboyRepository: Repository<CounterBoy>,
@@ -16,6 +18,19 @@ export class CounterBoyService {
     private dealerRepository: Repository<Dealer>,
     private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
+
+  private async ensureAppInstallColumns() {
+    if (this.appInstallColumnsEnsured) return;
+    await this.counterboyRepository.query(`
+      ALTER TABLE "counterboys"
+      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
+    `);
+    await this.counterboyRepository.query(`
+      ALTER TABLE "counterboys"
+      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
+    `);
+    this.appInstallColumnsEnsured = true;
+  }
 
   private async generateUniqueCounterBoyCode() {
     const prefix = `CB${String(Date.now()).slice(-6)}`;
@@ -55,11 +70,14 @@ export class CounterBoyService {
       dealerName: dealer?.name ?? null,
       dealerPhone: dealer?.phone ?? null,
       dealerCode: dealer?.dealerCode ?? null,
+      appInstalled: Boolean(counterboy.appInstalled),
+      firstAppLoginAt: counterboy.firstAppLoginAt ?? null,
       hasPassword: Boolean(passwordHash),
     };
   }
 
   private async findOnePlain(id: string) {
+    await this.ensureAppInstallColumns();
     const cb = await this.counterboyRepository.findOne({ where: { id } });
     if (!cb) throw new NotFoundException('Counter boy not found');
     return cb;
@@ -76,6 +94,7 @@ export class CounterBoyService {
   }
 
   async importMany(records: any[]) {
+    await this.ensureAppInstallColumns();
     let created = 0, updated = 0, failed = 0, errors: string[] = [];
 
     for (const record of records) {
@@ -146,7 +165,8 @@ export class CounterBoyService {
     return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
   }
 
-  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string) {
+  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean) {
+    await this.ensureAppInstallColumns();
     const skip = (page - 1) * limit;
 
     const query = this.counterboyRepository
@@ -170,6 +190,9 @@ export class CounterBoyService {
     }
     if (city) {
       query.andWhere('cb.city = :city', { city });
+    }
+    if (appInstalled !== undefined) {
+      query.andWhere('cb.appInstalled = :appInstalled', { appInstalled });
     }
 
     const total = await query.clone().getCount();
@@ -208,6 +231,7 @@ export class CounterBoyService {
   }
 
   async create(data: Partial<CounterBoy>) {
+    await this.ensureAppInstallColumns();
     if (!data.name?.trim() || !data.phone?.trim()) {
       throw new BadRequestException('Name and phone are required');
     }
@@ -303,11 +327,25 @@ export class CounterBoyService {
   }
 
   async getStats() {
-    const total = await this.counterboyRepository.count();
-    const active = await this.counterboyRepository.count({ where: { status: UserStatus.ACTIVE } });
-    const pending = await this.counterboyRepository.count({ where: { status: UserStatus.PENDING } });
-    const inactive = await this.counterboyRepository.count({ where: { status: UserStatus.INACTIVE } });
-    return { total, active, pending, inactive };
+    const row = await this.counterboyRepository
+      .createQueryBuilder('cb')
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE cb.status = :active)::int', 'active')
+      .addSelect('COUNT(*) FILTER (WHERE cb.status = :pending)::int', 'pending')
+      .addSelect('COUNT(*) FILTER (WHERE cb.status = :inactive)::int', 'inactive')
+      .setParameters({
+        active: UserStatus.ACTIVE,
+        pending: UserStatus.PENDING,
+        inactive: UserStatus.INACTIVE,
+      })
+      .getRawOne();
+
+    return {
+      total: Number(row?.total ?? 0),
+      active: Number(row?.active ?? 0),
+      pending: Number(row?.pending ?? 0),
+      inactive: Number(row?.inactive ?? 0),
+    };
   }
 
   async getDistinctStates(): Promise<{ states: string[] }> {
