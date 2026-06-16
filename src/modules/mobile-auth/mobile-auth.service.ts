@@ -182,12 +182,30 @@ export class MobileAuthService {
     });
   }
 
-  /** Update lastActivityAt for any role */
+  /** Update lastActivityAt for any role, and mark appInstalled on first login */
   private async touchActivity(id: string, role: MobileUserRole) {
     const now = new Date();
     switch (role) {
-      case 'electrician': await this.electricianRepository.update(id, { lastActivityAt: now }); break;
-      case 'dealer':      await this.dealerRepository.update(id, { lastActivityAt: now }); break;
+      case 'electrician': {
+        const existing = await this.electricianRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const update: any = { lastActivityAt: now };
+        if (existing && !existing.appInstalled) {
+          update.appInstalled = true;
+          update.firstAppLoginAt = now;
+        }
+        await this.electricianRepository.update(id, update);
+        break;
+      }
+      case 'dealer': {
+        const existing = await this.dealerRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const update: any = { lastActivityAt: now };
+        if (existing && !existing.appInstalled) {
+          update.appInstalled = true;
+          update.firstAppLoginAt = now;
+        }
+        await this.dealerRepository.update(id, update);
+        break;
+      }
       case 'user':        await this.appUserRepository.update(id, { lastActivityAt: now }); break;
       case 'counterboy':  await this.counterboyRepository.update(id, { lastActivityAt: now }); break;
     }
@@ -335,6 +353,9 @@ export class MobileAuthService {
       status: UserStatus.PENDING,
     });
     (dealer as any).passwordHash = passwordHash;
+    // Signup = app is installed by definition
+    (dealer as any).appInstalled = true;
+    (dealer as any).firstAppLoginAt = new Date();
 
     const saved = await this.dealerRepository.save(dealer) as Dealer;
     otpStore.delete(signupOtpKey);
@@ -385,6 +406,9 @@ export class MobileAuthService {
       status: UserStatus.ACTIVE,
     });
     (electrician as any).passwordHash = passwordHash;
+    // Signup = app is installed by definition
+    (electrician as any).appInstalled = true;
+    (electrician as any).firstAppLoginAt = new Date();
 
     const saved = await this.electricianRepository.save(electrician) as Electrician;
     otpStore.delete(signupOtpKey);
@@ -733,6 +757,8 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
+          appInstalled: user.appInstalled ?? false,
+          firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'electrician',
         };
 
@@ -769,6 +795,8 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
+          appInstalled: user.appInstalled ?? false,
+          firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'dealer',
         };
 

@@ -153,4 +153,11 @@ export class ElectricianController {
   ) {
     return this.electricianService.getElectricianWallet(id, parseInt(page), parseInt(limit));
   }
+
+  @Get(':id/activity')
+  @ApiOperation({ summary: 'Get electrician product interest and activity timeline' })
+  @ApiResponse({ status: 200, description: 'Electrician activity insights' })
+  getActivity(@Param('id') id: string) {
+    return this.electricianService.getElectricianActivity(id);
+  }
 }

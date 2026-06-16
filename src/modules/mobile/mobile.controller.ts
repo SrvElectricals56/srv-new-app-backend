@@ -45,6 +45,15 @@ export class MobileController {
     return this.mobileService.getProductById(id);
   }
 
+  @Post('activity')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Track app screen, touch, and product activity' })
+  trackActivity(@Request() req: any, @Body() body: any) {
+    return this.mobileService.trackActivity(req.user.id, req.user.role, body);
+  }
+
   // ── Banners ────────────────────────────────────────────────────────────────
 
   @Get('banners')

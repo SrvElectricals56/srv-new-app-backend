@@ -158,6 +158,12 @@ export class Dealer {
   @Column({ nullable: true })
   lastActivityAt: Date;
 
+  @Column({ default: false })
+  appInstalled: boolean;
+
+  @Column({ nullable: true, type: 'timestamptz' })
+  firstAppLoginAt: Date;
+
   @CreateDateColumn({ type: 'timestamptz' })
   joinedDate: Date;
 

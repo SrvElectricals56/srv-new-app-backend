@@ -7,7 +7,11 @@ import { UpdateDealerDto } from './dto/update-dealer.dto';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
-import { UserStatus, MemberTier } from '../../common/enums';
+import { Scan } from '../../database/entities/scan.entity';
+import { ProductCartItem } from '../../database/entities/product-cart-item.entity';
+import { ProductOrder } from '../../database/entities/product-order.entity';
+import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
+import { UserStatus, MemberTier, UserRole } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
@@ -20,6 +24,14 @@ export class DealerService {
     private electricianRepository: Repository<Electrician>,
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
+    @InjectRepository(Scan)
+    private scanRepository: Repository<Scan>,
+    @InjectRepository(ProductCartItem)
+    private cartRepository: Repository<ProductCartItem>,
+    @InjectRepository(ProductOrder)
+    private orderRepository: Repository<ProductOrder>,
+    @InjectRepository(AppActivityEvent)
+    private appActivityRepository: Repository<AppActivityEvent>,
     private readonly tierService: TierService,
     private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
@@ -42,12 +54,21 @@ export class DealerService {
               return {
                 ...electricianRest,
                 hasPassword: Boolean(electricianPasswordHash),
+                appInstalled: Boolean((electrician as any).appInstalled),
+                firstAppLoginAt: (electrician as any).firstAppLoginAt ?? null,
               };
             }),
           }
         : {}),
       hasPassword: Boolean(passwordHash),
+      appInstalled: Boolean((dealer as any).appInstalled),
+      firstAppLoginAt: (dealer as any).firstAppLoginAt ?? null,
     };
+  }
+
+  private async tableExists(tableName: string): Promise<boolean> {
+    const rows = await this.dealerRepository.query('SELECT to_regclass($1) AS name', [`public.${tableName}`]);
+    return Boolean(rows?.[0]?.name);
   }
 
   async create(createDealerDto: CreateDealerDto) {
@@ -222,6 +243,226 @@ export class DealerService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  async getDealerActivity(id: string) {
+    const dealer = await this.findOne(id);
+    const role = UserRole.DEALER;
+    const [hasCartTable, hasOrderTable] = await Promise.all([
+      this.tableExists('product_cart_items'),
+      this.tableExists('product_orders'),
+    ]);
+
+    const [scanStats, cartStats, orderStats, walletStats, appEventStats, linkedElectricianCount, topScans, topViewedProducts, cartItems, orders, wallets, recentScans, appEvents] = await Promise.all([
+      this.scanRepository.count({ where: { userId: id, role } }),
+      hasCartTable ? this.cartRepository.count({ where: { userId: id, userRole: role } }) : Promise.resolve(0),
+      hasOrderTable ? this.orderRepository.count({ where: { userId: id, userRole: role } }) : Promise.resolve(0),
+      this.walletRepository.count({ where: { userId: id, userRole: role } }),
+      this.appActivityRepository.count({ where: { userId: id, userRole: role } }),
+      this.electricianRepository.count({ where: { dealerId: id } }),
+      this.scanRepository
+        .createQueryBuilder('scan')
+        .leftJoin('scan.product', 'product')
+        .select('scan.productId', 'productId')
+        .addSelect('scan.productName', 'productName')
+        .addSelect('product.category', 'category')
+        .addSelect('COUNT(*)', 'scanCount')
+        .addSelect('COALESCE(SUM(scan.points), 0)', 'pointsEarned')
+        .where('scan.userId = :id', { id })
+        .andWhere('scan.role = :role', { role })
+        .groupBy('scan.productId')
+        .addGroupBy('scan.productName')
+        .addGroupBy('product.category')
+        .orderBy('COUNT(*)', 'DESC')
+        .limit(8)
+        .getRawMany(),
+      this.appActivityRepository
+        .createQueryBuilder('event')
+        .select('event.productId', 'productId')
+        .addSelect('event.productName', 'productName')
+        .addSelect('event.productCategory', 'category')
+        .addSelect('COUNT(*)', 'viewCount')
+        .addSelect('COALESCE(SUM(event.durationMs), 0)', 'durationMs')
+        .where('event.userId = :id', { id })
+        .andWhere('event.userRole = :role', { role })
+        .andWhere('event.eventType = :eventType', { eventType: AppActivityEventType.PRODUCT_VIEW })
+        .andWhere('event.productId IS NOT NULL')
+        .groupBy('event.productId')
+        .addGroupBy('event.productName')
+        .addGroupBy('event.productCategory')
+        .orderBy('COUNT(*)', 'DESC')
+        .limit(8)
+        .getRawMany(),
+      hasCartTable ? this.cartRepository.find({
+        where: { userId: id, userRole: role },
+        order: { updatedAt: 'DESC' },
+        take: 8,
+      }) : Promise.resolve([]),
+      hasOrderTable ? this.orderRepository.find({
+        where: { userId: id, userRole: role },
+        order: { orderedAt: 'DESC' },
+        take: 8,
+      }) : Promise.resolve([]),
+      this.walletRepository.find({
+        where: { userId: id, userRole: role },
+        order: { createdAt: 'DESC' },
+        take: 8,
+      }),
+      this.scanRepository.find({
+        where: { userId: id, role },
+        order: { scannedAt: 'DESC' },
+        take: 8,
+      }),
+      this.appActivityRepository.find({
+        where: { userId: id, userRole: role },
+        order: { createdAt: 'DESC' },
+        take: 30,
+      }),
+    ]);
+
+    const cartInterest = new Map<string, any>();
+    for (const item of cartItems) {
+      cartInterest.set(item.productId, {
+        productId: item.productId,
+        productName: item.productName,
+        productImage: item.productImage,
+        cartQuantity: Number(item.quantity ?? 0),
+        cartValue: Number(item.price ?? 0) * Number(item.quantity ?? 0),
+      });
+    }
+
+    const orderInterest = new Map<string, any>();
+    for (const order of orders) {
+      const current = orderInterest.get(order.productId) ?? {
+        productId: order.productId,
+        productName: order.productName,
+        productImage: order.productImage,
+        orderQuantity: 0,
+        orderValue: 0,
+        lastOrderAt: order.orderedAt,
+      };
+      current.orderQuantity += Number(order.quantity ?? 0);
+      current.orderValue += Number(order.price ?? 0) * Number(order.quantity ?? 0);
+      orderInterest.set(order.productId, current);
+    }
+
+    const products = topScans.map((row) => ({
+      productId: row.productId,
+      productName: row.productName,
+      category: row.category ?? '—',
+      scanCount: Number(row.scanCount ?? 0),
+      pointsEarned: Number(row.pointsEarned ?? 0),
+      cartQuantity: Number(cartInterest.get(row.productId)?.cartQuantity ?? 0),
+      orderQuantity: Number(orderInterest.get(row.productId)?.orderQuantity ?? 0),
+      intentScore:
+        Number(row.scanCount ?? 0) * 3 +
+        Number(cartInterest.get(row.productId)?.cartQuantity ?? 0) * 5 +
+        Number(orderInterest.get(row.productId)?.orderQuantity ?? 0) * 8,
+    }));
+
+    for (const row of topViewedProducts) {
+      const existing = products.find((product) => product.productId === row.productId);
+      if (existing) {
+        (existing as any).viewCount = Number(row.viewCount ?? 0);
+        (existing as any).durationMs = Number(row.durationMs ?? 0);
+        existing.intentScore += Number(row.viewCount ?? 0) * 2 + Math.floor(Number(row.durationMs ?? 0) / 30000);
+      } else {
+        products.push({
+          productId: row.productId,
+          productName: row.productName,
+          category: row.category ?? '—',
+          scanCount: 0,
+          pointsEarned: 0,
+          cartQuantity: 0,
+          orderQuantity: 0,
+          viewCount: Number(row.viewCount ?? 0),
+          durationMs: Number(row.durationMs ?? 0),
+          intentScore: Number(row.viewCount ?? 0) * 2 + Math.floor(Number(row.durationMs ?? 0) / 30000),
+        } as any);
+      }
+    }
+
+    for (const item of [...cartInterest.values(), ...orderInterest.values()]) {
+      if (products.some((product) => product.productId === item.productId)) continue;
+      products.push({
+        productId: item.productId,
+        productName: item.productName,
+        category: '—',
+        scanCount: 0,
+        pointsEarned: 0,
+        cartQuantity: Number(item.cartQuantity ?? 0),
+        orderQuantity: Number(item.orderQuantity ?? 0),
+        intentScore: Number(item.cartQuantity ?? 0) * 5 + Number(item.orderQuantity ?? 0) * 8,
+      });
+    }
+
+    products.sort((a, b) => b.intentScore - a.intentScore);
+
+    const timeline = [
+      ...recentScans.map((scan) => ({
+        id: scan.id,
+        type: 'scan',
+        title: `Scanned ${scan.productName}`,
+        detail: `${scan.points} points earned${scan.location ? ` · ${scan.location}` : ''}`,
+        productName: scan.productName,
+        occurredAt: scan.scannedAt,
+      })),
+      ...cartItems.map((item) => ({
+        id: item.id,
+        type: 'cart',
+        title: `Added ${item.productName} to cart`,
+        detail: `${item.quantity} qty · ₹${Number(item.price ?? 0).toLocaleString('en-IN')}`,
+        productName: item.productName,
+        occurredAt: item.updatedAt,
+      })),
+      ...orders.map((order) => ({
+        id: order.id,
+        type: 'order',
+        title: `Ordered ${order.productName}`,
+        detail: `${order.quantity} qty · ${order.status}`,
+        productName: order.productName,
+        occurredAt: order.orderedAt,
+      })),
+      ...wallets.map((wallet) => ({
+        id: wallet.id,
+        type: 'wallet',
+        title: `${wallet.type === 'credit' ? 'Credit' : 'Debit'} ${wallet.source}`,
+        detail: `₹${Number(wallet.amount ?? 0).toLocaleString('en-IN')} · ${wallet.description ?? 'Wallet activity'}`,
+        occurredAt: wallet.createdAt,
+      })),
+      ...appEvents.map((event) => ({
+        id: event.id,
+        type: event.eventType,
+        title: event.eventLabel,
+        detail: [
+          event.screen ? `Screen: ${event.screen}` : '',
+          event.productName ? `Product: ${event.productName}` : '',
+          event.durationMs ? `Time: ${Math.round(event.durationMs / 1000)}s` : '',
+          event.metadata && typeof event.metadata === 'object' && 'action' in event.metadata ? `Action: ${String(event.metadata.action).replace(/_/g, ' ')}` : '',
+        ].filter(Boolean).join(' · ') || 'App touch activity',
+        productName: event.productName ?? undefined,
+        occurredAt: event.createdAt,
+      })),
+    ]
+      .sort((a, b) => new Date(b.occurredAt as any).getTime() - new Date(a.occurredAt as any).getTime())
+      .slice(0, 30);
+
+    return {
+      user: dealer,
+      summary: {
+        scans: scanStats,
+        cartItems: cartStats,
+        productOrders: orderStats,
+        walletTransactions: walletStats,
+        appEvents: appEventStats,
+        linkedElectricians: linkedElectricianCount,
+        favoriteProduct: products[0]?.productName ?? 'No product signal yet',
+        lastActivityAt: timeline[0]?.occurredAt ?? null,
+      },
+      productInterests: products.slice(0, 10),
+      recentTimeline: timeline,
+      note: 'Product interest is calculated from scans, cart items, orders, wallet activity, catalog downloads, app touch activity, and linked electrician count already stored in the database.',
+    };
+  }
+
   private mapImportColumns(record: any) {
     const map: Record<string, string> = {
       'STATE': 'state',
@@ -372,8 +613,19 @@ export class DealerService {
   }
 
   async getTop(from: string, to: string, limit: number = 10) {
-    const fromDate = new Date(from);
-    const toDate = new Date(to);
+    const now = new Date();
+    const fallbackFrom = new Date(now);
+    fallbackFrom.setDate(fallbackFrom.getDate() - 30);
+    fallbackFrom.setHours(0, 0, 0, 0);
+
+    const fromDate = from ? new Date(from) : fallbackFrom;
+    const toDate = to ? new Date(to) : now;
+    if (Number.isNaN(fromDate.getTime())) {
+      fromDate.setTime(fallbackFrom.getTime());
+    }
+    if (Number.isNaN(toDate.getTime())) {
+      toDate.setTime(now.getTime());
+    }
     toDate.setHours(23, 59, 59, 999);
 
     const results = await this.electricianRepository

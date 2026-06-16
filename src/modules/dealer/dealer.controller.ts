@@ -148,4 +148,11 @@ export class DealerController {
   ) {
     return this.dealerService.getDealerWallet(id, parseInt(page), parseInt(limit));
   }
+
+  @Get(':id/activity')
+  @ApiOperation({ summary: 'Get dealer product interest and activity timeline' })
+  @ApiResponse({ status: 200, description: 'Dealer activity insights' })
+  getActivity(@Param('id') id: string) {
+    return this.dealerService.getDealerActivity(id);
+  }
 }

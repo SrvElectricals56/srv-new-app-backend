@@ -26,6 +26,7 @@ import { Settings } from '../../database/entities/settings.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
 import { GiftOrder, GiftOrderStatus } from '../../database/entities/gift-order.entity';
 import { ProductCategory } from '../../database/entities/product-category.entity';
+import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
 import { UserRole, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 
@@ -74,6 +75,8 @@ export class MobileService {
     private giftOrderRepository: Repository<GiftOrder>,
     @InjectRepository(ProductCategory)
     private productCategoryRepository: Repository<ProductCategory>,
+    @InjectRepository(AppActivityEvent)
+    private appActivityRepository: Repository<AppActivityEvent>,
     private readonly tierService: TierService,
   ) {}
 
@@ -587,6 +590,48 @@ export class MobileService {
       : await this.productCartItemRepository.save(this.productCartItemRepository.create(itemData));
 
     return { message: 'Product added to cart', item: saved };
+  }
+
+  async trackActivity(userId: string, role: string, body: {
+    eventType: AppActivityEventType | string;
+    eventLabel?: string;
+    screen?: string;
+    previousScreen?: string;
+    productId?: string;
+    productName?: string;
+    productCategory?: string;
+    quantity?: number;
+    durationMs?: number;
+    metadata?: Record<string, unknown>;
+  }) {
+    const normalizedRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, normalizedRole);
+    if (!user) throw new NotFoundException('User not found');
+
+    const eventType = Object.values(AppActivityEventType).includes(body.eventType as AppActivityEventType)
+      ? body.eventType as AppActivityEventType
+      : AppActivityEventType.BUTTON_TAP;
+
+    const event = this.appActivityRepository.create({
+      userId,
+      userRole: normalizedRole,
+      userName: (user as any).name ?? '',
+      userPhone: (user as any).phone ?? '',
+      userCode: this.getUserCodeForRole(user, normalizedRole),
+      eventType,
+      eventLabel: body.eventLabel?.trim() || eventType,
+      screen: body.screen?.trim() || null,
+      previousScreen: body.previousScreen?.trim() || null,
+      productId: body.productId?.trim() || null,
+      productName: body.productName?.trim() || null,
+      productCategory: body.productCategory?.trim() || null,
+      quantity: Math.max(1, Number(body.quantity ?? 1)),
+      durationMs: Math.max(0, Math.round(Number(body.durationMs ?? 0))),
+      metadata: body.metadata ?? null,
+    });
+
+    await this.appActivityRepository.save(event);
+    return { message: 'Activity tracked', id: event.id };
   }
 
   async createProductOrder(userId: string, role: string, body: { productId: string; quantity?: number; shippingAddress?: string }) {
