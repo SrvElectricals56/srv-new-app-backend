@@ -27,8 +27,86 @@ export class ProductOrderService {
     private dataSource: DataSource,
   ) {}
 
+  private async ensureDeliveryColumns() {
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "estimatedDeliveryAt" timestamptz
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "rejectedAt" timestamptz
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "refundStatus" varchar
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "refundMessage" text
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "deliveryNotes" text
+    `);
+    await this.productOrderRepository.query(`
+      ALTER TABLE "product_orders"
+      ADD COLUMN IF NOT EXISTS "courierName" varchar
+    `);
+  }
+
+  private estimateDeliveryDate(from = new Date()) {
+    const estimated = new Date(from);
+    estimated.setDate(estimated.getDate() + 5);
+    return estimated;
+  }
+
+  private mapOrder(o: ProductOrder) {
+    return {
+      id: o.id,
+      userId: o.userId,
+      userRole: o.userRole,
+      userName: o.userName,
+      userPhone: o.userPhone,
+      userCode: o.userCode,
+      productId: o.productId,
+      productName: o.productName,
+      productImage: o.productImage,
+      quantity: o.quantity,
+      price: parseFloat(o.price.toString()),
+      total: parseFloat(o.price.toString()) * o.quantity,
+      status: o.status,
+      shippingAddress: o.shippingAddress,
+      trackingNumber: o.trackingNumber,
+      courierName: o.courierName,
+      rejectionReason: o.rejectionReason,
+      paymentMethod: o.paymentMethod,
+      paymentStatus: o.paymentStatus,
+      razorpayPaymentId: o.razorpayPaymentId,
+      paidAt: o.paidAt,
+      estimatedDeliveryAt: o.estimatedDeliveryAt,
+      dispatchedAt: o.dispatchedAt,
+      deliveredAt: o.deliveredAt,
+      rejectedAt: o.rejectedAt,
+      refundStatus: o.refundStatus,
+      refundMessage: o.refundMessage,
+      deliveryNotes: o.deliveryNotes,
+      orderedAt: o.orderedAt,
+      updatedAt: o.updatedAt,
+    };
+  }
+
   async findAll(page = 1, limit = 20, status?: string, role?: string, search?: string) {
+    await this.ensureDeliveryColumns();
     const qb = this.productOrderRepository.createQueryBuilder('o')
+      .where('(o.paymentMethod <> :razorpay OR o.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
       .orderBy('o.orderedAt', 'DESC');
 
     if (status && status !== 'all') {
@@ -47,39 +125,26 @@ export class ProductOrderService {
     const total = await qb.getCount();
     const data = await qb.skip((page - 1) * limit).take(limit).getMany();
 
-    const mapped = data.map((o) => ({
-      id: o.id,
-      userId: o.userId,
-      userRole: o.userRole,
-      userName: o.userName,
-      userPhone: o.userPhone,
-      userCode: o.userCode,
-      productId: o.productId,
-      productName: o.productName,
-      productImage: o.productImage,
-      quantity: o.quantity,
-      price: parseFloat(o.price.toString()),
-      total: parseFloat(o.price.toString()) * o.quantity,
-      status: o.status,
-      shippingAddress: o.shippingAddress,
-      trackingNumber: o.trackingNumber,
-      rejectionReason: o.rejectionReason,
-      orderedAt: o.orderedAt,
-      updatedAt: o.updatedAt,
-    }));
+    const mapped = data.map((o) => this.mapOrder(o));
 
     return { data: mapped, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async findOne(id: string) {
+    await this.ensureDeliveryColumns();
     const order = await this.productOrderRepository.findOne({ where: { id } });
-    if (!order) throw new NotFoundException('Product order not found');
-    return order;
+    if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
+      throw new NotFoundException('Product order not found');
+    }
+    return this.mapOrder(order);
   }
 
-  async updateStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string }) {
+  async updateStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string }) {
+    await this.ensureDeliveryColumns();
     const order = await this.productOrderRepository.findOne({ where: { id } });
-    if (!order) throw new NotFoundException('Product order not found');
+    if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
+      throw new NotFoundException('Product order not found');
+    }
 
     const validStatuses = Object.values(ProductOrderStatus);
     if (!validStatuses.includes(status as ProductOrderStatus)) {
@@ -95,18 +160,52 @@ export class ProductOrderService {
     };
 
     const allowed = transitions[order.status] ?? [];
-    if (!allowed.includes(status)) {
+    if (status !== order.status && !allowed.includes(status)) {
       throw new BadRequestException(
         `Cannot transition from '${order.status}' to '${status}'. Allowed: ${allowed.join(', ') || 'none'}`,
       );
     }
 
     const updateData: Partial<ProductOrder> = { status: status as ProductOrderStatus };
+    if (!order.estimatedDeliveryAt && status !== ProductOrderStatus.REJECTED) {
+      updateData.estimatedDeliveryAt = this.estimateDeliveryDate(order.paidAt ?? order.orderedAt ?? new Date());
+    }
     if (extra?.rejectionReason && (status === ProductOrderStatus.REJECTED)) {
       updateData.rejectionReason = extra.rejectionReason;
     }
     if (extra?.trackingNumber) {
       updateData.trackingNumber = extra.trackingNumber;
+    }
+    if (extra?.courierName) {
+      updateData.courierName = extra.courierName;
+    }
+    if (status === ProductOrderStatus.PENDING) {
+      updateData.deliveryNotes = 'Payment done. Order is waiting for dispatch.';
+    }
+    if (status === ProductOrderStatus.APPROVED) {
+      updateData.deliveryNotes = 'Order confirmed and ready for packing.';
+    }
+    if (status === ProductOrderStatus.SHIPPED) {
+      updateData.dispatchedAt = order.dispatchedAt ?? new Date();
+      updateData.deliveryNotes = extra?.courierName
+        ? `Order dispatched through ${extra.courierName}.`
+        : 'Order dispatched. Delivery partner update is awaited.';
+    }
+    if (status === ProductOrderStatus.DELIVERED) {
+      updateData.deliveredAt = order.deliveredAt ?? new Date();
+      updateData.deliveryNotes = 'Order delivered successfully.';
+    }
+    if (status === ProductOrderStatus.REJECTED) {
+      const isPaid = order.paymentStatus === 'paid';
+      updateData.rejectedAt = new Date();
+      updateData.refundStatus = isPaid ? 'pending' : null;
+      updateData.refundMessage = isPaid
+        ? 'Order rejected. Your money will be refunded within 2 business days.'
+        : 'Order rejected before payment confirmation.';
+      updateData.deliveryNotes = isPaid
+        ? 'Rejected by admin. Refund will be processed within 2 business days.'
+        : 'Rejected by admin.';
+      updateData.rejectionReason = extra?.rejectionReason || order.rejectionReason || 'Rejected by admin';
     }
 
     // ── Credit points to user/counterboy wallet on delivery ──
@@ -174,7 +273,12 @@ export class ProductOrderService {
     }
 
     await this.productOrderRepository.update(id, updateData);
-    return { message: 'Order status updated successfully' };
+    return {
+      message: status === ProductOrderStatus.REJECTED
+        ? 'Order rejected. Refund message sent to customer.'
+        : 'Order status updated successfully',
+      refundMessage: updateData.refundMessage,
+    };
   }
 
   private calculateTier(points: number): string {
@@ -185,12 +289,16 @@ export class ProductOrderService {
   }
 
   async remove(id: string) {
-    const order = await this.findOne(id);
+    const order = await this.productOrderRepository.findOne({ where: { id } });
+    if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
+      throw new NotFoundException('Product order not found');
+    }
     await this.productOrderRepository.remove(order);
     return { message: 'Product order deleted successfully' };
   }
 
   async getStats() {
+    await this.ensureDeliveryColumns();
     const row = await this.productOrderRepository
       .createQueryBuilder('o')
       .select('COUNT(*)::int', 'total')
@@ -199,12 +307,15 @@ export class ProductOrderService {
       .addSelect('COUNT(*) FILTER (WHERE o.status = :shipped)::int', 'shipped')
       .addSelect('COUNT(*) FILTER (WHERE o.status = :delivered)::int', 'delivered')
       .addSelect('COUNT(*) FILTER (WHERE o.status = :rejected)::int', 'rejected')
+      .where('(o.paymentMethod <> :razorpay OR o.paymentStatus = :paid)')
       .setParameters({
         pending: ProductOrderStatus.PENDING,
         approved: ProductOrderStatus.APPROVED,
         shipped: ProductOrderStatus.SHIPPED,
         delivered: ProductOrderStatus.DELIVERED,
         rejected: ProductOrderStatus.REJECTED,
+        razorpay: 'razorpay',
+        paid: 'paid',
       })
       .getRawOne();
 

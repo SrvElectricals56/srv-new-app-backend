@@ -35,6 +35,13 @@ export class ProductOrderController {
     return this.productOrderService.findAll(parseInt(page), parseInt(limit), status, role, search);
   }
 
+  @Get('stats/summary')
+  @ApiOperation({ summary: 'Get product order stats' })
+  @ApiResponse({ status: 200, description: 'Order statistics' })
+  getStats() {
+    return this.productOrderService.getStats();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get product order by ID' })
   @ApiResponse({ status: 200, description: 'Product order details' })
@@ -48,11 +55,12 @@ export class ProductOrderController {
   @ApiResponse({ status: 200, description: 'Order status updated' })
   updateStatus(
     @Param('id') id: string,
-    @Body() body: { status: string; rejectionReason?: string; trackingNumber?: string },
+    @Body() body: { status: string; rejectionReason?: string; trackingNumber?: string; courierName?: string },
   ) {
     return this.productOrderService.updateStatus(id, body.status, {
       rejectionReason: body.rejectionReason,
       trackingNumber: body.trackingNumber,
+      courierName: body.courierName,
     });
   }
 
@@ -62,12 +70,5 @@ export class ProductOrderController {
   @ApiResponse({ status: 200, description: 'Product order deleted' })
   remove(@Param('id') id: string) {
     return this.productOrderService.remove(id);
-  }
-
-  @Get('stats/summary')
-  @ApiOperation({ summary: 'Get product order stats' })
-  @ApiResponse({ status: 200, description: 'Order statistics' })
-  getStats() {
-    return this.productOrderService.getStats();
   }
 }

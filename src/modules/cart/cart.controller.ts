@@ -74,6 +74,41 @@ export class CartController {
     return this.cartService.createOrder(req.user.id, req.user.role, body);
   }
 
+  @Post('payments/razorpay/order')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a secure Razorpay order for a product purchase' })
+  createRazorpayOrder(
+    @Request() req: any,
+    @Body() body: { productId: string; quantity?: number; shippingAddress?: string },
+  ) {
+    return this.cartService.createRazorpayOrder(req.user.id, req.user.role, body);
+  }
+
+  @Post('payments/razorpay/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify Razorpay payment and confirm the product order' })
+  verifyRazorpayPayment(
+    @Request() req: any,
+    @Body() body: {
+      productOrderId: string;
+      razorpayOrderId: string;
+      razorpayPaymentId: string;
+      razorpaySignature: string;
+    },
+  ) {
+    return this.cartService.verifyRazorpayPayment(req.user.id, req.user.role, body);
+  }
+
+  @Post('payments/razorpay/failure')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Record a cancelled or failed Razorpay checkout attempt' })
+  recordRazorpayFailure(
+    @Request() req: any,
+    @Body() body: { productOrderId: string; reason?: string },
+  ) {
+    return this.cartService.recordRazorpayFailure(req.user.id, req.user.role, body);
+  }
+
   @Post('cart/checkout')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Checkout — place orders for all cart items and clear cart' })

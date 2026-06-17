@@ -15,7 +15,14 @@ async function bootstrap() {
   // Body size limit — must be set BEFORE helmet/compression
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const express = require('express');
-  app.use(express.json({ limit: '50mb' }));
+  app.use(express.json({
+    limit: '50mb',
+    verify: (req: any, _res: any, buffer: Buffer) => {
+      if (req.originalUrl?.includes('/payments/razorpay/webhook')) {
+        req.rawBody = Buffer.from(buffer);
+      }
+    },
+  }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // CORS must be enabled BEFORE helmet

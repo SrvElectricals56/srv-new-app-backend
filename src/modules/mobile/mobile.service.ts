@@ -1883,10 +1883,15 @@ export class MobileService {
         where: { userId },
         order: { orderedAt: 'DESC' },
       }),
-      this.productOrderRepository.find({
-        where: { userId },
-        order: { orderedAt: 'DESC' },
-      }),
+      this.productOrderRepository
+        .createQueryBuilder('order')
+        .where('order.userId = :userId', { userId })
+        .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus = :paid)', {
+          razorpay: 'razorpay',
+          paid: 'paid',
+        })
+        .orderBy('order.orderedAt', 'DESC')
+        .getMany(),
     ]);
 
     const giftMapped = giftOrders.map(o => ({
@@ -1917,7 +1922,21 @@ export class MobileService {
       userId: o.userId,
       userName: o.userName,
       points: parseFloat(o.price.toString()) * o.quantity,
-      deliveredAt: o.orderedAt?.toISOString() ?? null,
+      deliveredAt: o.deliveredAt?.toISOString() ?? null,
+      orderedAt: o.orderedAt?.toISOString() ?? null,
+      paidAt: o.paidAt?.toISOString() ?? null,
+      estimatedDeliveryAt: o.estimatedDeliveryAt?.toISOString() ?? null,
+      dispatchedAt: o.dispatchedAt?.toISOString() ?? null,
+      rejectedAt: o.rejectedAt?.toISOString() ?? null,
+      shippingAddress: o.shippingAddress ?? null,
+      trackingNumber: o.trackingNumber ?? null,
+      courierName: o.courierName ?? null,
+      paymentMethod: o.paymentMethod ?? null,
+      paymentStatus: o.paymentStatus ?? null,
+      refundStatus: o.refundStatus ?? null,
+      refundMessage: o.refundMessage ?? null,
+      rejectionReason: o.rejectionReason ?? null,
+      deliveryNotes: o.deliveryNotes ?? null,
       createdAt: o.orderedAt.toISOString(),
     }));
 

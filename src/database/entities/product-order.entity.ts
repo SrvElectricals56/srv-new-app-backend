@@ -66,8 +66,50 @@ export class ProductOrder {
   @Column({ nullable: true })
   trackingNumber: string;
 
+  @Column({ nullable: true })
+  courierName: string;
+
   @Column({ type: 'text', nullable: true })
   rejectionReason: string;
+
+  @Column({ default: 'cod' })
+  paymentMethod: string;
+
+  @Column({ default: 'pending' })
+  paymentStatus: string;
+
+  @Column({ nullable: true })
+  razorpayOrderId: string;
+
+  @Column({ nullable: true })
+  razorpayPaymentId: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  paidAt: Date;
+
+  @Column({ type: 'text', nullable: true })
+  paymentFailureReason: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  estimatedDeliveryAt: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  dispatchedAt: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  deliveredAt: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  rejectedAt: Date;
+
+  @Column({ nullable: true })
+  refundStatus: string;
+
+  @Column({ type: 'text', nullable: true })
+  refundMessage: string;
+
+  @Column({ type: 'text', nullable: true })
+  deliveryNotes: string;
 
   @CreateDateColumn({ type: 'timestamptz' })
   orderedAt: Date;

@@ -10,6 +10,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { CartController } from './cart.controller';
 import { CartService } from './cart.service';
 import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
+import { RazorpayWebhookController } from './razorpay-webhook.controller';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
     ]),
     MobileAuthModule, // needed for MobileJwtGuard
   ],
-  controllers: [CartController],
+  controllers: [CartController, RazorpayWebhookController],
   providers: [CartService],
   exports: [CartService],
 })
