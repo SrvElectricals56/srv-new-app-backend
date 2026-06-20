@@ -38,6 +38,18 @@ export class QrCode {
   @Column({ nullable: true })
   lastScannedAt: Date;
 
+  @Column({ type: 'integer', nullable: true })
+  legacyRedeemerId: number;
+
+  @Column({ nullable: true })
+  redeemerName: string;
+
+  @Column({ nullable: true })
+  redeemerPhone: string;
+
+  @Column({ nullable: true })
+  redeemerCode: string;
+
   @Column({ nullable: true })
   batchId: string;
 

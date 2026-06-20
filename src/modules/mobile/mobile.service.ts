@@ -120,7 +120,8 @@ export class MobileService {
     if (!this.persistenceSetupPromise) {
       this.persistenceSetupPromise = this.dataSource.query(`
         ALTER TABLE "support_tickets"
-        ADD COLUMN IF NOT EXISTS "photoUrl" text;
+        ADD COLUMN IF NOT EXISTS "photoUrl" text,
+        ADD COLUMN IF NOT EXISTS "photoUrls" text[];
       `).then(async () => {
         await this.dataSource.query(`
           CREATE TABLE IF NOT EXISTS "app_ratings" (
@@ -128,6 +129,15 @@ export class MobileService {
             "userRole" varchar(50) NOT NULL,
             "rating" integer NOT NULL,
             "review" text NULL,
+            "createdAt" timestamptz NOT NULL DEFAULT now(),
+            "updatedAt" timestamptz NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS "mobile_push_tokens" (
+            "token" text PRIMARY KEY,
+            "userId" text NOT NULL,
+            "userRole" varchar(50) NOT NULL,
+            "platform" varchar(20),
+            "enabled" boolean NOT NULL DEFAULT true,
             "createdAt" timestamptz NOT NULL DEFAULT now(),
             "updatedAt" timestamptz NOT NULL DEFAULT now()
           );
@@ -473,7 +483,7 @@ export class MobileService {
     // Transform products to include imageUrl field and handle null/empty images
     const transformedProducts = products.map(product => {
       // If image is null, empty, or just whitespace, set it to null so app can use fallback
-      const imageValue = product.image?.trim() || null;
+      const imageValue = this.normalizeUploadUrl(product.image) || null;
       
       return {
         ...product,
@@ -781,6 +791,25 @@ export class MobileService {
     if (!notification) throw new NotFoundException('Notification not found');
     await this.notificationRepository.remove(notification);
     return { message: 'Notification deleted successfully' };
+  }
+
+  async registerPushToken(userId: string, role: string, token: string, platform?: string) {
+    await this.ensurePersistenceArtifacts();
+    if (!token || !/^ExponentPushToken\[[^\]]+\]$|^ExpoPushToken\[[^\]]+\]$/.test(token)) {
+      throw new BadRequestException('Invalid Expo push token');
+    }
+    const userRole = this.normalizeRole(role);
+    await this.dataSource.query(`
+      INSERT INTO "mobile_push_tokens" ("token", "userId", "userRole", "platform", "enabled", "updatedAt")
+      VALUES ($1, $2, $3, $4, true, now())
+      ON CONFLICT ("token") DO UPDATE SET
+        "userId" = EXCLUDED."userId",
+        "userRole" = EXCLUDED."userRole",
+        "platform" = EXCLUDED."platform",
+        "enabled" = true,
+        "updatedAt" = now()
+    `, [token, userId, userRole, platform ?? null]);
+    return { message: 'Push token registered successfully' };
   }
 
   // ── Settings / Maintenance ─────────────────────────────────────────────────
@@ -1801,18 +1830,21 @@ export class MobileService {
   // ── Support ────────────────────────────────────────────────────────────────
 
   async createSupportTicket(userId: string, role: string, data: {
-    subject: string; comment: string; photoUrl?: string;
+    subject: string; comment: string; photoUrl?: string; photoUrls?: string[];
   }) {
     await this.ensurePersistenceArtifacts();
     const user = await this.getUserByRole(userId, role);
     const userRole = this.normalizeRole(role);
+    const photoUrls = [...new Set((data.photoUrls ?? []).filter(Boolean))].slice(0, 5);
+    if (!photoUrls.length && data.photoUrl) photoUrls.push(data.photoUrl);
     const ticket = this.supportTicketRepository.create({
       userId,
       userName: user?.name ?? 'Unknown',
       userRole,
       subject: data.subject,
       message: data.comment,
-      photoUrl: data.photoUrl ?? null,
+      photoUrl: data.photoUrl ?? photoUrls[0] ?? null,
+      photoUrls: photoUrls.length ? photoUrls : null,
       status: SupportTicketStatus.OPEN,
       priority: SupportTicketPriority.MEDIUM,
     });

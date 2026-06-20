@@ -191,6 +191,7 @@ export class ElectricianService {
     subCategory?: string,
     bankLinked?: boolean,
     appInstalled?: boolean,
+    welcomeBonus?: boolean,
     dateFrom?: string,
     dateTo?: string,
   ) {
@@ -236,6 +237,25 @@ export class ElectricianService {
 
     if (appInstalled !== undefined) {
       queryBuilder.andWhere('electrician.appInstalled = :appInstalled', { appInstalled });
+    }
+
+    if (welcomeBonus) {
+      queryBuilder.andWhere((subQuery) => {
+        const welcomeScan = subQuery
+          .subQuery()
+          .select('1')
+          .from(Scan, 'welcomeScan')
+          .innerJoin('products', 'welcomeProduct', 'welcomeProduct.id = welcomeScan.productId')
+          .where('welcomeScan.userId = electrician.id')
+          .andWhere('welcomeScan.role = :welcomeRole')
+          .andWhere('UPPER(welcomeProduct.sku) = :welcomeSku')
+          .getQuery();
+        return `EXISTS ${welcomeScan}`;
+      });
+      queryBuilder.setParameters({
+        welcomeRole: UserRole.ELECTRICIAN,
+        welcomeSku: 'SRV-WELCOME',
+      });
     }
 
     if (dateFrom) {

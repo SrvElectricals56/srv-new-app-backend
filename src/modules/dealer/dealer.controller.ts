@@ -94,6 +94,16 @@ export class DealerController {
     return this.dealerService.getTop(from, to, parseInt(limit));
   }
 
+  @Get('sub-dealers')
+  @ApiOperation({ summary: 'Get unregistered dealer numbers captured during electrician signup' })
+  getSubDealers(
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+  ) {
+    return this.dealerService.getSubDealers(parseInt(page), parseInt(limit), search);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get dealer by ID' })
   @ApiResponse({ status: 200, description: 'Dealer details' })

@@ -27,7 +27,7 @@ export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}
 
   @Post()
-  @Roles(AdminRole.SUPER_ADMIN)
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Create new notification' })
   @ApiResponse({ status: 201, description: 'Notification created successfully' })
   create(

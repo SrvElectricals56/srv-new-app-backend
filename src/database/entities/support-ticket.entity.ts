@@ -34,6 +34,9 @@ export class SupportTicket {
   @Column({ type: 'text', nullable: true })
   photoUrl: string;
 
+  @Column({ type: 'text', array: true, nullable: true })
+  photoUrls: string[];
+
   @Column({
     type: 'enum',
     enum: SupportTicketStatus,

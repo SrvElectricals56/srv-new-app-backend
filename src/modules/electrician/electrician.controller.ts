@@ -48,6 +48,7 @@ export class ElectricianController {
     @Query('subCategory') subCategory?: string,
     @Query('bankLinked') bankLinked?: string,
     @Query('appInstalled') appInstalled?: string,
+    @Query('welcomeBonus') welcomeBonus?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
@@ -56,6 +57,7 @@ export class ElectricianController {
       search, status, tier, state, city, dealerId, subCategory,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
+      welcomeBonus === 'true' ? true : undefined,
       dateFrom, dateTo,
     );
   }

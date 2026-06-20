@@ -130,6 +130,12 @@ export class Electrician {
   @Column({ nullable: true })
   dealerId: string;
 
+  @Column({ nullable: true })
+  fallbackDealerName: string;
+
+  @Column({ nullable: true })
+  fallbackDealerPhone: string;
+
   @ManyToOne(() => Dealer, (dealer) => dealer.electricians, {
     onDelete: 'SET NULL',
   })

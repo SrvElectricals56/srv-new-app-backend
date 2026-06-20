@@ -72,6 +72,15 @@ export class MobileController {
     return this.mobileService.getNotifications(req.user.id, req.user.role);
   }
 
+  @Post('notifications/push-token')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Register this device for push notifications' })
+  registerPushToken(@Request() req: any, @Body() body: { token: string; platform?: string }) {
+    return this.mobileService.registerPushToken(req.user.id, req.user.role, body.token, body.platform);
+  }
+
   @Delete('notifications/:id')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')
@@ -341,7 +350,7 @@ export class MobileController {
   @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create support ticket' })
-  createSupportTicket(@Request() req: any, @Body() body: { subject: string; comment: string; photoUrl?: string }) {
+  createSupportTicket(@Request() req: any, @Body() body: { subject: string; comment: string; photoUrl?: string; photoUrls?: string[] }) {
     return this.mobileService.createSupportTicket(req.user.id, req.user.role, body);
   }
 

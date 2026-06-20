@@ -1,5 +1,6 @@
 import {
   Injectable,
+  OnModuleInit,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
@@ -25,7 +26,7 @@ const otpStore = new Map<string, { otp: string; expiresAt: number }>();
 const SIGNUP_OTP_VERIFIED = 'VERIFIED';
 
 @Injectable()
-export class MobileAuthService {
+export class MobileAuthService implements OnModuleInit {
   private appUserInstallColumnsEnsured = false;
   private counterboyInstallColumnsEnsured = false;
 
@@ -45,6 +46,31 @@ export class MobileAuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
+
+  async onModuleInit() {
+    await this.ensureSubDealerSchema();
+  }
+
+  private async ensureSubDealerSchema() {
+    await this.electricianRepository.query(
+      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerName" character varying',
+    );
+    await this.electricianRepository.query(
+      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerPhone" character varying',
+    );
+    await this.electricianRepository.query(`
+      CREATE TABLE IF NOT EXISTS "sub_dealers" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        "phone" character varying NOT NULL UNIQUE,
+        "name" character varying NOT NULL DEFAULT 'SRV Dealer',
+        "district" character varying,
+        "pincode" character varying,
+        "electricianCount" integer NOT NULL DEFAULT 0,
+        "firstSeenAt" timestamptz NOT NULL DEFAULT now(),
+        "lastSeenAt" timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -421,13 +447,21 @@ export class MobileAuthService {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician');
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'electrician');
 
+    await this.ensureSubDealerSchema();
+    const normalizedDealerPhone = this.normalizePhone(data.dealerPhone);
     let dealerId: string | undefined;
     let dealerCode: string | undefined;
+    let fallbackDealerName: string | undefined;
+    let fallbackDealerPhone: string | undefined;
     if (data.dealerPhone) {
       const dealer = await this.findUserByPhone(data.dealerPhone, 'dealer');
-      if (!dealer) throw new NotFoundException('Dealer not found with this phone number.');
-      dealerId = dealer.id;
-      dealerCode = dealer.dealerCode;
+      if (dealer) {
+        dealerId = dealer.id;
+        dealerCode = dealer.dealerCode;
+      } else {
+        fallbackDealerName = 'SRV Dealer';
+        fallbackDealerPhone = normalizedDealerPhone;
+      }
     }
 
     const manualCode = this.normalizeElectricianCode(data.electricianCode);
@@ -450,6 +484,8 @@ export class MobileAuthService {
       address: data.address,
       pincode: data.pincode,
       dealerId,
+      fallbackDealerName,
+      fallbackDealerPhone,
       electricianCode,
       subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
       status: UserStatus.ACTIVE,
@@ -460,6 +496,20 @@ export class MobileAuthService {
     (electrician as any).firstAppLoginAt = new Date();
 
     const saved = await this.electricianRepository.save(electrician) as Electrician;
+    if (fallbackDealerPhone) {
+      await this.electricianRepository.query(
+        `INSERT INTO "sub_dealers"
+          ("phone", "name", "district", "pincode", "electricianCount")
+         VALUES ($1, 'SRV Dealer', $2, $3, 1)
+         ON CONFLICT ("phone") DO UPDATE SET
+          "name" = 'SRV Dealer',
+          "district" = COALESCE(EXCLUDED."district", "sub_dealers"."district"),
+          "pincode" = COALESCE(EXCLUDED."pincode", "sub_dealers"."pincode"),
+          "electricianCount" = "sub_dealers"."electricianCount" + 1,
+          "lastSeenAt" = now()`,
+        [fallbackDealerPhone, data.district || null, data.pincode || null],
+      );
+    }
     otpStore.delete(signupOtpKey);
     if (dealerId) {
       await this.tierService.syncDealerTier(dealerId);
@@ -803,8 +853,8 @@ export class MobileAuthService {
           accountHolderName: user.accountHolderName,
           profileImage: user.profileImage ?? null,
           dealerId: user.dealerId,
-          dealerName: user.dealer?.name ?? null,
-          dealerPhone: user.dealer?.phone ?? null,
+          dealerName: user.dealer?.name ?? user.fallbackDealerName ?? null,
+          dealerPhone: user.dealer?.phone ?? user.fallbackDealerPhone ?? null,
           dealerTown: user.dealer?.town ?? null,
           dealerCode: user.dealer?.dealerCode ?? null,
           aadharFrontImage: user.aadharFrontImage ?? null,

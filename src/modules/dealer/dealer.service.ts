@@ -71,6 +71,51 @@ export class DealerService {
     return Boolean(rows?.[0]?.name);
   }
 
+  private async ensureSubDealerSchema() {
+    await this.electricianRepository.query(
+      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerName" character varying',
+    );
+    await this.electricianRepository.query(
+      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerPhone" character varying',
+    );
+    await this.dealerRepository.query(`
+      CREATE TABLE IF NOT EXISTS "sub_dealers" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        "phone" character varying NOT NULL UNIQUE,
+        "name" character varying NOT NULL DEFAULT 'SRV Dealer',
+        "district" character varying,
+        "pincode" character varying,
+        "electricianCount" integer NOT NULL DEFAULT 0,
+        "firstSeenAt" timestamptz NOT NULL DEFAULT now(),
+        "lastSeenAt" timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+  }
+
+  async getSubDealers(page = 1, limit = 20, search?: string) {
+    await this.ensureSubDealerSchema();
+    const safePage = Math.max(1, page || 1);
+    const safeLimit = Math.min(100, Math.max(1, limit || 20));
+    const term = search?.trim() ? `%${search.trim()}%` : null;
+    const where = term
+      ? 'WHERE sd."phone" ILIKE $1 OR sd."name" ILIKE $1 OR COALESCE(sd."district", \'\') ILIKE $1'
+      : '';
+    const values: any[] = term ? [term] : [];
+    const countRows = await this.dealerRepository.query(
+      `SELECT COUNT(*)::int AS total FROM "sub_dealers" sd ${where}`,
+      values,
+    );
+    const data = await this.dealerRepository.query(
+      `SELECT sd."id", sd."phone", 'SRV Dealer' AS "name", sd."district", sd."pincode",
+              sd."electricianCount", sd."firstSeenAt", sd."lastSeenAt"
+       FROM "sub_dealers" sd ${where}
+       ORDER BY sd."lastSeenAt" DESC
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, safeLimit, (safePage - 1) * safeLimit],
+    );
+    return { data, total: Number(countRows[0]?.total ?? 0), page: safePage, limit: safeLimit };
+  }
+
   async create(createDealerDto: CreateDealerDto) {
     await this.crossRolePhoneService.assertPhoneAvailableForRole(createDealerDto.phone, 'dealer');
 

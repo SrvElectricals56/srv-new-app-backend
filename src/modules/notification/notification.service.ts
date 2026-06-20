@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
+import axios from 'axios';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { Notification } from '../../database/entities/notification.entity';
@@ -11,6 +13,7 @@ export class NotificationService {
   constructor(
     @InjectRepository(Notification)
     private notificationRepository: Repository<Notification>,
+    private dataSource: DataSource,
   ) {}
 
   private normalizeTargetRole(targetRole?: string | null) {
@@ -103,8 +106,59 @@ export class NotificationService {
       throw new BadRequestException('Notification already sent');
     }
 
-    // Mock sending logic - in real implementation, integrate with Firebase/push service
-    const totalSent = notification.targetUserIds?.length || 100; // Mock count
+    await this.dataSource.query(`
+      CREATE TABLE IF NOT EXISTS "mobile_push_tokens" (
+        "token" text PRIMARY KEY,
+        "userId" text NOT NULL,
+        "userRole" varchar(50) NOT NULL,
+        "platform" varchar(20),
+        "enabled" boolean NOT NULL DEFAULT true,
+        "createdAt" timestamptz NOT NULL DEFAULT now(),
+        "updatedAt" timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+
+    const targetUserIds = (notification.targetUserIds ?? []).filter(Boolean);
+    const targetRole = this.normalizeTargetRole(notification.targetRole);
+    const params: any[] = [];
+    const conditions = ['"enabled" = true'];
+    if (targetUserIds.length) {
+      params.push(targetUserIds);
+      conditions.push(`"userId" = ANY($${params.length}::text[])`);
+    } else if (targetRole) {
+      params.push(targetRole);
+      conditions.push(`"userRole" = $${params.length}`);
+    }
+    const rows: { token: string }[] = await this.dataSource.query(
+      `SELECT DISTINCT "token" FROM "mobile_push_tokens" WHERE ${conditions.join(' AND ')}`,
+      params,
+    );
+
+    let totalSent = 0;
+    let totalFailed = 0;
+    for (let index = 0; index < rows.length; index += 100) {
+      const messages = rows.slice(index, index + 100).map(({ token }) => ({
+        to: token,
+        sound: 'default',
+        title: notification.title,
+        body: notification.message,
+        data: { notificationId: notification.id, actionUrl: notification.actionUrl ?? null },
+        channelId: 'default',
+        priority: 'high',
+      }));
+      if (!messages.length) continue;
+      try {
+        const response = await axios.post('https://exp.host/--/api/v2/push/send', messages, {
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          timeout: 15000,
+        });
+        const tickets = Array.isArray(response.data?.data) ? response.data.data : [];
+        totalSent += tickets.filter((ticket: any) => ticket.status === 'ok').length;
+        totalFailed += tickets.filter((ticket: any) => ticket.status !== 'ok').length;
+      } catch {
+        totalFailed += messages.length;
+      }
+    }
 
     await this.notificationRepository.update(id, {
       status: NotificationStatus.SENT,
@@ -115,6 +169,9 @@ export class NotificationService {
     return {
       message: 'Notification sent successfully',
       totalSent,
+      totalFailed,
+      registeredDevices: rows.length,
+      inboxDelivery: true,
     };
   }
 

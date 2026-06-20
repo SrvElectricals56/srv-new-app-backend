@@ -150,7 +150,7 @@ export class QrCodeService implements OnModuleInit {
     const row = await this.qrCodeRepository
       .createQueryBuilder('qr')
       .select('COUNT(*)::int', 'total')
-      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = false)::int', 'active')
+      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = false AND qr."isActive" = true)::int', 'active')
       .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = true)::int', 'used')
       .getRawOne();
 
@@ -158,6 +158,7 @@ export class QrCodeService implements OnModuleInit {
       total: Number(row?.total ?? 0),
       active: Number(row?.active ?? 0),
       used: Number(row?.used ?? 0),
+      scanned: Number(row?.used ?? 0),
     };
   }
 
@@ -327,8 +328,9 @@ export class QrCodeService implements OnModuleInit {
         scanCount: qr.scanCount,
         lastScannedBy: qr.lastScannedBy,
         lastScannedAt: qr.lastScannedAt,
-        lastScannedPhone: user?.phone ?? null,
-        lastScannedCode: user?.code ?? null,
+        lastScannedPhone: user?.phone ?? qr.redeemerPhone ?? null,
+        lastScannedCode: user?.code ?? qr.redeemerCode ?? null,
+        lastScannedName: qr.redeemerName ?? null,
         generatedBy: adminName ?? 'Admin',
         batchId: qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : null),
         batchNo: qr.batchNo ?? null,
@@ -507,6 +509,23 @@ export class QrCodeService implements OnModuleInit {
       await this.qrCodeRepository.query(`
         ALTER TABLE "qr_codes"
         ADD COLUMN IF NOT EXISTS "createdBy" character varying
+      `);
+
+      await this.qrCodeRepository.query(`
+        ALTER TABLE "qr_codes"
+        ADD COLUMN IF NOT EXISTS "legacyRedeemerId" integer,
+        ADD COLUMN IF NOT EXISTS "redeemerName" character varying,
+        ADD COLUMN IF NOT EXISTS "redeemerPhone" character varying,
+        ADD COLUMN IF NOT EXISTS "redeemerCode" character varying
+      `);
+
+      await this.qrCodeRepository.query(`
+        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_batchId" ON "qr_codes" ("batchId");
+        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_batchNo" ON "qr_codes" ("batchNo");
+        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_productId" ON "qr_codes" ("productId");
+        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_isScanned_isActive" ON "qr_codes" ("isScanned", "isActive");
+        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_createdAt" ON "qr_codes" ("createdAt" DESC);
+        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_legacyRedeemerId" ON "qr_codes" ("legacyRedeemerId");
       `);
 
       this.schemaEnsured = true;
