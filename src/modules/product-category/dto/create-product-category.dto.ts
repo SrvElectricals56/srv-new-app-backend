@@ -1,5 +1,6 @@
 import { IsString, IsOptional, IsBoolean, IsInt, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class CreateProductCategoryDto {
   @ApiProperty({ description: 'Category label/name' })
@@ -18,6 +19,7 @@ export class CreateProductCategoryDto {
 
   @ApiPropertyOptional({ description: 'Sort order', default: 0 })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   sortOrder?: number;

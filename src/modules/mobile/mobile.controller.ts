@@ -62,6 +62,12 @@ export class MobileController {
     return this.mobileService.getBanners(role);
   }
 
+  @Get('leaderboard/top-five')
+  @ApiOperation({ summary: 'Get role-specific Top 5 members for app home' })
+  getTopFive(@Query('role') role = 'electrician') {
+    return this.mobileService.getTopFive(role);
+  }
+
   // ── Notifications ──────────────────────────────────────────────────────────
 
   @Get('notifications')

@@ -31,6 +31,13 @@ export class SettingsController {
     return this.settingsService.findAll();
   }
 
+  @Get('rate-us/history')
+  @ApiOperation({ summary: 'Get app rating history submitted by mobile users' })
+  @ApiResponse({ status: 200, description: 'List of app ratings with user details' })
+  getRatingHistory() {
+    return this.settingsService.getRatingHistory();
+  }
+
   @Get(':key')
   @ApiOperation({ summary: 'Get setting by key' })
   @ApiResponse({ status: 200, description: 'Setting value' })

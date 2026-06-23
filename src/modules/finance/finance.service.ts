@@ -27,18 +27,27 @@ export class FinanceService {
     private counterBoyRepository: Repository<CounterBoy>,
   ) {}
 
-  private async resolveUser(identifier: string): Promise<{ name: string; phone: string; role: string; walletBalance: number } | null> {
+  private async resolveUser(identifier: string): Promise<{ id: string; name: string; phone: string; role: string; code: string; walletBalance: number } | null> {
     if (!identifier) return null;
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const isUuid = uuidRegex.test(identifier);
     const idMatch = isUuid ? [{ id: identifier }] : [];
     const phoneMatch = [{ phone: identifier }];
-    const [d, e] = await Promise.all([
+    const [d, e, a, c] = await Promise.all([
       this.dealerRepository.findOne({ where: [...idMatch, ...phoneMatch, { dealerCode: identifier }] }),
       this.electricianRepository.findOne({ where: [...idMatch, ...phoneMatch, { electricianCode: identifier }] }),
+      this.appUserRepository.findOne({ where: [...idMatch, ...phoneMatch, { userCode: identifier }] }),
+      this.counterBoyRepository.findOne({ where: [...idMatch, ...phoneMatch, { counterboyCode: identifier }] }),
     ]);
-    const user = d || e;
-    if (user) return { name: user.name, phone: user.phone, role: d ? 'dealer' : 'electrician', walletBalance: user.walletBalance ?? 0 };
+    const user = d || e || a || c;
+    if (user) return {
+      id: user.id,
+      name: user.name,
+      phone: user.phone,
+      role: d ? 'dealer' : e ? 'electrician' : a ? 'user' : 'counterboy',
+      code: d ? d.dealerCode : e ? e.electricianCode : a ? (a as any).userCode : (c as any).counterboyCode,
+      walletBalance: user.walletBalance ?? 0,
+    };
     return null;
   }
 
@@ -188,8 +197,33 @@ export class FinanceService {
     const enriched = await Promise.all(transfers.map(async (t) => {
       let fromName: string | null = null;
       let fromPhone: string | null = null;
+      let fromCode: string | null = null;
+      let fromRole: string | null = null;
       let toName: string | null = null;
       let toPhone: string | null = null;
+      let toCode: string | null = null;
+      let toRole: string | null = null;
+
+      const [receiverUser, senderUser] = await Promise.all([
+        this.resolveUser(t.userId),
+        (t.referenceType === 'transfer' || t.referenceType === 'manual_transfer') && t.referenceId
+          ? this.resolveUser(t.referenceId)
+          : Promise.resolve(null),
+      ]);
+
+      if (receiverUser) {
+        toName = receiverUser.name;
+        toPhone = receiverUser.phone;
+        toCode = receiverUser.code;
+        toRole = receiverUser.role;
+      }
+
+      if (senderUser) {
+        fromName = senderUser.name;
+        fromPhone = senderUser.phone;
+        fromCode = senderUser.code;
+        fromRole = senderUser.role;
+      }
 
       if (t.description) {
         // Normalize: strip [REVERSED] prefix and . Reason: suffix
@@ -202,10 +236,10 @@ export class FinanceService {
           /^Manual transfer from (.+?) \(([^)]*)\) to (.+?) \(([^)]*)\)$/,
         );
         if (match) {
-          fromName = match[1];
-          fromPhone = match[2] || null;
-          toName = match[3];
-          toPhone = match[4] || null;
+          fromName = fromName ?? match[1];
+          fromPhone = fromPhone ?? (match[2] || null);
+          toName = toName ?? match[3];
+          toPhone = toPhone ?? (match[4] || null);
         } else {
           // Fallback to old format: "Manual transfer from <value> to <value>"
           const parts = desc.split(' to ');
@@ -217,13 +251,13 @@ export class FinanceService {
               this.resolveUser(rawFrom),
               this.resolveUser(rawTo),
             ]);
-            if (fromUser) { fromName = fromUser.name; fromPhone = fromUser.phone; }
-            else fromName = rawFrom;
-            if (toUser) { toName = toUser.name; toPhone = toUser.phone; }
-            else toName = rawTo;
+            if (fromUser) { fromName = fromName ?? fromUser.name; fromPhone = fromPhone ?? fromUser.phone; fromCode = fromCode ?? fromUser.code; fromRole = fromRole ?? fromUser.role; }
+            else fromName = fromName ?? rawFrom;
+            if (toUser) { toName = toName ?? toUser.name; toPhone = toPhone ?? toUser.phone; toCode = toCode ?? toUser.code; toRole = toRole ?? toUser.role; }
+            else toName = toName ?? rawTo;
           } else {
             // Description is just a reason string — use as fallback fromName
-            fromName = desc;
+            fromName = fromName ?? desc;
           }
         }
       }
@@ -232,8 +266,12 @@ export class FinanceService {
         ...t,
         fromName,
         fromPhone,
+        fromCode,
+        fromRole,
         toName,
         toPhone,
+        toCode,
+        toRole,
       };
     }));
 

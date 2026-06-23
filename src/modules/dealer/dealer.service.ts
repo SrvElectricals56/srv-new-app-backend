@@ -116,6 +116,30 @@ export class DealerService {
     return { data, total: Number(countRows[0]?.total ?? 0), page: safePage, limit: safeLimit };
   }
 
+  async getSubDealerElectricians(id: string) {
+    await this.ensureSubDealerSchema();
+    const subDealerRows = await this.dealerRepository.query(
+      'SELECT "phone" FROM "sub_dealers" WHERE "id" = $1',
+      [id],
+    );
+    const phone = subDealerRows?.[0]?.phone;
+    if (!phone) {
+      throw new NotFoundException('Sub dealer not found');
+    }
+
+    const data = await this.electricianRepository.query(
+      `SELECT "id", "name", "phone", "electricianCode", "subCategory", "tier", "status",
+              "city", "district", "state", "pincode", "totalPoints", "totalScans", "joinedDate"
+       FROM "electricians"
+       WHERE "fallbackDealerPhone" = $1
+       ORDER BY "joinedDate" DESC NULLS LAST, "createdAt" DESC
+       LIMIT 500`,
+      [phone],
+    );
+
+    return { data, total: data.length, phone };
+  }
+
   async create(createDealerDto: CreateDealerDto) {
     await this.crossRolePhoneService.assertPhoneAvailableForRole(createDealerDto.phone, 'dealer');
 

@@ -27,7 +27,7 @@ import { SupportTicket } from '../../database/entities/support-ticket.entity';
 import { GiftOrder, GiftOrderStatus } from '../../database/entities/gift-order.entity';
 import { ProductCategory } from '../../database/entities/product-category.entity';
 import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
-import { UserRole, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
+import { UserRole, UserStatus, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 
 @Injectable()
@@ -122,6 +122,12 @@ export class MobileService {
         ALTER TABLE "support_tickets"
         ADD COLUMN IF NOT EXISTS "photoUrl" text,
         ADD COLUMN IF NOT EXISTS "photoUrls" text[];
+
+        ALTER TABLE "gift_orders"
+        ADD COLUMN IF NOT EXISTS "courierName" varchar,
+        ADD COLUMN IF NOT EXISTS "deliveryNotes" text,
+        ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz,
+        ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz;
       `).then(async () => {
         await this.dataSource.query(`
           CREATE TABLE IF NOT EXISTS "app_ratings" (
@@ -600,6 +606,35 @@ export class MobileService {
       : await this.productCartItemRepository.save(this.productCartItemRepository.create(itemData));
 
     return { message: 'Product added to cart', item: saved };
+  }
+
+  async getTopFive(role: string) {
+    const normalized = String(role || 'electrician').trim().toLowerCase();
+    const addressOf = (row: any) => row.district || row.city || row.town || row.state || row.address || 'Location not added';
+
+    if (normalized === 'dealer') {
+      const rows = await this.dealerRepository.find({ where: { status: UserStatus.ACTIVE }, order: { electricianCount: 'DESC', joinedDate: 'ASC' }, take: 5 });
+      return rows.map((row, index) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.electricianCount || 0), valueLabel: 'Associated electricians', address: addressOf(row) }));
+    }
+
+    if (normalized === 'user' || normalized === 'customer') {
+      const rows = await this.appUserRepository.createQueryBuilder('member')
+        .leftJoin(ProductOrder, 'orders', 'orders.userId = member.id AND orders.userRole = :role', { role: UserRole.USER })
+        .select(['member.id AS id', 'member.name AS name', 'member.city AS city', 'member.district AS district', 'member.state AS state', 'member.address AS address'])
+        .addSelect('COUNT(orders.id)', 'value')
+        .where('member.status = :status', { status: UserStatus.ACTIVE })
+        .groupBy('member.id').addGroupBy('member.name').addGroupBy('member.city').addGroupBy('member.district').addGroupBy('member.state').addGroupBy('member.address')
+        .orderBy('COUNT(orders.id)', 'DESC').addOrderBy('member.name', 'ASC').limit(5).getRawMany();
+      return rows.map((row: any, index: number) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.value || 0), valueLabel: 'Total orders', address: addressOf(row) }));
+    }
+
+    if (normalized === 'counterboy') {
+      const rows = await this.counterBoyRepository.find({ where: { status: UserStatus.ACTIVE }, order: { totalPoints: 'DESC', totalScans: 'DESC' }, take: 5 });
+      return rows.map((row, index) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.totalPoints || 0), valueLabel: 'Total points', address: addressOf(row) }));
+    }
+
+    const rows = await this.electricianRepository.find({ where: { status: UserStatus.ACTIVE }, order: { totalPoints: 'DESC', totalScans: 'DESC' }, take: 5 });
+    return rows.map((row, index) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.totalPoints || 0), valueLabel: 'Total points', address: addressOf(row) }));
   }
 
   async trackActivity(userId: string, role: string, body: {
@@ -1938,7 +1973,15 @@ export class MobileService {
       userId: o.userId,
       userName: o.userName,
       points: o.pointsUsed,
-      deliveredAt: o.processedAt?.toISOString() ?? null,
+      orderedAt: o.orderedAt?.toISOString() ?? null,
+      deliveredAt: o.deliveredAt?.toISOString() ?? null,
+      dispatchedAt: o.dispatchedAt?.toISOString() ?? null,
+      shippingAddress: o.shippingAddress ?? null,
+      trackingNumber: o.trackingNumber ?? null,
+      courierName: o.courierName ?? null,
+      paymentStatus: 'paid',
+      deliveryNotes: o.deliveryNotes ?? null,
+      rejectionReason: o.rejectionReason ?? null,
       createdAt: o.orderedAt.toISOString(),
     }));
 

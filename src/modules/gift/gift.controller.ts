@@ -101,11 +101,13 @@ export class GiftController {
   @ApiResponse({ status: 200, description: 'Order status updated successfully' })
   updateOrderStatus(
     @Param('id') id: string,
-    @Body() body: { status: string; rejectionReason?: string; trackingNumber?: string; processedBy?: string },
+    @Body() body: { status: string; rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string },
   ) {
     return this.giftService.updateOrderStatus(id, body.status, {
       rejectionReason: body.rejectionReason,
       trackingNumber: body.trackingNumber,
+      courierName: body.courierName,
+      deliveryNotes: body.deliveryNotes,
       processedBy: body.processedBy,
     });
   }

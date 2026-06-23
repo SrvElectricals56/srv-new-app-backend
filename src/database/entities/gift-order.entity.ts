@@ -74,6 +74,18 @@ export class GiftOrder {
   @Column({ nullable: true })
   trackingNumber: string;
 
+  @Column({ nullable: true })
+  courierName: string;
+
+  @Column({ type: 'text', nullable: true })
+  deliveryNotes: string;
+
+  @Column({ nullable: true })
+  dispatchedAt: Date;
+
+  @Column({ nullable: true })
+  deliveredAt: Date;
+
   @CreateDateColumn({ type: 'timestamptz' })
   orderedAt: Date;
 

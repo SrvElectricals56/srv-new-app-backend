@@ -104,6 +104,12 @@ export class DealerController {
     return this.dealerService.getSubDealers(parseInt(page), parseInt(limit), search);
   }
 
+  @Get('sub-dealers/:id/electricians')
+  @ApiOperation({ summary: 'Get electricians associated with an unregistered dealer number' })
+  getSubDealerElectricians(@Param('id') id: string) {
+    return this.dealerService.getSubDealerElectricians(id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get dealer by ID' })
   @ApiResponse({ status: 200, description: 'Dealer details' })

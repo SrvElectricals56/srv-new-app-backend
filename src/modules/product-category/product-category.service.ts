@@ -16,7 +16,13 @@ export class ProductCategoryService {
   ) {}
 
   async create(createDto: CreateProductCategoryDto): Promise<ProductCategory> {
-    const category = this.categoryRepository.create(createDto);
+    const category = this.categoryRepository.create({
+      ...createDto,
+      label: createDto.label?.trim(),
+      glyph: createDto.glyph?.trim() || null,
+      imageUrl: createDto.imageUrl?.trim() || null,
+      sortOrder: Number(createDto.sortOrder ?? 0),
+    });
     return await this.categoryRepository.save(category);
   }
 
@@ -51,7 +57,13 @@ export class ProductCategoryService {
 
   async update(id: string, updateDto: UpdateProductCategoryDto): Promise<ProductCategory> {
     const category = await this.findOne(id);
-    Object.assign(category, updateDto);
+    const cleaned: Partial<ProductCategory> = {};
+    if (updateDto.label !== undefined) cleaned.label = updateDto.label.trim();
+    if (updateDto.glyph !== undefined) cleaned.glyph = updateDto.glyph?.trim() || null;
+    if (updateDto.imageUrl !== undefined) cleaned.imageUrl = updateDto.imageUrl?.trim() || null;
+    if (updateDto.sortOrder !== undefined) cleaned.sortOrder = Number(updateDto.sortOrder ?? 0);
+    if (updateDto.isActive !== undefined) cleaned.isActive = updateDto.isActive;
+    Object.assign(category, cleaned);
     return await this.categoryRepository.save(category);
   }
 
