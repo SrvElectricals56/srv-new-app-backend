@@ -619,7 +619,7 @@ export class MobileService {
 
     if (normalized === 'user' || normalized === 'customer') {
       const rows = await this.appUserRepository.createQueryBuilder('member')
-        .leftJoin(ProductOrder, 'orders', 'orders.userId = member.id AND orders.userRole = :role', { role: UserRole.USER })
+        .leftJoin(ProductOrder, 'orders', 'orders.userId = member.id::text AND orders.userRole = :role', { role: UserRole.USER })
         .select(['member.id AS id', 'member.name AS name', 'member.city AS city', 'member.district AS district', 'member.state AS state', 'member.address AS address'])
         .addSelect('COUNT(orders.id)', 'value')
         .where('member.status = :status', { status: UserStatus.ACTIVE })
@@ -1991,6 +1991,8 @@ export class MobileService {
       status: o.status,
       title: o.productName,
       productName: o.productName,
+      productImage: this.normalizeUploadUrl(o.productImage) ?? o.productImage ?? null,
+      imageUrl: this.normalizeUploadUrl(o.productImage) ?? o.productImage ?? null,
       quantity: o.quantity,
       price: parseFloat(o.price.toString()),
       total: parseFloat(o.price.toString()) * o.quantity,

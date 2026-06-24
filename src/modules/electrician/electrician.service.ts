@@ -198,7 +198,12 @@ export class ElectricianService {
     const skip = (page - 1) * limit;
     const queryBuilder = this.electricianRepository
       .createQueryBuilder('electrician')
-      .leftJoinAndSelect('electrician.dealer', 'dealer');
+      .leftJoinAndMapOne(
+        'electrician.dealer',
+        Dealer,
+        'dealer',
+        'dealer.id::text = electrician."dealerId"::text',
+      );
 
     if (search) {
       queryBuilder.andWhere(
@@ -246,7 +251,7 @@ export class ElectricianService {
           .select('1')
           .from(Scan, 'welcomeScan')
           .innerJoin('products', 'welcomeProduct', 'welcomeProduct.id = welcomeScan.productId')
-          .where('welcomeScan.userId = electrician.id')
+          .where('welcomeScan.userId = electrician.id::text')
           .andWhere('welcomeScan.role = :welcomeRole')
           .andWhere('UPPER(welcomeProduct.sku) = :welcomeSku')
           .getQuery();
@@ -284,10 +289,16 @@ export class ElectricianService {
   }
 
   async findOne(id: string) {
-    const electrician = await this.electricianRepository.findOne({
-      where: { id },
-      relations: ['dealer'],
-    });
+    const electrician = await this.electricianRepository
+      .createQueryBuilder('electrician')
+      .leftJoinAndMapOne(
+        'electrician.dealer',
+        Dealer,
+        'dealer',
+        'dealer.id::text = electrician."dealerId"::text',
+      )
+      .where('electrician.id = :id', { id })
+      .getOne();
 
     if (!electrician) {
       throw new NotFoundException('Electrician not found');

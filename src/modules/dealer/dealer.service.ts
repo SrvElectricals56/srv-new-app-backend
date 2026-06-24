@@ -107,8 +107,18 @@ export class DealerService {
     );
     const data = await this.dealerRepository.query(
       `SELECT sd."id", sd."phone", 'SRV Dealer' AS "name", sd."district", sd."pincode",
-              sd."electricianCount", sd."firstSeenAt", sd."lastSeenAt"
-       FROM "sub_dealers" sd ${where}
+              COUNT(DISTINCT e."id")::int AS "electricianCount",
+              sd."firstSeenAt", sd."lastSeenAt"
+       FROM "sub_dealers" sd
+       LEFT JOIN "dealers" d
+         ON RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
+       LEFT JOIN "electricians" e
+         ON RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
+          OR (d."id" IS NOT NULL AND e."dealerId" = d."id"::text)
+       ${where}
+       GROUP BY sd."id", sd."phone", sd."district", sd."pincode", sd."firstSeenAt", sd."lastSeenAt"
        ORDER BY sd."lastSeenAt" DESC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, safeLimit, (safePage - 1) * safeLimit],
@@ -128,11 +138,17 @@ export class DealerService {
     }
 
     const data = await this.electricianRepository.query(
-      `SELECT "id", "name", "phone", "electricianCode", "subCategory", "tier", "status",
-              "city", "district", "state", "pincode", "totalPoints", "totalScans", "joinedDate"
-       FROM "electricians"
-       WHERE "fallbackDealerPhone" = $1
-       ORDER BY "joinedDate" DESC NULLS LAST, "createdAt" DESC
+      `SELECT e."id", e."name", e."phone", e."electricianCode", e."subCategory", e."tier", e."status",
+              e."city", e."district", e."state", e."pincode", e."address",
+              e."fallbackDealerName", e."fallbackDealerPhone",
+              e."totalPoints", e."totalScans", e."walletBalance", e."joinedDate"
+       FROM "electricians" e
+       LEFT JOIN "dealers" d ON e."dealerId" = d."id"::text
+       WHERE RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+              = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10)
+          OR RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10)
+              = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10)
+       ORDER BY e."joinedDate" DESC NULLS LAST, e."updatedAt" DESC NULLS LAST
        LIMIT 500`,
       [phone],
     );
@@ -231,10 +247,16 @@ export class DealerService {
   }
 
   async findOne(id: string) {
-    const dealer = await this.dealerRepository.findOne({
-      where: { id },
-      relations: ['electricians'],
-    });
+    const dealer = await this.dealerRepository
+      .createQueryBuilder('dealer')
+      .leftJoinAndMapMany(
+        'dealer.electricians',
+        Electrician,
+        'electrician',
+        'electrician."dealerId"::text = dealer.id::text',
+      )
+      .where('dealer.id = :id', { id })
+      .getOne();
 
     if (!dealer) {
       throw new NotFoundException('Dealer not found');
@@ -725,7 +747,7 @@ export class DealerService {
     const dealerIds = results.map(r => r.dealerId);
     const dealers = await this.dealerRepository
       .createQueryBuilder('d')
-      .where('d.id IN (:...ids)', { ids: dealerIds })
+      .where('d.id::text IN (:...ids)', { ids: dealerIds })
       .getMany();
 
     const dealerMap = new Map(dealers.map(d => [d.id, d]));

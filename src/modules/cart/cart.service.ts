@@ -56,6 +56,7 @@ export class CartService implements OnModuleInit {
     const map: Record<string, UserRole> = {
       dealer: UserRole.DEALER,
       electrician: UserRole.ELECTRICIAN,
+      customer: UserRole.USER,
       user: UserRole.USER,
       counterboy: UserRole.COUNTERBOY,
     };

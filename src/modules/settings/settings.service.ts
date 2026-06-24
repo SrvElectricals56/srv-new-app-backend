@@ -52,10 +52,10 @@ export class SettingsService {
           COALESCE(e.phone, d.phone, u.phone, c.phone, '') AS "phone",
           COALESCE(e."electricianCode", d."dealerCode", u."userCode", c."counterboyCode", '') AS "code"
         FROM "app_ratings" r
-        LEFT JOIN "electricians" e ON r."userId" = e.id
-        LEFT JOIN "dealers" d ON r."userId" = d.id
-        LEFT JOIN "app_users" u ON r."userId" = u.id
-        LEFT JOIN "counterboys" c ON r."userId" = c.id
+        LEFT JOIN "electricians" e ON r."userId" = e.id::text
+        LEFT JOIN "dealers" d ON r."userId" = d.id::text
+        LEFT JOIN "app_users" u ON r."userId" = u.id::text
+        LEFT JOIN "counterboys" c ON r."userId" = c.id::text
         ORDER BY r."updatedAt" DESC
       `);
 

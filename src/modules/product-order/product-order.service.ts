@@ -60,6 +60,36 @@ export class ProductOrderService {
       ALTER TABLE "product_orders"
       ADD COLUMN IF NOT EXISTS "courierName" varchar
     `);
+    await this.productOrderRepository.query(`
+      DO $$
+      DECLARE
+        source_enum regtype;
+      BEGIN
+        SELECT a.atttypid::regtype
+        INTO source_enum
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_type t ON t.oid = a.atttypid
+        WHERE n.nspname = 'public'
+          AND c.relname = 'wallet_transactions'
+          AND a.attname = 'source'
+          AND t.typtype = 'e'
+          AND NOT a.attisdropped
+        LIMIT 1;
+
+        IF source_enum IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM pg_enum
+            WHERE enumtypid = source_enum::oid
+              AND enumlabel = 'purchase'
+          )
+        THEN
+          EXECUTE format('ALTER TYPE %s ADD VALUE %L', source_enum, 'purchase');
+        END IF;
+      END $$;
+    `);
   }
 
   private estimateDeliveryDate(from = new Date()) {

@@ -155,6 +155,18 @@ export class MobileAuthService implements OnModuleInit {
     return { ...counterboy, dealer };
   }
 
+  private async hydrateElectricianDealer<T extends { id?: string; dealerId?: string | null }>(electrician: T | null) {
+    if (!electrician) return null;
+    if (!electrician.dealerId) return { ...electrician, dealer: null };
+
+    const dealer = await this.dealerRepository
+      .createQueryBuilder('dealer')
+      .where('dealer.id::text = :dealerId', { dealerId: String(electrician.dealerId) })
+      .getOne();
+
+    return { ...electrician, dealer };
+  }
+
   /** Find user entity by phone + role */
   private async findUserByPhone(phone: string, role: MobileUserRole): Promise<any> {
     const normalizedPhone = this.normalizePhone(phone);
@@ -176,10 +188,15 @@ export class MobileAuthService implements OnModuleInit {
       .orWhere(
         `regexp_replace(regexp_replace(COALESCE(${alias}.phone, ''), '\\D', '', 'g'), '^0+', '') = regexp_replace(:normalizedPhone, '^0+', '')`,
         { normalizedPhone },
-      );
+    );
 
     if (role === 'electrician') {
-      query.leftJoinAndSelect(`${alias}.dealer`, 'dealer');
+      query.leftJoinAndMapOne(
+        `${alias}.dealer`,
+        Dealer,
+        'dealer',
+        `dealer.id::text = ${alias}."dealerId"::text`,
+      );
     }
 
     const user = await query.getOne();
@@ -514,10 +531,7 @@ export class MobileAuthService implements OnModuleInit {
     if (dealerId) {
       await this.tierService.syncDealerTier(dealerId);
     }
-    const savedWithDealer = await this.electricianRepository.findOne({
-      where: { id: saved.id },
-      relations: ['dealer'],
-    });
+    const savedWithDealer = await this.hydrateElectricianDealer(saved);
 
     const payload = { sub: saved.id, phone: saved.phone, role: 'electrician' };
     const tokens = await this.generateTokens(payload);
@@ -666,7 +680,9 @@ export class MobileAuthService implements OnModuleInit {
     let user: any;
     switch (role) {
       case 'electrician':
-        user = await this.electricianRepository.findOne({ where: { id: userId }, relations: ['dealer'] });
+        user = await this.hydrateElectricianDealer(
+          await this.electricianRepository.findOne({ where: { id: userId } }),
+        );
         break;
       case 'dealer':
         user = await this.dealerRepository.findOne({ where: { id: userId } });
