@@ -1,20 +1,21 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
-import { PrismaClient } from '@prisma/client';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { UpdateAdminDto } from './dto/update-admin.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { Admin } from '../../database/entities/admin.entity';
+import { AdminPermission } from '../../database/entities/admin-permission.entity';
 
 @Injectable()
 export class AdminService {
-  private prisma = new PrismaClient();
   private adminSchemaEnsured = false;
 
   constructor(
     @InjectRepository(Admin)
     private adminRepository: Repository<Admin>,
+    @InjectRepository(AdminPermission)
+    private adminPermissionRepository: Repository<AdminPermission>,
   ) {}
 
   async create(createAdminDto: CreateAdminDto) {
@@ -150,7 +151,7 @@ export class AdminService {
       return { role: 'super_admin', permissions: [] };
     }
 
-    const permissions = await this.prisma.adminPermission.findMany({
+    const permissions = await this.adminPermissionRepository.find({
       where: { adminId },
       select: {
         module: true,
@@ -180,9 +181,7 @@ export class AdminService {
     }
 
     // Delete existing permissions
-    await this.prisma.adminPermission.deleteMany({
-      where: { adminId },
-    });
+    await this.adminPermissionRepository.delete({ adminId });
 
     // Create new permissions
     const permissions = updatePermissionsDto.permissions.map((perm) => ({
@@ -196,9 +195,9 @@ export class AdminService {
     }));
 
     if (permissions.length > 0) {
-      await this.prisma.adminPermission.createMany({
-        data: permissions,
-      });
+      await this.adminPermissionRepository.save(
+        this.adminPermissionRepository.create(permissions),
+      );
     }
 
     return this.getPermissions(adminId);

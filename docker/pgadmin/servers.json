@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "SRV Docker Postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "srv_admin",
+      "Username": "postgres",
+      "Password": "4268",
+      "SSLMode": "prefer"
+    }
+  }
+}

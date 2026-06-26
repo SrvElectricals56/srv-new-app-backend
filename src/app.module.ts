@@ -29,6 +29,7 @@ import { ProductCategory } from './database/entities/product-category.entity';
 import { Play } from './database/entities/play.entity';
 import { AppIcon } from './database/entities/app-icon.entity';
 import { AppActivityEvent } from './database/entities/app-activity-event.entity';
+import { AdminPermission } from './database/entities/admin-permission.entity';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -84,6 +85,7 @@ import { CrossRolePhoneModule } from './common/services/cross-role-phone.module'
           Admin, Banner, Dealer, Electrician, AppUser, CounterBoy,
           Notification, Offer, PointsConfig, Product, ProductCartItem, ProductOrder, QrCode, Redemption,
           Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play, AppIcon, AppActivityEvent,
+          AdminPermission,
         ],
         synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
         logging: configService.get<string>('DB_LOGGING') === 'true',

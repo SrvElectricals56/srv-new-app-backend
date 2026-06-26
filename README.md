@@ -1,33 +1,69 @@
-# Server
-NODE_ENV=development
-PORT=3001
-SERVER_HOST=10.112.103.231
+# SRV Admin Stack
 
-# Database (Docker PostgreSQL)
-DB_HOST=localhost
-DB_PORT=5433
-DB_USERNAME=postgres
-DB_PASSWORD=4268
-DB_DATABASE=srv_admin
-DB_SYNCHRONIZE=false
-DB_LOGGING=false
+This repository is the Docker entry point for the SRV backend, PostgreSQL database, pgAdmin, the admin frontend in `../ADMIN-FRONTEND`, and the Expo app in `../NEW APP`.
 
-# Prisma requires this
-DATABASE_URL=postgresql://postgres:4268@localhost:5433/srv_admin
+## Services
 
-# JWT
-JWT_SECRET=srv-admin-secret-key-2024
-JWT_EXPIRES_IN=7d
-JWT_REFRESH_SECRET=srv-admin-refresh-secret-2024
-JWT_REFRESH_EXPIRES_IN=30d
+| Service | URL | Notes |
+| --- | --- | --- |
+| Admin frontend | http://localhost:3000 | Next.js admin panel |
+| Mobile app web preview | http://localhost:8081 | Expo app running in Docker |
+| Backend API | http://localhost:3001/api/v1 | NestJS + TypeORM |
+| Swagger docs | http://localhost:3001/api/docs | API documentation |
+| pgAdmin | http://localhost:5050 | `admin@admin.com` / `admin123` |
+| PostgreSQL | localhost:5433 | `postgres` / `4268`, database `srv_admin` |
 
-# CORS
-CORS_ORIGIN=http://localhost:3000,http://10.112.103.231:8081,http://10.112.103.231:19000,http://10.112.103.231:19006,http://10.112.103.231:8082,http://10.112.103.231:19001,http://10.112.103.231:19002
-CORS_CREDENTIALS=true
+## Run Everything
 
-# API
-API_PREFIX=api/v1
+```powershell
+docker compose up --build
+```
 
-# Rate Limiting
-THROTTLE_TTL=60
-THROTTLE_LIMIT=100
+PostgreSQL imports `sql/upadted.sql` automatically when the `postgres_data` volume is first created. pgAdmin is preconfigured with the `SRV Docker Postgres` server; use database password `4268` if pgAdmin asks for it.
+
+## Backend Local Dev
+
+Use this when you want to run the backend from VS Code with `npm run start:dev`.
+
+```powershell
+docker compose up -d postgres pgadmin
+npm run start:dev
+```
+
+If the Docker backend is already running, stop only that service first because both Docker backend and local Nest use port `3001`:
+
+```powershell
+docker compose stop backend
+npm run start:dev
+```
+
+Keep `DB_SYNCHRONIZE=false` in `.env`. The imported SQL dump already defines the live schema, and the Docker init scripts add the current missing TypeORM tables.
+
+## Reload The SQL Dump
+
+Postgres only runs files in `docker-entrypoint-initdb.d` on a fresh data directory. To reload `sql/upadted.sql` from scratch:
+
+```powershell
+docker compose down -v
+docker compose up --build
+```
+
+## Mobile App
+
+The Expo app in `../NEW APP` is included in Docker as `mobile-app` and is available as a web preview at:
+
+```text
+http://localhost:8081
+```
+
+For a physical phone running Expo outside Docker, point the app to the same backend using your machine LAN IP:
+
+```text
+EXPO_PUBLIC_API_URL=http://<your-lan-ip>:3001/api/v1
+```
+
+Use `http://localhost:3001/api/v1` for web, and your machine LAN IP for a physical phone.
+
+## Database Layer
+
+The backend uses TypeORM. Prisma has been removed from runtime and dependencies.

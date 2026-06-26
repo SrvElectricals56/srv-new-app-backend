@@ -1,0 +1,15 @@
+.git
+.agents
+.codex
+.codex-docx-render
+.codex-temp
+node_modules
+dist
+coverage
+uploads
+*.log
+*.tsbuildinfo
+*.docx
+*.sql
+README.md.txt
+docker-compose.override.yml
