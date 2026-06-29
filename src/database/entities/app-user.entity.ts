@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { MemberTier, UserStatus, KYCStatus } from '../../common/enums';
+import { numericTransformer } from '../numeric.transformer';
 
 /**
  * AppUser — Customer / end-user role in the mobile app
@@ -52,10 +53,10 @@ export class AppUser {
   })
   tier: MemberTier;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   totalPoints: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   walletBalance: number;
 
   @Column({ default: 0 })

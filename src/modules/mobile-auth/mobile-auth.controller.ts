@@ -10,12 +10,19 @@ import {
   Request,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { MobileAuthService } from './mobile-auth.service';
 import {
   MobileLoginDto,
   VerifyOtpDto,
   MobileRefreshDto,
-  MobileUserRole,
+  PasswordLoginDto,
+  RegisterCounterBoyDto,
+  RegisterDealerDto,
+  RegisterElectricianDto,
+  RegisterUserDto,
+  SendSignupOtpDto,
+  VerifySignupOtpDto,
 } from './dto/mobile-login.dto';
 import { MobileJwtGuard } from './mobile-jwt.guard';
 
@@ -27,6 +34,7 @@ export class MobileAuthController {
   // ── Login ──────────────────────────────────────────────────────────────────
 
   @Post('send-otp')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to phone (all 4 roles: dealer, electrician, user, counterboy)' })
   sendOtp(@Body() dto: MobileLoginDto) {
@@ -34,6 +42,7 @@ export class MobileAuthController {
   }
 
   @Post('verify-otp')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify OTP and get tokens (all 4 roles)' })
   verifyOtp(@Body() dto: VerifyOtpDto) {
@@ -41,13 +50,15 @@ export class MobileAuthController {
   }
 
   @Post('password-login')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with phone + password (all 4 roles)' })
-  passwordLogin(@Body() body: { phone: string; role: MobileUserRole; password: string }) {
+  passwordLogin(@Body() body: PasswordLoginDto) {
     return this.mobileAuthService.passwordLogin(body.phone, body.role, body.password);
   }
 
   @Post('refresh')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
   refresh(@Body() dto: MobileRefreshDto) {
@@ -64,16 +75,18 @@ export class MobileAuthController {
   // ── Signup OTP ─────────────────────────────────────────────────────────────
 
   @Post('signup/send-otp')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP for new user signup (all 4 roles)' })
-  sendSignupOtp(@Body() body: { phone: string; role: MobileUserRole }) {
+  sendSignupOtp(@Body() body: SendSignupOtpDto) {
     return this.mobileAuthService.sendSignupOtp(body.phone, body.role);
   }
 
   @Post('signup/verify-otp')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify signup OTP (all 4 roles)' })
-  verifySignupOtp(@Body() body: { phone: string; role: MobileUserRole; otp: string }) {
+  verifySignupOtp(@Body() body: VerifySignupOtpDto) {
     return this.mobileAuthService.verifySignupOtp(body.phone, body.role, body.otp);
   }
 
@@ -82,28 +95,28 @@ export class MobileAuthController {
   @Post('signup/dealer')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register new dealer' })
-  registerDealer(@Body() body: any) {
+  registerDealer(@Body() body: RegisterDealerDto) {
     return this.mobileAuthService.registerDealer(body);
   }
 
   @Post('signup/electrician')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register new electrician' })
-  registerElectrician(@Body() body: any) {
+  registerElectrician(@Body() body: RegisterElectricianDto) {
     return this.mobileAuthService.registerElectrician(body);
   }
 
   @Post('signup/user')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register new customer/user' })
-  registerUser(@Body() body: any) {
+  registerUser(@Body() body: RegisterUserDto) {
     return this.mobileAuthService.registerUser(body);
   }
 
   @Post('signup/counterboy')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register new counter boy' })
-  registerCounterBoy(@Body() body: any) {
+  registerCounterBoy(@Body() body: RegisterCounterBoyDto) {
     return this.mobileAuthService.registerCounterBoy(body);
   }
 

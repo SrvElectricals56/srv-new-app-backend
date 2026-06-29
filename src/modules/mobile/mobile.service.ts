@@ -32,8 +32,6 @@ import { TierService } from '../../common/services/tier.service';
 
 @Injectable()
 export class MobileService {
-  private persistenceSetupPromise: Promise<void> | null = null;
-
   constructor(
     private dataSource: DataSource,
     private readonly configService: ConfigService,
@@ -114,47 +112,6 @@ export class MobileService {
       if (uploadPathIndex >= 0) return `${publicBaseUrl}${trimmed.slice(uploadPathIndex)}`;
       return trimmed;
     }
-  }
-
-  private async ensurePersistenceArtifacts() {
-    if (!this.persistenceSetupPromise) {
-      this.persistenceSetupPromise = this.dataSource.query(`
-        ALTER TABLE "support_tickets"
-        ADD COLUMN IF NOT EXISTS "photoUrl" text,
-        ADD COLUMN IF NOT EXISTS "photoUrls" text[];
-
-        ALTER TABLE "gift_orders"
-        ADD COLUMN IF NOT EXISTS "courierName" varchar,
-        ADD COLUMN IF NOT EXISTS "deliveryNotes" text,
-        ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz,
-        ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz;
-      `).then(async () => {
-        await this.dataSource.query(`
-          CREATE TABLE IF NOT EXISTS "app_ratings" (
-            "userId" varchar(255) PRIMARY KEY,
-            "userRole" varchar(50) NOT NULL,
-            "rating" integer NOT NULL,
-            "review" text NULL,
-            "createdAt" timestamptz NOT NULL DEFAULT now(),
-            "updatedAt" timestamptz NOT NULL DEFAULT now()
-          );
-          CREATE TABLE IF NOT EXISTS "mobile_push_tokens" (
-            "token" text PRIMARY KEY,
-            "userId" text NOT NULL,
-            "userRole" varchar(50) NOT NULL,
-            "platform" varchar(20),
-            "enabled" boolean NOT NULL DEFAULT true,
-            "createdAt" timestamptz NOT NULL DEFAULT now(),
-            "updatedAt" timestamptz NOT NULL DEFAULT now()
-          );
-        `);
-      }).catch((error) => {
-        this.persistenceSetupPromise = null;
-        throw error;
-      });
-    }
-
-    await this.persistenceSetupPromise;
   }
 
   private normalizeRole(role: string): UserRole {
@@ -829,7 +786,6 @@ export class MobileService {
   }
 
   async registerPushToken(userId: string, role: string, token: string, platform?: string) {
-    await this.ensurePersistenceArtifacts();
     if (!token || !/^ExponentPushToken\[[^\]]+\]$|^ExpoPushToken\[[^\]]+\]$/.test(token)) {
       throw new BadRequestException('Invalid Expo push token');
     }
@@ -1867,7 +1823,6 @@ export class MobileService {
   async createSupportTicket(userId: string, role: string, data: {
     subject: string; comment: string; photoUrl?: string; photoUrls?: string[];
   }) {
-    await this.ensurePersistenceArtifacts();
     const user = await this.getUserByRole(userId, role);
     const userRole = this.normalizeRole(role);
     const photoUrls = [...new Set((data.photoUrls ?? []).filter(Boolean))].slice(0, 5);
@@ -2025,7 +1980,6 @@ export class MobileService {
   // ── Rating ─────────────────────────────────────────────────────────────────
 
   async submitRating(userId: string, rating: number, review?: string) {
-    await this.ensurePersistenceArtifacts();
 
     const numericRating = Number(rating);
     if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
@@ -2067,7 +2021,6 @@ export class MobileService {
   }
 
   async getRating(userId: string) {
-    await this.ensurePersistenceArtifacts();
 
     const rows = await this.dataSource.query(
       `

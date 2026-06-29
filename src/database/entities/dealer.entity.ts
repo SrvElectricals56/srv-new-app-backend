@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { MemberTier, UserStatus, KYCStatus } from '../../common/enums';
 import { Electrician } from './electrician.entity';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('dealers')
 export class Dealer {
@@ -137,13 +138,13 @@ export class Dealer {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   achievedTarget: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   walletBalance: number;
 
   @Column({ default: 'pending' })
   bonusStatus: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'bonuspoints' })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, name: 'bonuspoints', transformer: numericTransformer })
   bonusPoints: number;
 
   @OneToMany(() => Electrician, (electrician) => electrician.dealer)

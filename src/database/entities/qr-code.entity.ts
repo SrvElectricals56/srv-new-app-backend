@@ -8,11 +8,15 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Product } from './product.entity';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('qr_codes')
 export class QrCode {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  @Column({ type: 'bigint', unique: true, nullable: true })
+  legacyId: string | null;
 
   @Column({ unique: true })
   code: string;
@@ -59,7 +63,13 @@ export class QrCode {
   @Column({ type: 'integer', nullable: true })
   sequenceNo: number;
 
-  @Column({ type: 'integer', default: 0 })
+  @Column({
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   rewardPoints: number;
 
   @Column({ default: true })

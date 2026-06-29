@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+RELEASE_DIR="${RELEASE_DIR:-/opt/srv/current}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://139.59.52.48}"
+SERVER_NAME="${SERVER_NAME:-139.59.52.48}"
+BACKEND_ENV="${BACKEND_ENV:-/opt/srv/secrets/backend.env}"
+CA_FILE="${CA_FILE:-/opt/srv/secrets/managed-postgres-ca.crt}"
+UPLOADS_DIR="${UPLOADS_DIR:-/opt/srv/shared/uploads}"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-srv-staging}"
+
+if [[ ! "${PUBLIC_ORIGIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]]; then
+  echo "PUBLIC_ORIGIN must be an HTTP(S) origin without a path." >&2
+  exit 1
+fi
+if [[ ! "${SERVER_NAME}" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo "Invalid Nginx server name." >&2
+  exit 1
+fi
+
+test -d "${RELEASE_DIR}/srv-new-app-backend"
+test -d "${RELEASE_DIR}/srv-new-adminpanel"
+test -r "${BACKEND_ENV}"
+test -r "${CA_FILE}"
+
+sudo install -d -o 1000 -g 1000 -m 0750 "${UPLOADS_DIR}"
+
+cd "${RELEASE_DIR}/srv-new-app-backend"
+export BACKEND_ENV_FILE="${BACKEND_ENV}"
+export DB_CA_FILE="${CA_FILE}"
+export UPLOADS_PATH="${UPLOADS_DIR}"
+export PUBLIC_API_URL="${PUBLIC_ORIGIN}/api/v1"
+
+sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
+  docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
+  --file docker-compose.production.yml build --pull
+sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
+  docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
+  --file docker-compose.production.yml up --detach --remove-orphans
+
+for _ in $(seq 1 30); do
+  if curl --fail --silent --show-error http://127.0.0.1:3001/health >/dev/null && \
+     curl --fail --silent --show-error http://127.0.0.1:3000/ >/dev/null; then
+    break
+  fi
+  sleep 2
+done
+curl --fail --silent --show-error http://127.0.0.1:3001/health >/dev/null
+curl --fail --silent --show-error http://127.0.0.1:3000/ >/dev/null
+
+nginx_config="$(mktemp)"
+cleanup() { rm -f "${nginx_config}"; }
+trap cleanup EXIT
+
+cat >"${nginx_config}" <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name ${SERVER_NAME};
+
+    client_max_body_size 510m;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /api-healthz {
+        access_log off;
+        proxy_pass http://127.0.0.1:3001/health;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /api/ {
+        limit_req zone=srv_api_per_ip burst=80 nodelay;
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /uploads/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        expires 1h;
+        add_header Cache-Control "public, max-age=3600";
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+sudo install -o root -g root -m 0644 "${nginx_config}" /etc/nginx/sites-available/srv-staging
+sudo ln -sfn /etc/nginx/sites-available/srv-staging /etc/nginx/sites-enabled/srv-staging
+sudo rm -f /etc/nginx/sites-enabled/srv-catchall
+sudo nginx -t
+sudo systemctl reload nginx
+
+curl --fail --silent --show-error "${PUBLIC_ORIGIN}/healthz" >/dev/null
+curl --fail --silent --show-error "${PUBLIC_ORIGIN}/api-healthz" >/dev/null
+echo "Staging backend and admin are healthy at ${PUBLIC_ORIGIN}."

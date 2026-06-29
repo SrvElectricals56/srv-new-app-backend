@@ -4,9 +4,9 @@ services:
     container_name: srv_admin_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 4268
-      POSTGRES_DB: srv_admin
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_DATABASE:-srv_admin}
     ports:
       - '5433:5432'
     volumes:
@@ -15,7 +15,7 @@ services:
       - ./docker/postgres/02-drop-prisma-metadata.sql:/docker-entrypoint-initdb.d/02-drop-prisma-metadata.sql:ro
       - ./docker/postgres/03-create-current-tables.sql:/docker-entrypoint-initdb.d/03-create-current-tables.sql:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d srv_admin']
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_DATABASE:-srv_admin}']
       interval: 10s
       timeout: 5s
       retries: 10
@@ -27,8 +27,8 @@ services:
     ports:
       - '5050:80'
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD is required}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     depends_on:
       postgres:
@@ -49,20 +49,24 @@ services:
       PORT: 3001
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_USERNAME: postgres
-      DB_PASSWORD: 4268
-      DB_DATABASE: srv_admin
-      DB_SYNCHRONIZE: 'false'
-      DB_LOGGING: 'false'
-      JWT_SECRET: srv-admin-secret-key-2024
-      JWT_EXPIRES_IN: 7d
-      JWT_REFRESH_SECRET: srv-admin-refresh-secret-2024
-      JWT_REFRESH_EXPIRES_IN: 30d
-      CORS_ORIGIN: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,http://127.0.0.1:8081
-      CORS_CREDENTIALS: 'true'
-      API_PREFIX: api/v1
-      THROTTLE_TTL: 60
-      THROTTLE_LIMIT: 100
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_DATABASE: ${DB_DATABASE:-srv_admin}
+      DB_SYNCHRONIZE: ${DB_SYNCHRONIZE:-false}
+      DB_LOGGING: ${DB_LOGGING:-false}
+      DB_SSL: ${DB_SSL:-false}
+      DB_MIGRATIONS_RUN: ${DB_MIGRATIONS_RUN:-false}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-30d}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,http://127.0.0.1:8081}
+      CORS_CREDENTIALS: ${CORS_CREDENTIALS:-true}
+      API_PREFIX: ${API_PREFIX:-api/v1}
+      BODY_LIMIT: ${BODY_LIMIT:-10mb}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-false}
+      THROTTLE_TTL: ${THROTTLE_TTL:-60}
+      THROTTLE_LIMIT: ${THROTTLE_LIMIT:-100}
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
       RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
@@ -79,8 +83,8 @@ services:
 
   admin-frontend:
     build:
-      context: ../ADMIN-FRONTEND
-      dockerfile: ../ADMIN-BACKEND/docker/frontend.Dockerfile
+      context: ../srv-new-adminpanel
+      dockerfile: ../srv-new-app-backend/docker/frontend.Dockerfile
       args:
         NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
         SERVER_API_URL: http://backend:3001/api/v1
@@ -99,8 +103,8 @@ services:
 
   mobile-app:
     build:
-      context: ../NEW APP
-      dockerfile: ../ADMIN-BACKEND/docker/expo-app.Dockerfile
+      context: ../srv-new-app-frontend
+      dockerfile: ../srv-new-app-backend/docker/expo-app.Dockerfile
     container_name: srv_mobile_app
     restart: unless-stopped
     environment:

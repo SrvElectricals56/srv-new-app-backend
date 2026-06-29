@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { RedemptionStatus, UserRole } from '../../common/enums';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('redemptions')
 export class Redemption {
@@ -27,7 +28,7 @@ export class Redemption {
   @Column()
   type: string;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   points: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })

@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { ScanMode, UserRole } from '../../common/enums';
 import { Product } from './product.entity';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('scans')
 export class Scan {
@@ -32,7 +33,13 @@ export class Scan {
   @Column()
   productName: string;
 
-  @Column({ default: 0 })
+  @Column({
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   points: number;
 
   @Column({

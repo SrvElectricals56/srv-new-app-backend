@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,7 +19,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { UserRole } from '../../common/enums';
 
 @Injectable()
-export class CartService implements OnModuleInit {
+export class CartService {
   constructor(
     @InjectRepository(ProductCartItem)
     private cartRepo: Repository<ProductCartItem>,
@@ -45,10 +44,6 @@ export class CartService implements OnModuleInit {
 
     private readonly configService: ConfigService,
   ) {}
-
-  async onModuleInit() {
-    await this.ensurePaymentColumns();
-  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -81,71 +76,6 @@ export class CartService implements OnModuleInit {
     if (role === UserRole.DEALER) return user?.dealerCode ?? '';
     if (role === UserRole.COUNTERBOY) return user?.counterboyCode ?? '';
     return user?.userCode ?? '';
-  }
-
-  private async ensurePaymentColumns() {
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paymentMethod" varchar NOT NULL DEFAULT 'cod'
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paymentStatus" varchar NOT NULL DEFAULT 'pending'
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "razorpayOrderId" varchar
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "razorpayPaymentId" varchar
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paidAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paymentFailureReason" text
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "estimatedDeliveryAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "rejectedAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "refundStatus" varchar
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "refundMessage" text
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "deliveryNotes" text
-    `);
-    await this.orderRepo.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_product_orders_razorpay_order"
-      ON "product_orders" ("razorpayOrderId")
-      WHERE "razorpayOrderId" IS NOT NULL
-    `);
-    await this.orderRepo.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_product_orders_razorpay_payment"
-      ON "product_orders" ("razorpayPaymentId")
-      WHERE "razorpayPaymentId" IS NOT NULL
-    `);
   }
 
   private estimateDeliveryDate(from = new Date()) {

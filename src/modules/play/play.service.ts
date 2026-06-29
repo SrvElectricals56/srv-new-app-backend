@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -21,17 +21,11 @@ type PlayInteractionsResponse = {
 };
 
 @Injectable()
-export class PlayService implements OnModuleInit {
-  private readonly logger = new Logger(PlayService.name);
-
+export class PlayService {
   constructor(
     @InjectRepository(Play)
     private playRepository: Repository<Play>,
   ) {}
-
-  async onModuleInit() {
-    await this.ensureTargetRolesColumn();
-  }
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
 
@@ -367,21 +361,4 @@ export class PlayService implements OnModuleInit {
     };
   }
 
-  private async ensureTargetRolesColumn() {
-    try {
-      await this.playRepository.query(`
-        ALTER TABLE "plays"
-        ADD COLUMN IF NOT EXISTS "targetRoles" text[]
-      `);
-
-      await this.playRepository.query(`
-        UPDATE "plays"
-        SET "targetRoles" = ARRAY['user']
-        WHERE "targetRoles" IS NULL OR cardinality("targetRoles") = 0
-      `);
-    } catch (error) {
-      this.logger.error('Unable to ensure plays.targetRoles column exists', error as Error);
-      throw error;
-    }
-  }
 }

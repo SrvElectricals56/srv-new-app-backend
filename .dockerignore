@@ -3,6 +3,8 @@
 .codex
 .codex-docx-render
 .codex-temp
+.env
+.env.*
 node_modules
 dist
 coverage

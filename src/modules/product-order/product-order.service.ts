@@ -27,71 +27,6 @@ export class ProductOrderService {
     private dataSource: DataSource,
   ) {}
 
-  private async ensureDeliveryColumns() {
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "estimatedDeliveryAt" timestamptz
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "rejectedAt" timestamptz
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "refundStatus" varchar
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "refundMessage" text
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "deliveryNotes" text
-    `);
-    await this.productOrderRepository.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "courierName" varchar
-    `);
-    await this.productOrderRepository.query(`
-      DO $$
-      DECLARE
-        source_enum regtype;
-      BEGIN
-        SELECT a.atttypid::regtype
-        INTO source_enum
-        FROM pg_attribute a
-        JOIN pg_class c ON c.oid = a.attrelid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_type t ON t.oid = a.atttypid
-        WHERE n.nspname = 'public'
-          AND c.relname = 'wallet_transactions'
-          AND a.attname = 'source'
-          AND t.typtype = 'e'
-          AND NOT a.attisdropped
-        LIMIT 1;
-
-        IF source_enum IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1
-            FROM pg_enum
-            WHERE enumtypid = source_enum::oid
-              AND enumlabel = 'purchase'
-          )
-        THEN
-          EXECUTE format('ALTER TYPE %s ADD VALUE %L', source_enum, 'purchase');
-        END IF;
-      END $$;
-    `);
-  }
-
   private estimateDeliveryDate(from = new Date()) {
     const estimated = new Date(from);
     estimated.setDate(estimated.getDate() + 5);
@@ -134,7 +69,6 @@ export class ProductOrderService {
   }
 
   async findAll(page = 1, limit = 20, status?: string, role?: string, search?: string) {
-    await this.ensureDeliveryColumns();
     const qb = this.productOrderRepository.createQueryBuilder('o')
       .where('(o.paymentMethod <> :razorpay OR o.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
       .orderBy('o.orderedAt', 'DESC');
@@ -161,7 +95,6 @@ export class ProductOrderService {
   }
 
   async findOne(id: string) {
-    await this.ensureDeliveryColumns();
     const order = await this.productOrderRepository.findOne({ where: { id } });
     if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
       throw new NotFoundException('Product order not found');
@@ -170,7 +103,6 @@ export class ProductOrderService {
   }
 
   async updateStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string }) {
-    await this.ensureDeliveryColumns();
     const order = await this.productOrderRepository.findOne({ where: { id } });
     if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
       throw new NotFoundException('Product order not found');
@@ -328,7 +260,6 @@ export class ProductOrderService {
   }
 
   async getStats() {
-    await this.ensureDeliveryColumns();
     const row = await this.productOrderRepository
       .createQueryBuilder('o')
       .select('COUNT(*)::int', 'total')

@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { OfferStatus } from '../../common/enums';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('offers')
 export class Offer {
@@ -40,7 +41,7 @@ export class Offer {
   @Column({ nullable: true })
   productCategory: string;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numericTransformer })
   bonusPoints: number;
 
   @Column({ nullable: true })
