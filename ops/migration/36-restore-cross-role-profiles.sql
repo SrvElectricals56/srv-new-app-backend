@@ -25,7 +25,7 @@ WITH normalized AS (
 ), canonical AS (
   SELECT
     ranked.*,
-    count(*) OVER (PARTITION BY upper(btrim(code::text))) AS code_count
+    count(*) OVER (PARTITION BY upper(btrim(dealer_code::text))) AS code_count
   FROM ranked
   WHERE canonical_rank = 1
 )
@@ -37,15 +37,15 @@ INSERT INTO "electricians" (
   "walletBalance", "totalRedemptions", status, "bankLinked", "upiId",
   "bankAccount", ifsc, "bankName", "accountHolderName", "kycStatus",
   "aadharNumber", "panNumber", "aadharFrontImage", "panDocument", "gstDocument",
-  "fallbackDealerPhone", "joinedDate", "updatedAt"
+  "fallbackDealerPhone", "fallbackDealerCode", "joinedDate", "updatedAt"
 )
 SELECT
   uuid_generate_v5(uuid_ns_url(), 'srv:legacy:tbl_users:electrician:' || u.user_id),
   COALESCE(NULLIF(btrim(u.user_name::text), ''), 'Legacy Electrician ' || u.user_id),
   u.normalized_phone,
   CASE
-    WHEN NULLIF(btrim(u.code::text), '') IS NOT NULL AND u.code_count = 1
-      THEN upper(btrim(u.code::text))
+    WHEN NULLIF(btrim(u.dealer_code::text), '') IS NOT NULL AND u.code_count = 1
+      THEN upper(btrim(u.dealer_code::text))
     ELSE 'LEGACY-ELC-' || u.user_id
   END,
   NULLIF(btrim(u.email::text), ''),
@@ -78,7 +78,8 @@ SELECT
   NULLIF(btrim(u.adharcard_front::text), ''),
   NULLIF(btrim(u.pan_card::text), ''),
   NULLIF(btrim(u.document::text), ''),
-  NULLIF(btrim(u.dealer_code::text), ''),
+  NULL,
+  NULLIF(btrim(u.sells_code::text), ''),
   COALESCE(u.created_at, now()),
   now()
 FROM legacy_electricians_ranked u
@@ -91,11 +92,13 @@ WHERE NOT EXISTS (
 
 UPDATE "electricians" e
 SET "dealerId" = d.id,
-    "fallbackDealerPhone" = NULL
+    "fallbackDealerPhone" = NULL,
+    "fallbackDealerCode" = NULL
 FROM legacy_electricians_ranked source_e
 JOIN legacy_mysql.tbl_users source_d
   ON source_d.user_type::text = '2'
- AND upper(btrim(source_d.code::text)) = upper(btrim(source_e.dealer_code::text))
+ AND NULLIF(btrim(source_e.sells_code::text), '') IS NOT NULL
+ AND upper(btrim(source_d.dealer_code::text)) = upper(btrim(source_e.sells_code::text))
 JOIN "legacy_entity_map" map_d
   ON map_d."sourceTable" = 'tbl_users'
  AND map_d."sourceId" = source_d.user_id

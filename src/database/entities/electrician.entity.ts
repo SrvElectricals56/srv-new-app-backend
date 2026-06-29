@@ -128,7 +128,7 @@ export class Electrician {
   @Column({ nullable: true })
   kycRejectionReason: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   dealerId: string;
 
   @Column({ nullable: true })
@@ -136,6 +136,9 @@ export class Electrician {
 
   @Column({ nullable: true })
   fallbackDealerPhone: string;
+
+  @Column({ nullable: true })
+  fallbackDealerCode: string;
 
   @ManyToOne(() => Dealer, (dealer) => dealer.electricians, {
     onDelete: 'SET NULL',

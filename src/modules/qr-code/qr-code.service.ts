@@ -170,7 +170,7 @@ export class QrCodeService {
           COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "id",
           COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchId",
           MAX(q."batchNo") AS "batchNo",
-          MAX(q."productId") AS "productId",
+          MAX(q."productId"::text) AS "productId",
           MAX(q."productName") AS "productName",
           MIN(q."createdAt") AS "generatedDate",
           COALESCE(MAX(q."rewardPoints"), 0) AS "points",

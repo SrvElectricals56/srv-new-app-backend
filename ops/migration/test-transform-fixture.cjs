@@ -53,7 +53,7 @@ CREATE TABLE legacy_mysql.tbl_users (
   status text, code text, gst_number text, bank_status int, upiid text,
   account_number text, ifsc_code text, bank_name text, account_holder_name text,
   kyc_status int, pan_card text, adharcard_front text, document text,
-  dealer_code text, wallet text, created_at timestamp
+  dealer_code text, sells_code text, wallet text, created_at timestamp
 );
 CREATE TABLE legacy_mysql.tbl_category (
   category_id int PRIMARY KEY, category_name text, category_image text, category_status int
@@ -119,10 +119,10 @@ CREATE TABLE legacy_mysql.tbl_user_redeem (
 );
 
 INSERT INTO legacy_mysql.tbl_users VALUES
-  (1,2,'Dealer One','dealer@example.test','', '9999999999','Shop','Punjab','Ludhiana','Ludhiana','141001','1','DLR1','',2,'','111','IFSC1','Bank','Dealer One',2,'','','','', '100.00','2025-01-01'),
-  (2,1,'Electrician One','electrician@example.test','', '8888888888','Home','Punjab','Ludhiana','Ludhiana','141001','1','ELC1','',2,'','222','IFSC2','Bank','Electrician One',2,'','','','DLR1','10.50','2025-01-02'),
-  (3,1,'Duplicate Electrician','','', '8888888888','','Punjab','Ludhiana','Ludhiana','','0','ELC2','',0,'','','','','',0,'','','','','12.50','2025-01-03'),
-  (4,1,'Invalid Phone','','', 'abc','','Punjab','Unknown','Unknown','','1','','',0,'','','','','',0,'','','','','0','2025-01-04');
+  (1,2,'Dealer One','dealer@example.test','', '9999999999','Shop','Punjab','Ludhiana','Ludhiana','141001','1','REF-DLR','',2,'','111','IFSC1','Bank','Dealer One',2,'','','','DLR1','', '100.00','2025-01-01'),
+  (2,1,'Electrician One','electrician@example.test','', '8888888888','Home','Punjab','Ludhiana','Ludhiana','141001','1','REF-ELC','',2,'','222','IFSC2','Bank','Electrician One',2,'','','','ELC1','DLR1','10.50','2025-01-02'),
+  (3,1,'Duplicate Electrician','','', '8888888888','','Punjab','Ludhiana','Ludhiana','','0','REF-DUP','',0,'','','','','',0,'','','','ELC2','DLR1','12.50','2025-01-03'),
+  (4,1,'Invalid Phone','','', 'abc','','Punjab','Unknown','Unknown','','1','','',0,'','','','','',0,'','','','','','0','2025-01-04');
 INSERT INTO legacy_mysql.tbl_category VALUES (10,'Switches','category.png',1);
 INSERT INTO legacy_mysql.tbl_product VALUES
   (100,10,'Main Switch','MS-100','product.png','Short','Long','Description','Use safely',1);
@@ -171,6 +171,7 @@ async function main() {
       '20-transform-qr.sql',
       '30-transform-finance.sql',
       '35-remediate-unmapped.sql',
+      '37-remediate-dealer-links.sql',
       '40-reconcile.sql',
     ]) {
       await client.query(loadTransform(path.join(__dirname, name)));

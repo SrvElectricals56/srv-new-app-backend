@@ -13,6 +13,23 @@ END $$;
 CREATE TEMP TABLE current_migration_run ON COMMIT DROP AS
 SELECT id FROM "migration_runs" WHERE status = 'running' ORDER BY "startedAt" DESC LIMIT 1;
 
+CREATE TEMP TABLE reconciliation_legacy_users ON COMMIT DROP AS
+SELECT
+  map."targetId",
+  map."targetTable",
+  source.*,
+  count(*) OVER (
+    PARTITION BY source.user_type, upper(btrim(source.dealer_code::text))
+  ) AS dealer_code_count
+FROM "legacy_entity_map" map
+JOIN legacy_mysql.tbl_users source ON source.user_id = map."sourceId"
+WHERE map."sourceTable" = 'tbl_users'
+  AND map."targetTable" IN ('dealers', 'electricians')
+  AND map."sourceId" = COALESCE(
+    NULLIF(map.metadata ->> 'canonicalSourceId', '')::bigint,
+    map."sourceId"
+  );
+
 CREATE TEMP TABLE reconciliation_results (
   check_name text PRIMARY KEY,
   expected numeric NOT NULL,
@@ -36,6 +53,52 @@ INSERT INTO reconciliation_results VALUES
       GROUP BY user_type, normalized_phone
     ) canonical),
     (SELECT count(*) FROM "electricians") + (SELECT count(*) FROM "dealers"),
+    true),
+  ('legacy_dealer_codes_preserved',
+    (SELECT count(*) FROM reconciliation_legacy_users source
+     WHERE source."targetTable" = 'dealers'
+       AND NULLIF(btrim(source.dealer_code::text), '') IS NOT NULL
+       AND source.dealer_code_count = 1),
+    (SELECT count(*)
+     FROM reconciliation_legacy_users source
+     JOIN "dealers" dealer ON dealer.id = source."targetId"
+     WHERE source."targetTable" = 'dealers'
+       AND NULLIF(btrim(source.dealer_code::text), '') IS NOT NULL
+       AND source.dealer_code_count = 1
+       AND upper(dealer."dealerCode") = upper(btrim(source.dealer_code::text))),
+    true),
+  ('legacy_electrician_codes_preserved',
+    (SELECT count(*) FROM reconciliation_legacy_users source
+     WHERE source."targetTable" = 'electricians'
+       AND NULLIF(btrim(source.dealer_code::text), '') IS NOT NULL
+       AND source.dealer_code_count = 1),
+    (SELECT count(*)
+     FROM reconciliation_legacy_users source
+     JOIN "electricians" electrician ON electrician.id = source."targetId"
+     WHERE source."targetTable" = 'electricians'
+       AND NULLIF(btrim(source.dealer_code::text), '') IS NOT NULL
+       AND source.dealer_code_count = 1
+       AND upper(electrician."electricianCode") = upper(btrim(source.dealer_code::text))),
+    true),
+  ('legacy_electrician_dealer_links',
+    (SELECT count(*)
+     FROM reconciliation_legacy_users electrician
+     JOIN reconciliation_legacy_users dealer
+       ON dealer."targetTable" = 'dealers'
+      AND dealer.dealer_code_count = 1
+      AND upper(btrim(dealer.dealer_code::text)) = upper(btrim(electrician.sells_code::text))
+     WHERE electrician."targetTable" = 'electricians'
+       AND NULLIF(btrim(electrician.sells_code::text), '') IS NOT NULL),
+    (SELECT count(*)
+     FROM reconciliation_legacy_users electrician
+     JOIN reconciliation_legacy_users dealer
+       ON dealer."targetTable" = 'dealers'
+      AND dealer.dealer_code_count = 1
+      AND upper(btrim(dealer.dealer_code::text)) = upper(btrim(electrician.sells_code::text))
+     JOIN "electricians" target
+       ON target.id = electrician."targetId" AND target."dealerId" = dealer."targetId"
+     WHERE electrician."targetTable" = 'electricians'
+       AND NULLIF(btrim(electrician.sells_code::text), '') IS NOT NULL),
     true),
   ('products_migrated',
     (SELECT count(*) FROM legacy_mysql.tbl_product),

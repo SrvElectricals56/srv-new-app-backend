@@ -142,9 +142,9 @@ SELECT
   COALESCE(NULLIF(btrim(u.user_name::text), ''), 'Legacy Dealer ' || u.user_id),
   u.normalized_phone,
   CASE
-    WHEN NULLIF(btrim(u.code::text), '') IS NOT NULL
-     AND count(*) OVER (PARTITION BY upper(btrim(u.code::text))) = 1
-      THEN upper(btrim(u.code::text))
+    WHEN NULLIF(btrim(u.dealer_code::text), '') IS NOT NULL
+     AND count(*) OVER (PARTITION BY upper(btrim(u.dealer_code::text))) = 1
+      THEN upper(btrim(u.dealer_code::text))
     ELSE 'LEGACY-DLR-' || u.user_id
   END,
   NULLIF(btrim(u.email::text), ''),
@@ -187,16 +187,16 @@ INSERT INTO "electricians" (
   "walletBalance", "totalRedemptions", status, "bankLinked", "upiId",
   "bankAccount", ifsc, "bankName", "accountHolderName", "kycStatus",
   "aadharNumber", "panNumber", "aadharFrontImage", "panDocument", "gstDocument",
-  "fallbackDealerPhone", "joinedDate", "updatedAt"
+  "fallbackDealerPhone", "fallbackDealerCode", "joinedDate", "updatedAt"
 )
 SELECT
   uuid_generate_v5(uuid_ns_url(), 'srv:legacy:tbl_users:electrician:' || u.user_id),
   COALESCE(NULLIF(btrim(u.user_name::text), ''), 'Legacy Electrician ' || u.user_id),
   u.normalized_phone,
   CASE
-    WHEN NULLIF(btrim(u.code::text), '') IS NOT NULL
-     AND count(*) OVER (PARTITION BY upper(btrim(u.code::text))) = 1
-      THEN upper(btrim(u.code::text))
+    WHEN NULLIF(btrim(u.dealer_code::text), '') IS NOT NULL
+     AND count(*) OVER (PARTITION BY upper(btrim(u.dealer_code::text))) = 1
+      THEN upper(btrim(u.dealer_code::text))
     ELSE 'LEGACY-ELC-' || u.user_id
   END,
   NULLIF(btrim(u.email::text), ''),
@@ -229,7 +229,8 @@ SELECT
   NULLIF(btrim(u.adharcard_front::text), ''),
   NULLIF(btrim(u.pan_card::text), ''),
   NULLIF(btrim(u.document::text), ''),
-  NULLIF(btrim(u.dealer_code::text), ''),
+  NULL,
+  NULLIF(btrim(u.sells_code::text), ''),
   COALESCE(u.created_at, now()),
   now()
 FROM legacy_users_ranked u
@@ -250,7 +251,9 @@ SELECT
   jsonb_build_object(
     'canonicalSourceId', canonical.user_id,
     'duplicate', u.canonical_rank > 1,
-    'userType', u.user_type
+    'userType', u.user_type,
+    'legacyDealerCode', NULLIF(btrim(u.dealer_code::text), ''),
+    'legacyParentDealerCode', NULLIF(btrim(u.sells_code::text), '')
   )
 FROM legacy_users_ranked u
 JOIN legacy_users_ranked canonical
@@ -261,7 +264,8 @@ WHERE u.user_type::text IN ('1', '2');
 
 UPDATE "electricians" e
 SET "dealerId" = d.id,
-    "fallbackDealerPhone" = NULL
+    "fallbackDealerPhone" = NULL,
+    "fallbackDealerCode" = NULL
 FROM legacy_users_ranked source_e
 JOIN "legacy_entity_map" map_e
   ON map_e."sourceTable" = 'tbl_users'
@@ -270,7 +274,8 @@ JOIN "legacy_entity_map" map_e
 JOIN legacy_users_ranked source_d
   ON source_d.user_type::text = '2'
  AND source_d.canonical_rank = 1
- AND upper(btrim(source_d.code::text)) = upper(btrim(source_e.dealer_code::text))
+ AND NULLIF(btrim(source_e.sells_code::text), '') IS NOT NULL
+ AND upper(btrim(source_d.dealer_code::text)) = upper(btrim(source_e.sells_code::text))
 JOIN "legacy_entity_map" map_d
   ON map_d."sourceTable" = 'tbl_users'
  AND map_d."sourceId" = source_d.user_id

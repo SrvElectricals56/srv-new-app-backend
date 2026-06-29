@@ -36,6 +36,10 @@ sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
   --file docker-compose.production.yml build --pull
 sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
   docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
+  --file docker-compose.production.yml run --rm --no-deps backend \
+  node node_modules/typeorm/cli.js migration:run --dataSource dist/database/data-source.js
+sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
+  docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
   --file docker-compose.production.yml up --detach --remove-orphans
 
 for _ in $(seq 1 30); do

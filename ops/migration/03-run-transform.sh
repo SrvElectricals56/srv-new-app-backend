@@ -46,6 +46,7 @@ psql -X -v ON_ERROR_STOP=1 \
 psql -X -v ON_ERROR_STOP=1 -f "${MIGRATION_DIR}/20-transform-qr.sql"
 psql -X -v ON_ERROR_STOP=1 -f "${MIGRATION_DIR}/30-transform-finance.sql"
 psql -X -v ON_ERROR_STOP=1 -f "${MIGRATION_DIR}/35-remediate-unmapped.sql"
+psql -X -v ON_ERROR_STOP=1 -f "${MIGRATION_DIR}/37-remediate-dealer-links.sql"
 psql -X -v ON_ERROR_STOP=1 -f "${MIGRATION_DIR}/40-reconcile.sql"
 
 trap - ERR
