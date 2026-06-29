@@ -5,6 +5,8 @@ RELEASE_DIR="${RELEASE_DIR:-/opt/srv/current}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://139.59.52.48}"
 SERVER_NAME="${SERVER_NAME:-139.59.52.48}"
 BACKEND_ENV="${BACKEND_ENV:-/opt/srv/secrets/backend.env}"
+MIGRATION_ENV="${MIGRATION_ENV:-/opt/srv/secrets/migration.env}"
+MIGRATION_DATABASE="${MIGRATION_DATABASE:-srv_staging}"
 CA_FILE="${CA_FILE:-/opt/srv/secrets/managed-postgres-ca.crt}"
 UPLOADS_DIR="${UPLOADS_DIR:-/opt/srv/shared/uploads}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-srv-staging}"
@@ -21,6 +23,7 @@ fi
 test -d "${RELEASE_DIR}/srv-new-app-backend"
 test -d "${RELEASE_DIR}/srv-new-adminpanel"
 test -r "${BACKEND_ENV}"
+test -r "${MIGRATION_ENV}"
 test -r "${CA_FILE}"
 
 sudo install -d -o 1000 -g 1000 -m 0750 "${UPLOADS_DIR}"
@@ -34,10 +37,17 @@ export PUBLIC_API_URL="${PUBLIC_ORIGIN}/api/v1"
 sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
   docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
   --file docker-compose.production.yml build --pull
+export BACKEND_ENV_FILE="${MIGRATION_ENV}"
 sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
   docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
-  --file docker-compose.production.yml run --rm --no-deps backend \
+  --file docker-compose.production.yml run --rm --no-deps \
+  --env DB_DATABASE="${MIGRATION_DATABASE}" \
+  --env DB_SSL=true \
+  --env DB_SSL_REJECT_UNAUTHORIZED=true \
+  --env DB_SSL_CA_PATH=/run/secrets/managed-postgres-ca.crt \
+  backend \
   node node_modules/typeorm/cli.js migration:run --dataSource dist/database/data-source.js
+export BACKEND_ENV_FILE="${BACKEND_ENV}"
 sudo --preserve-env=BACKEND_ENV_FILE,DB_CA_FILE,UPLOADS_PATH,PUBLIC_API_URL \
   docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
   --file docker-compose.production.yml up --detach --remove-orphans
