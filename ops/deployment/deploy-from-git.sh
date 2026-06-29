@@ -69,12 +69,12 @@ rollback() {
   rollback_in_progress='true'
 
   echo "Deployment failed (exit ${exit_code})." >&2
-  if [[ "${deployment_started}" = 'true' && -n "${previous_release}" && -x "${previous_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh" ]]; then
+  if [[ "${deployment_started}" = 'true' && -n "${previous_release}" && -r "${previous_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh" ]]; then
     echo "Restoring previous release: ${previous_release}" >&2
     RELEASE_DIR="${previous_release}" \
       PUBLIC_ORIGIN="${PUBLIC_ORIGIN}" \
       SERVER_NAME="${SERVER_NAME}" \
-      "${previous_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh" || true
+      bash "${previous_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh" || true
     ln -sfn "${previous_release}" "${CURRENT_LINK}"
   fi
   exit "${exit_code}"
@@ -100,7 +100,7 @@ export_commit "${REPOSITORIES_DIR}/srv-new-adminpanel.git" "${admin_commit}" \
 
 test -r "${new_release}/srv-new-app-backend/package.json"
 test -r "${new_release}/srv-new-app-backend/docker-compose.production.yml"
-test -x "${new_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh"
+test -r "${new_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh"
 test -r "${new_release}/srv-new-adminpanel/package.json"
 
 cat >"${new_release}/RELEASE" <<EOF
@@ -117,11 +117,11 @@ deployment_started='true'
 RELEASE_DIR="${new_release}" \
   PUBLIC_ORIGIN="${PUBLIC_ORIGIN}" \
   SERVER_NAME="${SERVER_NAME}" \
-  "${new_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh"
+  bash "${new_release}/srv-new-app-backend/ops/deployment/deploy-staging.sh"
 
 ln -sfn "${new_release}" "${CURRENT_LINK}"
 ORIGIN="${PUBLIC_ORIGIN}" \
-  "${new_release}/srv-new-app-backend/ops/deployment/smoke-test-staging.sh"
+  bash "${new_release}/srv-new-app-backend/ops/deployment/smoke-test-staging.sh"
 
 deployment_started='false'
 trap - ERR
