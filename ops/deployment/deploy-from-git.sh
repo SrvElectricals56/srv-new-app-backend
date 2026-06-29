@@ -8,9 +8,9 @@ REPOSITORIES_DIR="${REPOSITORIES_DIR:-/opt/srv/repositories}"
 RELEASES_DIR="${RELEASES_DIR:-/opt/srv/releases}"
 CURRENT_LINK="${CURRENT_LINK:-/opt/srv/current}"
 LOCK_FILE="${LOCK_FILE:-/opt/srv/.deploy.lock}"
-BACKEND_REPOSITORY="${BACKEND_REPOSITORY:-git@github-srv-backend:SrvElectricals56/srv-new-app-backend.git}"
-ADMIN_REPOSITORY="${ADMIN_REPOSITORY:-git@github-srv-admin:SrvElectricals56/srv-new-adminpanel.git}"
-MOBILE_REPOSITORY="${MOBILE_REPOSITORY:-git@github-srv-mobile:SrvElectricals56/srv-new-app-frontend.git}"
+BACKEND_REPOSITORY="${BACKEND_REPOSITORY:-https://github.com/SrvElectricals56/srv-new-app-backend.git}"
+ADMIN_REPOSITORY="${ADMIN_REPOSITORY:-https://github.com/SrvElectricals56/srv-new-adminpanel.git}"
+MOBILE_REPOSITORY="${MOBILE_REPOSITORY:-https://github.com/SrvElectricals56/srv-new-app-frontend.git}"
 
 if [[ "${EUID}" -eq 0 ]]; then
   echo 'Run this script as the unprivileged deployment user, not root.' >&2
