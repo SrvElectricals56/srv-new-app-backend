@@ -27,6 +27,9 @@ The staging origin is `https://staging.srvelectricals.in`. Nginx redirects HTTP
 to HTTPS and uses the automatically renewed Let's Encrypt certificate for that
 hostname.
 
+Staging login and signup use fixed OTP `1234` only when both `APP_ENV=staging`
+and `OTP_TEST_MODE=true` are present. Production must keep test mode disabled.
+
 The deployment records the backend, admin, and mobile commit IDs, builds new
 images, runs pending TypeORM schema migrations, replaces the containers, and
 runs authenticated smoke tests. A failed application deployment restores the

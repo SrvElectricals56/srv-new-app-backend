@@ -88,8 +88,11 @@ SQL
 umask 077
 {
   printf 'NODE_ENV=production\n'
+  printf 'APP_ENV=staging\n'
   printf 'HOST=0.0.0.0\n'
   printf 'PORT=3001\n'
+  printf 'OTP_TEST_MODE=true\n'
+  printf 'OTP_TEST_CODE=1234\n'
   printf 'APP_URL=%s\n' "${PUBLIC_APP_URL}"
   printf 'DB_HOST=%s\n' "${PGHOST}"
   printf 'DB_PORT=%s\n' "${PGPORT}"

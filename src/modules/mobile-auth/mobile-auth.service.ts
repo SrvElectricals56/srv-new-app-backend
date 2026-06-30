@@ -20,6 +20,7 @@ import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login
 import { ElectricianSubCategory, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<
@@ -49,11 +50,21 @@ export class MobileAuthService {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  private getFixedOtp(): string | null {
+    return resolveFixedOtp({
+      nodeEnv: this.configService.get<string>('NODE_ENV'),
+      appEnv: this.configService.get<string>('APP_ENV'),
+      testMode: this.configService.get<string>('OTP_TEST_MODE'),
+      testCode: this.configService.get<string>('OTP_TEST_CODE'),
+    });
+  }
+
   private generateOtp(): string {
-    if (this.configService.get('NODE_ENV') === 'development') {
-      return '1234';
-    }
-    return randomInt(1000, 10_000).toString();
+    return this.getFixedOtp() ?? randomInt(1000, 10_000).toString();
+  }
+
+  private exposeTestOtp(): boolean {
+    return this.getFixedOtp() !== null;
   }
 
   private async generateTokens(payload: { sub: string; phone: string; role: string }) {
@@ -306,7 +317,7 @@ export class MobileAuthService {
     return {
       success: true,
       message: 'OTP sent successfully',
-      ...(this.configService.get('NODE_ENV') === 'development' && { devOtp: otp }),
+      ...(this.exposeTestOtp() && { devOtp: otp }),
     };
   }
 
@@ -358,7 +369,7 @@ export class MobileAuthService {
     return {
       success: true,
       message: 'OTP sent successfully',
-      ...(this.configService.get('NODE_ENV') === 'development' && { devOtp: otp }),
+      ...(this.exposeTestOtp() && { devOtp: otp }),
     };
   }
 
