@@ -527,7 +527,7 @@ export class QrCodeService {
           ON linked_dealer."id"::text = COALESCE(e."dealerId"::text, cb."dealerId"::text)
         LEFT JOIN "wallet_transactions" wt
           ON wt."referenceType" = 'scan'
-         AND wt."referenceId" = s."id"
+         AND wt."referenceId" = s."id"::text
          AND wt."source"::text = 'scan'
         WHERE s."qrCodeId" = ANY($1::text[])
         ORDER BY s."qrCodeId", s."scannedAt" ASC
