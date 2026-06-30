@@ -230,7 +230,10 @@ SELECT
   NULLIF(btrim(u.pan_card::text), ''),
   NULLIF(btrim(u.document::text), ''),
   NULL,
-  NULLIF(btrim(u.sells_code::text), ''),
+  CASE
+    WHEN lower(btrim(COALESCE(u.sells_code::text, ''))) IN ('', 'undefined', 'null', 'n/a') THEN NULL
+    ELSE btrim(u.sells_code::text)
+  END,
   COALESCE(u.created_at, now()),
   now()
 FROM legacy_users_ranked u
@@ -253,7 +256,10 @@ SELECT
     'duplicate', u.canonical_rank > 1,
     'userType', u.user_type,
     'legacyDealerCode', NULLIF(btrim(u.dealer_code::text), ''),
-    'legacyParentDealerCode', NULLIF(btrim(u.sells_code::text), '')
+    'legacyParentDealerCode', CASE
+      WHEN lower(btrim(COALESCE(u.sells_code::text, ''))) IN ('', 'undefined', 'null', 'n/a') THEN NULL
+      ELSE btrim(u.sells_code::text)
+    END
   )
 FROM legacy_users_ranked u
 JOIN legacy_users_ranked canonical
@@ -274,7 +280,7 @@ JOIN "legacy_entity_map" map_e
 JOIN legacy_users_ranked source_d
   ON source_d.user_type::text = '2'
  AND source_d.canonical_rank = 1
- AND NULLIF(btrim(source_e.sells_code::text), '') IS NOT NULL
+ AND lower(btrim(COALESCE(source_e.sells_code::text, ''))) NOT IN ('', 'undefined', 'null', 'n/a')
  AND upper(btrim(source_d.dealer_code::text)) = upper(btrim(source_e.sells_code::text))
 JOIN "legacy_entity_map" map_d
   ON map_d."sourceTable" = 'tbl_users'

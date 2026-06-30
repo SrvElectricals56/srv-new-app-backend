@@ -110,6 +110,7 @@ export class DealerService {
          FROM "electricians" e
          WHERE e."dealerId" IS NULL
            AND NULLIF(btrim(e."fallbackDealerCode"), '') IS NOT NULL
+           AND lower(btrim(e."fallbackDealerCode")) NOT IN ('undefined', 'null', 'n/a')
          GROUP BY e."fallbackDealerCode"
        ), combined AS (
          SELECT * FROM phone_rows
@@ -145,6 +146,7 @@ export class DealerService {
            FROM "electricians"
            WHERE "dealerId" IS NULL
              AND NULLIF(btrim("fallbackDealerCode"), '') IS NOT NULL
+             AND lower(btrim("fallbackDealerCode")) NOT IN ('undefined', 'null', 'n/a')
              AND ('legacy-code-' || md5("fallbackDealerCode")) = $1
            LIMIT 1`,
           [id],

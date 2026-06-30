@@ -66,7 +66,10 @@ SET "electricianCode" = CASE
     END,
     "dealerId" = NULL,
     "fallbackDealerPhone" = NULL,
-    "fallbackDealerCode" = NULLIF(btrim(source.sells_code::text), '')
+    "fallbackDealerCode" = CASE
+      WHEN lower(btrim(COALESCE(source.sells_code::text, ''))) IN ('', 'undefined', 'null', 'n/a') THEN NULL
+      ELSE btrim(source.sells_code::text)
+    END
 FROM canonical_legacy_users source
 WHERE source."targetTable" = 'electricians'
   AND electrician.id = source."targetId";
@@ -86,7 +89,7 @@ WITH canonical_dealers AS (
     ON dealer.parent_code_count = 1
    AND upper(btrim(dealer.dealer_code::text)) = upper(btrim(electrician.sells_code::text))
   WHERE electrician."targetTable" = 'electricians'
-    AND NULLIF(btrim(electrician.sells_code::text), '') IS NOT NULL
+    AND lower(btrim(COALESCE(electrician.sells_code::text, ''))) NOT IN ('', 'undefined', 'null', 'n/a')
 )
 UPDATE "electricians" electrician
 SET "dealerId" = linked.dealer_id,
@@ -114,7 +117,10 @@ WHERE dealer.id = counts.id;
 UPDATE "legacy_entity_map" map
 SET metadata = map.metadata || jsonb_build_object(
   'legacyDealerCode', NULLIF(btrim(source.dealer_code::text), ''),
-  'legacyParentDealerCode', NULLIF(btrim(source.sells_code::text), '')
+  'legacyParentDealerCode', CASE
+    WHEN lower(btrim(COALESCE(source.sells_code::text, ''))) IN ('', 'undefined', 'null', 'n/a') THEN NULL
+    ELSE btrim(source.sells_code::text)
+  END
 )
 FROM legacy_mysql.tbl_users source
 WHERE map."sourceTable" = 'tbl_users'
@@ -126,7 +132,7 @@ WITH latest_run AS (
   SELECT electrician.user_id, btrim(electrician.sells_code::text) AS parent_code
   FROM canonical_legacy_users electrician
   WHERE electrician."targetTable" = 'electricians'
-    AND NULLIF(btrim(electrician.sells_code::text), '') IS NOT NULL
+    AND lower(btrim(COALESCE(electrician.sells_code::text, ''))) NOT IN ('', 'undefined', 'null', 'n/a')
     AND NOT EXISTS (
       SELECT 1
       FROM canonical_legacy_users dealer
@@ -149,6 +155,10 @@ WHERE NOT EXISTS (
     AND existing."sourceId" = unmatched.user_id
     AND existing."exceptionType" = 'unmatched_legacy_parent_dealer_code'
 );
+
+DELETE FROM "legacy_import_exceptions"
+WHERE "exceptionType" = 'unmatched_legacy_parent_dealer_code'
+  AND lower(btrim(COALESCE(details ->> 'legacyParentDealerCode', ''))) IN ('', 'undefined', 'null', 'n/a');
 
 COMMIT;
 
