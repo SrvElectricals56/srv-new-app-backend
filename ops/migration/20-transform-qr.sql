@@ -68,6 +68,7 @@ DROP INDEX IF EXISTS "IDX_qr_codes_productId";
 DROP INDEX IF EXISTS "IDX_qr_codes_isScanned_isActive";
 DROP INDEX IF EXISTS "IDX_qr_codes_createdAt";
 DROP INDEX IF EXISTS "IDX_qr_codes_legacyRedeemerId";
+DROP INDEX IF EXISTS "IDX_qr_codes_code_lower";
 
 INSERT INTO "qr_codes" (
   id, "legacyId", code, "productId", "productName", "qrImageUrl", "isScanned",
@@ -114,6 +115,7 @@ CREATE INDEX "IDX_qr_codes_productId" ON "qr_codes" ("productId");
 CREATE INDEX "IDX_qr_codes_isScanned_isActive" ON "qr_codes" ("isScanned", "isActive");
 CREATE INDEX "IDX_qr_codes_createdAt" ON "qr_codes" ("createdAt" DESC);
 CREATE INDEX "IDX_qr_codes_legacyRedeemerId" ON "qr_codes" ("legacyRedeemerId");
+CREATE INDEX "IDX_qr_codes_code_lower" ON "qr_codes" (LOWER("code"));
 
 INSERT INTO "legacy_import_exceptions" (
   "migrationRunId", "sourceTable", "sourceId", "exceptionType", severity, details

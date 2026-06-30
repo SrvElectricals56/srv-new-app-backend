@@ -29,6 +29,7 @@ import { ProductCategory } from '../../database/entities/product-category.entity
 import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
 import { UserRole, UserStatus, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
+import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 
 @Injectable()
 export class MobileService {
@@ -1078,30 +1079,41 @@ export class MobileService {
   // ── Scan ───────────────────────────────────────────────────────────────────
 
   async submitScan(userId: string, role: string, qrCode: string, mode: 'single' | 'multi') {
-    const trimmedQrCode = qrCode?.trim();
-    if (!trimmedQrCode) {
+    const qrCandidates = extractQrCodeCandidates(qrCode);
+    if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const qr = await manager
+      const createLookup = () => manager
         .getRepository(QrCode)
         .createQueryBuilder('qr')
         .innerJoinAndSelect('qr.product', 'product')
-        .setLock('pessimistic_write')
-        .where('qr.code = :qrCode', { qrCode: trimmedQrCode })
-        .andWhere('qr.isActive = :isActive', { isActive: true })
+        .setLock('pessimistic_write');
+
+      let qr = await createLookup()
+        .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates })
         .getOne();
 
-      if (!qr) throw new NotFoundException('QR code not found or invalid');
-      if (!qr.product || !qr.product.isActive) {
-        throw new BadRequestException('Product is not active');
+      if (!qr) {
+        qr = await createLookup()
+          .where('LOWER(qr.code) IN (:...qrCodes)', {
+            qrCodes: qrCandidates.map((candidate) => candidate.toLowerCase()),
+          })
+          .getOne();
       }
 
+      if (!qr) throw new NotFoundException('QR code not found or invalid');
       if (qr.isScanned) {
         throw new ConflictException(
           'QR code is already redeemed - Please scan valid QR code',
         );
+      }
+      if (!qr.isActive) {
+        throw new BadRequestException('QR code is not active');
+      }
+      if (!qr.product || !qr.product.isActive) {
+        throw new BadRequestException('Product is not active');
       }
 
       const existingScan = await manager.getRepository(Scan).findOne({
@@ -1203,17 +1215,28 @@ export class MobileService {
   }
 
   async previewQrCode(qrCode: string) {
-    const trimmedQrCode = qrCode?.trim();
-    if (!trimmedQrCode) {
+    const qrCandidates = extractQrCodeCandidates(qrCode);
+    if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
     }
 
-    const qr = await this.qrCodeRepository.findOne({
-      where: { code: trimmedQrCode, isActive: true },
-      relations: ['product'],
-    });
+    const createLookup = () => this.qrCodeRepository
+      .createQueryBuilder('qr')
+      .innerJoinAndSelect('qr.product', 'product');
 
-    if (!qr || !qr.product || !qr.product.isActive) {
+    let qr = await createLookup()
+      .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates })
+      .getOne();
+
+    if (!qr) {
+      qr = await createLookup()
+        .where('LOWER(qr.code) IN (:...qrCodes)', {
+          qrCodes: qrCandidates.map((candidate) => candidate.toLowerCase()),
+        })
+        .getOne();
+    }
+
+    if (!qr) {
       throw new NotFoundException(
         'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
       );
@@ -1223,6 +1246,12 @@ export class MobileService {
       throw new ConflictException(
         'QR code is already redeemed - Please scan valid QR code',
       );
+    }
+    if (!qr.isActive) {
+      throw new BadRequestException('QR code is not active');
+    }
+    if (!qr.product || !qr.product.isActive) {
+      throw new BadRequestException('Product is not active');
     }
 
     const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
