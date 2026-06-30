@@ -1513,7 +1513,6 @@ export class MobileService {
   }
 
   async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string }) {
-    await this.ensurePersistenceArtifacts();
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
@@ -1756,7 +1755,6 @@ export class MobileService {
   }
 
   async getRedemptionHistory(userId: string, page: number = 1, limit: number = 20) {
-    await this.ensurePersistenceArtifacts();
     const skip = (page - 1) * limit;
     const [data, total] = await this.redemptionRepository.findAndCount({
       where: { userId },

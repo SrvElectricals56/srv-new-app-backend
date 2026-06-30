@@ -342,8 +342,6 @@ export class QrCodeService {
   }
 
   async findFirstScan(id: string) {
-    await this.ensureLegacyColumns();
-
     let qrCode = await this.qrCodeRepository.findOne({ where: { id } });
     if (!qrCode) {
       qrCode = await this.qrCodeRepository.findOne({ where: { code: id } });
