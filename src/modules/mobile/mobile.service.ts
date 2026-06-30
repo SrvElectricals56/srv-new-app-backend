@@ -128,6 +128,11 @@ export class MobileService {
         ADD COLUMN IF NOT EXISTS "deliveryNotes" text,
         ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz,
         ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz;
+
+        ALTER TABLE "redemptions"
+        ADD COLUMN IF NOT EXISTS giftproductid varchar,
+        ADD COLUMN IF NOT EXISTS giftname varchar,
+        ADD COLUMN IF NOT EXISTS giftimage text;
       `).then(async () => {
         await this.dataSource.query(`
           CREATE TABLE IF NOT EXISTS "app_ratings" (
@@ -834,6 +839,15 @@ export class MobileService {
       throw new BadRequestException('Invalid Expo push token');
     }
     const userRole = this.normalizeRole(role);
+    const user = await this.getUserByRole(userId, userRole);
+    if ((user as any)?.pushEnabled === false) {
+      await this.dataSource.query(
+        `UPDATE "mobile_push_tokens" SET "enabled" = false, "updatedAt" = now() WHERE "userId" = $1 AND "userRole" = $2`,
+        [userId, userRole],
+      );
+      return { message: 'Push notifications are disabled for this user' };
+    }
+
     await this.dataSource.query(`
       INSERT INTO "mobile_push_tokens" ("token", "userId", "userRole", "platform", "enabled", "updatedAt")
       VALUES ($1, $2, $3, $4, true, now())
@@ -1518,7 +1532,8 @@ export class MobileService {
     });
   }
 
-  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string }) {
+  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string }) {
+    await this.ensurePersistenceArtifacts();
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
@@ -1545,6 +1560,7 @@ export class MobileService {
       }
 
       const newBalance = currentBalance - pointsRequired;
+      const giftImage = this.normalizeUploadUrl(product.image) ?? product.image ?? data.giftImage ?? '';
       const redemption = await manager.getRepository(Redemption).save(
         manager.getRepository(Redemption).create({
           userId,
@@ -1558,6 +1574,9 @@ export class MobileService {
           bankAccount: (user as any).bankAccount,
           ifsc: (user as any).ifsc,
           accountHolderName: (user as any).accountHolderName,
+          giftProductId: product.id,
+          giftName: product.name,
+          giftImage,
         }),
       );
 
@@ -1620,7 +1639,7 @@ export class MobileService {
           role: normalizedRole,
           giftProductId: product.id,
           giftName: product.name,
-          giftImage: this.normalizeUploadUrl(product.image) ?? product.image ?? '',
+          giftImage,
           pointsUsed: pointsRequired,
           status: GiftOrderStatus.PENDING,
           shippingAddress: (user as any).address ?? undefined,
@@ -1757,6 +1776,7 @@ export class MobileService {
   }
 
   async getRedemptionHistory(userId: string, page: number = 1, limit: number = 20) {
+    await this.ensurePersistenceArtifacts();
     const skip = (page - 1) * limit;
     const [data, total] = await this.redemptionRepository.findAndCount({
       where: { userId },
@@ -1764,7 +1784,54 @@ export class MobileService {
       skip,
       take: limit,
     });
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+
+    const giftOrders = await this.giftOrderRepository.find({
+      where: { userId },
+      order: { orderedAt: 'DESC' },
+    });
+    const giftProductIds = [...new Set(giftOrders.map((order) => order.giftProductId).filter(Boolean))];
+    const giftProducts = giftProductIds.length
+      ? await this.productRepository
+          .createQueryBuilder('product')
+          .where('product.id IN (:...ids)', { ids: giftProductIds })
+          .getMany()
+      : [];
+    const giftProductImageById = new Map(
+      giftProducts.map((product) => [
+        product.id,
+        this.normalizeUploadUrl(product.image) ?? product.image ?? null,
+      ]),
+    );
+    const unmatchedGiftOrders = [...giftOrders];
+
+    const enriched = data.map((redemption) => {
+      if (redemption.type !== 'gift') return redemption;
+      const directGiftProductId = (redemption as any).giftProductId;
+      const directGiftName = (redemption as any).giftName;
+      const directGiftImage = this.normalizeUploadUrl((redemption as any).giftImage) ?? (redemption as any).giftImage ?? null;
+
+      const matchIndex = unmatchedGiftOrders.findIndex((order) => {
+        const samePoints = Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0);
+        const orderedAt = order.orderedAt ? new Date(order.orderedAt).getTime() : 0;
+        const requestedAt = redemption.requestedAt ? new Date(redemption.requestedAt).getTime() : 0;
+        return samePoints && Math.abs(orderedAt - requestedAt) < 5 * 60 * 1000;
+      });
+
+      const order = matchIndex >= 0 ? unmatchedGiftOrders.splice(matchIndex, 1)[0] : undefined;
+      return {
+        ...redemption,
+        giftName: directGiftName ?? order?.giftName ?? 'Gift redemption',
+        giftImage:
+          directGiftImage ??
+          this.normalizeUploadUrl(order?.giftImage) ??
+          giftProductImageById.get(directGiftProductId ?? order?.giftProductId ?? '') ??
+          order?.giftImage ??
+          null,
+        giftProductId: directGiftProductId ?? order?.giftProductId ?? null,
+      };
+    });
+
+    return { data: enriched, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   // ── Electricians (for dealer) ──────────────────────────────────────────────
@@ -1961,12 +2028,30 @@ export class MobileService {
         .getMany(),
     ]);
 
-    const giftMapped = giftOrders.map(o => ({
+    const giftProductIds = [...new Set(giftOrders.map((order) => order.giftProductId).filter(Boolean))];
+    const giftProducts = giftProductIds.length
+      ? await this.productRepository
+          .createQueryBuilder('product')
+          .where('product.id IN (:...ids)', { ids: giftProductIds })
+          .getMany()
+      : [];
+    const giftProductImageById = new Map(
+      giftProducts.map((product) => [
+        product.id,
+        this.normalizeUploadUrl(product.image) ?? product.image ?? null,
+      ]),
+    );
+
+    const giftMapped = giftOrders.map(o => {
+      const giftImage = this.normalizeUploadUrl(o.giftImage) ?? giftProductImageById.get(o.giftProductId) ?? o.giftImage ?? null;
+      return ({
       id: o.id,
       type: 'gift' as const,
       status: o.status,
       title: o.giftName,
       productName: o.giftName,
+      productImage: giftImage,
+      imageUrl: giftImage,
       quantity: 1,
       price: o.pointsUsed,
       total: o.pointsUsed,
@@ -1983,7 +2068,8 @@ export class MobileService {
       deliveryNotes: o.deliveryNotes ?? null,
       rejectionReason: o.rejectionReason ?? null,
       createdAt: o.orderedAt.toISOString(),
-    }));
+    });
+    });
 
     const productMapped = productOrders.map(o => ({
       id: o.id,

@@ -757,6 +757,25 @@ export class MobileAuthService implements OnModuleInit {
       case 'user':        await this.appUserRepository.update(userId, updateData); break;
       case 'counterboy':  await this.counterboyRepository.update(userId, updateData); break;
     }
+
+    if (data.pushEnabled !== undefined) {
+      await this.electricianRepository.query(`
+        CREATE TABLE IF NOT EXISTS "mobile_push_tokens" (
+          "token" text PRIMARY KEY,
+          "userId" text NOT NULL,
+          "userRole" varchar(50) NOT NULL,
+          "platform" varchar(20),
+          "enabled" boolean NOT NULL DEFAULT true,
+          "createdAt" timestamptz NOT NULL DEFAULT now(),
+          "updatedAt" timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await this.electricianRepository.query(
+        `UPDATE "mobile_push_tokens" SET "enabled" = $1, "updatedAt" = now() WHERE "userId" = $2 AND "userRole" = $3`,
+        [Boolean(data.pushEnabled), userId, role],
+      );
+    }
+
     return this.getProfile(userId, role);
   }
 
