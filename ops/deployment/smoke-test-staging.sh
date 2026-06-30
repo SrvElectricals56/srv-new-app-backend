@@ -37,6 +37,11 @@ work_dir="$(mktemp -d)"
 cleanup() { rm -rf "${work_dir}"; }
 trap cleanup EXIT
 
+smoke_step() {
+  printf 'Smoke: %s\n' "$1" >&2
+}
+
+smoke_step 'admin login'
 curl --fail --silent --show-error \
   --header 'Content-Type: application/json' \
   --data "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
@@ -47,14 +52,19 @@ token="$(python3 -c \
   "${work_dir}/login.json")"
 
 auth_header="Authorization: Bearer ${token}"
+smoke_step 'admin profile'
 curl --fail --silent --show-error --header "${auth_header}" \
   "${ORIGIN}/api/v1/auth/profile" >"${work_dir}/profile.json"
+smoke_step 'QR statistics'
 curl --fail --silent --show-error --header "${auth_header}" \
   "${ORIGIN}/api/v1/qr-codes/stats" >"${work_dir}/qr-stats.json"
+smoke_step 'QR page'
 curl --fail --silent --show-error --header "${auth_header}" \
   "${ORIGIN}/api/v1/qr-codes?page=1&limit=2" >"${work_dir}/qr-page.json"
+smoke_step 'mobile products'
 curl --fail --silent --show-error \
   "${ORIGIN}/api/v1/mobile/products?page=1&limit=2" >"${work_dir}/products.json"
+smoke_step 'mobile app settings'
 curl --fail --silent --show-error \
   "${ORIGIN}/api/v1/mobile/app-settings" >"${work_dir}/settings.json"
 
@@ -75,6 +85,7 @@ mobile_token="$(sudo docker exec \
 QR_CODE="${qr_code}" python3 -c \
   'import json,os,sys; json.dump({"qrCode":os.environ["QR_CODE"]},sys.stdout)' \
   >"${work_dir}/preview-body.json"
+smoke_step 'legacy QR preview'
 curl --fail --silent --show-error \
   --header "Authorization: Bearer ${mobile_token}" \
   --header 'Content-Type: application/json' \
