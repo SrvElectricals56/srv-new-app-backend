@@ -274,47 +274,36 @@ export class QrCodeService implements OnModuleInit {
       .take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
+    const firstScanMap = await this.getFirstScanMap(data.map((qr) => qr.id));
 
     const scannedUserIds = data
       .filter((qr) => qr.lastScannedBy)
       .map((qr) => qr.lastScannedBy);
     const uniqueIds = [...new Set(scannedUserIds)];
 
-    const [electricians, dealers, appUsers, counterBoys] = await Promise.all([
-      uniqueIds.length
-        ? this.electricianRepository.find({ where: uniqueIds.map((id) => ({ id })) })
-        : Promise.resolve([]),
-      uniqueIds.length
-        ? this.dealerRepository.find({ where: uniqueIds.map((id) => ({ id })) })
-        : Promise.resolve([]),
-      uniqueIds.length
-        ? this.appUserRepository.find({ where: uniqueIds.map((id) => ({ id })) })
-        : Promise.resolve([]),
-      uniqueIds.length
-        ? this.counterBoyRepository.find({ where: uniqueIds.map((id) => ({ id })) })
-        : Promise.resolve([]),
-    ]);
-
     const userMap = new Map<string, { phone: string; code: string }>();
-    for (const u of electricians) userMap.set(u.id, { phone: u.phone, code: u.electricianCode });
-    for (const u of dealers) userMap.set(u.id, { phone: u.phone, code: u.dealerCode });
-    for (const u of appUsers) userMap.set(u.id, { phone: u.phone, code: u.userCode });
-    for (const u of counterBoys) userMap.set(u.id, { phone: u.phone, code: u.counterboyCode });
+    if (uniqueIds.length) {
+      const users = await this.lookupScannerSummaries(uniqueIds);
+      for (const u of users) {
+        userMap.set(u.id, { phone: u.phone, code: u.code });
+      }
+    }
 
     const adminIds = data
       .filter((qr) => qr.createdBy)
       .map((qr) => qr.createdBy);
     const uniqueAdminIds = [...new Set(adminIds)];
-    const admins = uniqueAdminIds.length
-      ? await this.adminRepository.find({ where: uniqueAdminIds.map((id) => ({ id })) })
-      : [];
     const adminNameMap = new Map<string, string>();
-    for (const a of admins) adminNameMap.set(a.id, a.name);
+    if (uniqueAdminIds.length) {
+      const admins = await this.lookupAdminNames(uniqueAdminIds);
+      for (const a of admins) adminNameMap.set(a.id, a.name);
+    }
 
     const enriched = data.map((qr) => {
       const productPoints = qr.product?.points ?? 0;
       const effectivePoints = qr.rewardPoints ?? productPoints;
       const user = qr.lastScannedBy ? userMap.get(qr.lastScannedBy) : undefined;
+      const firstScan = firstScanMap.get(qr.id) ?? null;
 
       const adminName = qr.createdBy ? adminNameMap.get(qr.createdBy) : undefined;
 
@@ -331,6 +320,14 @@ export class QrCodeService implements OnModuleInit {
         lastScannedPhone: user?.phone ?? qr.redeemerPhone ?? null,
         lastScannedCode: user?.code ?? qr.redeemerCode ?? null,
         lastScannedName: qr.redeemerName ?? null,
+        firstScan: firstScan
+          ? {
+              ...firstScan,
+              phone: firstScan.phone ?? qr.redeemerPhone ?? null,
+              code: firstScan.code ?? qr.redeemerCode ?? null,
+              userName: firstScan.userName ?? qr.redeemerName ?? null,
+            }
+          : null,
         generatedBy: adminName ?? 'Admin',
         batchId: qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : null),
         batchNo: qr.batchNo ?? null,
@@ -358,6 +355,33 @@ export class QrCodeService implements OnModuleInit {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async findFirstScan(id: string) {
+    await this.ensureLegacyColumns();
+
+    let qrCode = await this.qrCodeRepository.findOne({ where: { id } });
+    if (!qrCode) {
+      qrCode = await this.qrCodeRepository.findOne({ where: { code: id } });
+    }
+    if (!qrCode) {
+      throw new NotFoundException(`QR code "${id}" not found`);
+    }
+
+    const firstScan = (await this.getFirstScanMap([qrCode.id])).get(qrCode.id);
+
+    return {
+      qrCodeId: qrCode.id,
+      code: qrCode.code,
+      firstScan: firstScan
+        ? {
+            ...firstScan,
+            phone: firstScan.phone ?? qrCode.redeemerPhone ?? null,
+            code: firstScan.code ?? qrCode.redeemerCode ?? null,
+            userName: firstScan.userName ?? qrCode.redeemerName ?? null,
+          }
+        : null,
     };
   }
 
@@ -544,6 +568,134 @@ export class QrCodeService implements OnModuleInit {
     );
     const current = Number(rows?.[0]?.maxBatchNo ?? 0);
     return current + 1;
+  }
+
+  private async getFirstScanMap(qrCodeIds: string[]) {
+    const ids = [...new Set(qrCodeIds.filter(Boolean))];
+    const map = new Map<string, any>();
+    if (!ids.length) {
+      return map;
+    }
+
+    const rows = await this.qrCodeRepository.query(
+      `
+        SELECT DISTINCT ON (s."qrCodeId")
+          s."qrCodeId",
+          s."id",
+          s."userId",
+          s."userName",
+          s."role"::text AS "role",
+          COALESCE(e."phone", d."phone", u."phone", cb."phone") AS "phone",
+          COALESCE(e."electricianCode", d."dealerCode", u."userCode", cb."counterboyCode") AS "code",
+          s."productId",
+          s."productName",
+          s."points",
+          COALESCE(wt."amount", s."points") AS "pointsRedeemed",
+          wt."balanceAfter" AS "walletBalanceAfter",
+          COALESCE(d."id"::text, linked_dealer."id"::text, e."dealerId"::text, cb."dealerId"::text) AS "dealerId",
+          COALESCE(d."name", linked_dealer."name", e."fallbackDealerName") AS "dealerName",
+          COALESCE(d."phone", linked_dealer."phone", e."fallbackDealerPhone") AS "dealerPhone",
+          COALESCE(d."dealerCode", linked_dealer."dealerCode") AS "dealerCode",
+          s."mode"::text AS "mode",
+          s."location",
+          s."latitude",
+          s."longitude",
+          s."scannedAt"
+        FROM "scans" s
+        LEFT JOIN "electricians" e
+          ON s."role"::text = 'electrician' AND e."id"::text = s."userId"
+        LEFT JOIN "dealers" d
+          ON s."role"::text = 'dealer' AND d."id"::text = s."userId"
+        LEFT JOIN "app_users" u
+          ON s."role"::text = 'user' AND u."id"::text = s."userId"
+        LEFT JOIN "counterboys" cb
+          ON s."role"::text = 'counterboy' AND cb."id"::text = s."userId"
+        LEFT JOIN "dealers" linked_dealer
+          ON linked_dealer."id"::text = COALESCE(e."dealerId"::text, cb."dealerId"::text)
+        LEFT JOIN "wallet_transactions" wt
+          ON wt."referenceType" = 'scan'
+         AND wt."referenceId" = s."id"
+         AND wt."source"::text = 'scan'
+        WHERE s."qrCodeId" = ANY($1::text[])
+        ORDER BY s."qrCodeId", s."scannedAt" ASC
+      `,
+      [ids],
+    );
+
+    for (const row of rows) {
+      map.set(row.qrCodeId, {
+        id: row.id,
+        userId: row.userId,
+        userName: row.userName,
+        role: row.role,
+        phone: row.phone,
+        code: row.code,
+        productId: row.productId,
+        productName: row.productName,
+        points: Number(row.points ?? 0),
+        pointsRedeemed: Number(row.pointsRedeemed ?? row.points ?? 0),
+        pointsEarned: Number(row.pointsRedeemed ?? row.points ?? 0),
+        walletBalanceAfter:
+          row.walletBalanceAfter === null || row.walletBalanceAfter === undefined
+            ? null
+            : Number(row.walletBalanceAfter),
+        dealerId: row.dealerId,
+        dealerName: row.dealerName,
+        dealerPhone: row.dealerPhone,
+        dealerCode: row.dealerCode,
+        mode: row.mode,
+        location: row.location,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        scannedAt: row.scannedAt,
+      });
+    }
+
+    return map;
+  }
+
+  private async lookupScannerSummaries(userIds: string[]) {
+    const ids = [...new Set(userIds.filter(Boolean))];
+    if (!ids.length) {
+      return [];
+    }
+
+    return this.qrCodeRepository.query(
+      `
+        SELECT e."id"::text AS "id", e."phone", e."electricianCode" AS "code"
+        FROM "electricians" e
+        WHERE e."id"::text = ANY($1::text[])
+        UNION ALL
+        SELECT d."id"::text AS "id", d."phone", d."dealerCode" AS "code"
+        FROM "dealers" d
+        WHERE d."id"::text = ANY($1::text[])
+        UNION ALL
+        SELECT u."id"::text AS "id", u."phone", u."userCode" AS "code"
+        FROM "app_users" u
+        WHERE u."id"::text = ANY($1::text[])
+        UNION ALL
+        SELECT cb."id"::text AS "id", cb."phone", cb."counterboyCode" AS "code"
+        FROM "counterboys" cb
+        WHERE cb."id"::text = ANY($1::text[])
+      `,
+      [ids],
+    );
+  }
+
+  private async lookupAdminNames(adminIds: string[]) {
+    const ids = [...new Set(adminIds.filter(Boolean))];
+    if (!ids.length) {
+      return [];
+    }
+
+    return this.qrCodeRepository.query(
+      `
+        SELECT a."id"::text AS "id", a."name"
+        FROM "admins" a
+        WHERE a."id"::text = ANY($1::text[])
+      `,
+      [ids],
+    );
   }
 
   private generateFixedLengthQrCode(batchNo: number, sequenceNo: number) {

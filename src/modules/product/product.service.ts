@@ -13,24 +13,16 @@ export class ProductService {
   ) {}
 
   async create(createProductDto: CreateProductDto) {
-    if (createProductDto.sku) {
+    const data = this.prepareWriteBody(createProductDto);
+
+    if (data.sku) {
       const existingProduct = await this.productRepository.findOne({
-        where: { sku: createProductDto.sku },
+        where: { sku: data.sku },
       });
       if (existingProduct) {
         throw new ConflictException('Product with this SKU already exists');
       }
     }
-
-    // Normalize aliases: imageUrl → image, pointsValue → points, description → sub
-    const data: any = { ...createProductDto };
-    if (!data.image && data.imageUrl) { data.image = data.imageUrl; }
-    if (!data.points && data.pointsValue) { data.points = data.pointsValue; }
-    if (!data.sub && data.description) { data.sub = data.description; }
-    // Remove alias keys so they don't hit the entity
-    delete data.imageUrl;
-    delete data.pointsValue;
-    // keep description as-is (entity has description column too)
 
     const product = this.productRepository.create(data);
     return this.productRepository.save(product);
@@ -46,13 +38,13 @@ export class ProductService {
     const skip = (page - 1) * limit;
     const queryBuilder = this.productRepository.createQueryBuilder('product');
 
-    // Always exclude gift products — they are managed via the Gift Management module
+    // Gift products are managed through the Gift Management module.
     queryBuilder.andWhere('product.category != :giftCat', { giftCat: 'gift' });
 
     if (search) {
       queryBuilder.andWhere(
         '(product.name ILIKE :search OR product.category ILIKE :search OR product.sku ILIKE :search)',
-        { search: `%${search}%` }
+        { search: `%${search}%` },
       );
     }
 
@@ -94,23 +86,16 @@ export class ProductService {
 
   async update(id: string, updateProductDto: UpdateProductDto) {
     const product = await this.findOne(id);
+    const data = this.prepareWriteBody(updateProductDto);
 
-    if (updateProductDto.sku && updateProductDto.sku !== product.sku) {
+    if (data.sku && data.sku !== product.sku) {
       const existingProduct = await this.productRepository.findOne({
-        where: { sku: updateProductDto.sku },
+        where: { sku: data.sku },
       });
       if (existingProduct) {
         throw new ConflictException('Product with this SKU already exists');
       }
     }
-
-    // Normalize aliases
-    const data: any = { ...updateProductDto };
-    if (!data.image && data.imageUrl) { data.image = data.imageUrl; }
-    if (!data.points && data.pointsValue) { data.points = data.pointsValue; }
-    if (!data.sub && data.description) { data.sub = data.description; }
-    delete data.imageUrl;
-    delete data.pointsValue;
 
     await this.productRepository.update(id, data);
     return this.findOne(id);
@@ -120,5 +105,23 @@ export class ProductService {
     const product = await this.findOne(id);
     await this.productRepository.remove(product);
     return { message: 'Product deleted successfully' };
+  }
+
+  private prepareWriteBody(dto: CreateProductDto | UpdateProductDto): Partial<Product> {
+    const data: any = { ...dto };
+
+    if (!data.image && data.imageUrl) data.image = data.imageUrl;
+    if (!data.points && data.pointsValue) data.points = data.pointsValue;
+    if (!data.sub && data.description) data.sub = data.description;
+
+    if (typeof data.sku === 'string') {
+      const normalizedSku = data.sku.trim();
+      data.sku = normalizedSku.length ? normalizedSku : null;
+    }
+
+    delete data.imageUrl;
+    delete data.pointsValue;
+
+    return data;
   }
 }

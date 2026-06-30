@@ -30,7 +30,7 @@ export class PlayService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    await this.ensureTargetRolesColumn();
+    await this.ensurePlayColumns();
   }
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
@@ -367,8 +367,13 @@ export class PlayService implements OnModuleInit {
     };
   }
 
-  private async ensureTargetRolesColumn() {
+  private async ensurePlayColumns() {
     try {
+      await this.playRepository.query(`
+        ALTER TABLE "plays"
+        ADD COLUMN IF NOT EXISTS "thumbnailUrl" character varying
+      `);
+
       await this.playRepository.query(`
         ALTER TABLE "plays"
         ADD COLUMN IF NOT EXISTS "targetRoles" text[]
@@ -380,7 +385,7 @@ export class PlayService implements OnModuleInit {
         WHERE "targetRoles" IS NULL OR cardinality("targetRoles") = 0
       `);
     } catch (error) {
-      this.logger.error('Unable to ensure plays.targetRoles column exists', error as Error);
+      this.logger.error('Unable to ensure plays compatibility columns exist', error as Error);
       throw error;
     }
   }

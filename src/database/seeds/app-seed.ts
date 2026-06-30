@@ -14,8 +14,8 @@ import { QrCode } from '../entities/qr-code.entity';
 
 const AppDataSource = new DataSource({
   type: 'postgres',
-  host: 'localhost',
-  port: 5433,
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: parseInt(process.env.DB_PORT || '5432', 10),
   username: 'postgres',
   password: '4268',
   database: 'srv_admin',

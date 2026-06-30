@@ -21,10 +21,11 @@ const BANNER_DIR = join(UPLOAD_DIR, 'banners');
 const PRODUCT_DIR = join(UPLOAD_DIR, 'products');
 const CATALOG_DIR = join(UPLOAD_DIR, 'catalog');
 const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
+const PLAY_THUMBNAIL_DIR = join(UPLOAD_DIR, 'play-thumbnails');
 const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
 
 // Ensure upload directories exist
-[BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR, AADHAR_DIR].forEach(dir => {
+[BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR, PLAY_THUMBNAIL_DIR, AADHAR_DIR].forEach(dir => {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -184,6 +185,40 @@ export class UploadController {
   uploadVideo(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
     const url = this.buildFileUrl(req, `videos/${file.filename}`);
+    return { url, filename: file.filename, originalName: file.originalname, size: file.size };
+  }
+
+  @Post('play-thumbnail')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Upload play video thumbnail image' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: PLAY_THUMBNAIL_DIR,
+        filename: (_req, file, cb) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `play-thumbnail-${uniqueSuffix}${extname(file.originalname)}`);
+        },
+      }),
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.match(/^image\/(jpeg|jpg|png|gif|webp)$/)) {
+          return cb(new BadRequestException('Only image files are allowed'), false);
+        }
+        cb(null, true);
+      },
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
+  )
+  uploadPlayThumbnail(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const url = this.buildFileUrl(req, `play-thumbnails/${file.filename}`);
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
