@@ -56,6 +56,15 @@ export class Redemption {
   @Column({ nullable: true })
   transactionId: string;
 
+  @Column({ name: 'giftproductid', nullable: true })
+  giftProductId: string;
+
+  @Column({ name: 'giftname', nullable: true })
+  giftName: string;
+
+  @Column({ name: 'giftimage', type: 'text', nullable: true })
+  giftImage: string;
+
   @Column({ type: 'text', nullable: true })
   rejectionReason: string;
 

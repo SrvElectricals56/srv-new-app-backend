@@ -9,6 +9,16 @@
       "Username": "postgres",
       "Password": "4268",
       "SSLMode": "prefer"
+    },
+    "2": {
+      "Name": "SRV Local Postgres",
+      "Group": "Servers",
+      "Host": "host.docker.internal",
+      "Port": 5432,
+      "MaintenanceDB": "srv_admin",
+      "Username": "postgres",
+      "Password": "4268",
+      "SSLMode": "prefer"
     }
   }
 }

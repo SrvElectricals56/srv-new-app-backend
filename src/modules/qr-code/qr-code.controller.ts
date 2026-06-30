@@ -115,6 +115,13 @@ export class QrCodeController {
     return this.qrCodeService.removeBatch(batchId);
   }
 
+  @Get(':id/first-scan')
+  @ApiOperation({ summary: 'Get first scanner details for a QR code' })
+  @ApiResponse({ status: 200, description: 'First QR scan details' })
+  findFirstScan(@Param('id') id: string) {
+    return this.qrCodeService.findFirstScan(id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get QR code by ID' })
   @ApiResponse({ status: 200, description: 'QR code details' })

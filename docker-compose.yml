@@ -45,6 +45,7 @@ services:
       - '3001:3001'
     environment:
       NODE_ENV: production
+      RUNNING_IN_DOCKER: 'true'
       HOST: 0.0.0.0
       PORT: 3001
       DB_HOST: postgres
@@ -86,15 +87,15 @@ services:
       context: ../srv-new-adminpanel
       dockerfile: ../srv-new-app-backend/docker/frontend.Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
-        SERVER_API_URL: http://backend:3001/api/v1
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
+        SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
     container_name: srv_admin_frontend
     restart: unless-stopped
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: 1
-      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
-      SERVER_API_URL: http://backend:3001/api/v1
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
+      SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
     depends_on:
       backend:
         condition: service_healthy
@@ -112,7 +113,7 @@ services:
       EXPO_NO_TELEMETRY: 1
       EXPO_DEVTOOLS_LISTEN_ADDRESS: 0.0.0.0
       REACT_NATIVE_PACKAGER_HOSTNAME: localhost
-      EXPO_PUBLIC_API_URL: http://localhost:3001/api/v1
+      EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
     depends_on:
       backend:
         condition: service_healthy

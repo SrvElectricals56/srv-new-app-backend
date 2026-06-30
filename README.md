@@ -39,6 +39,10 @@ npm run start:dev
 
 Keep `DB_SYNCHRONIZE=false` in `.env`. The imported SQL dump already defines the live schema, and the Docker init scripts add the current missing TypeORM tables.
 
+`DB_HOST=postgres` is only valid inside Docker Compose. For a backend started directly from Windows/VS Code, use `DB_HOST=127.0.0.1` with local PostgreSQL on `5432`, or `DB_HOST=localhost` with Docker PostgreSQL exposed on `5433`. The backend now fails fast with a clear configuration error if these modes are mixed.
+
+For deployment, set `NEXT_PUBLIC_API_URL` and `EXPO_PUBLIC_API_URL` to the real public API origin, for example `https://api.your-domain.com/api/v1`. The local default uses `127.0.0.1` only to avoid Windows/WSL `localhost` routing conflicts during development.
+
 ## Reload The SQL Dump
 
 Postgres only runs files in `docker-entrypoint-initdb.d` on a fresh data directory. To reload `sql/upadted.sql` from scratch:

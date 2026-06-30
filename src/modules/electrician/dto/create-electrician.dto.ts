@@ -68,6 +68,16 @@ export class CreateElectricianDto {
   @IsString()
   dealerId?: string;
 
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  fallbackDealerName?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  fallbackDealerPhone?: string;
+
   @ApiProperty({ required: false, default: false })
   @IsOptional()
   @IsBoolean()

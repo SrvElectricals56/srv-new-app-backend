@@ -33,6 +33,7 @@ import { Play } from './database/entities/play.entity';
 import { AppIcon } from './database/entities/app-icon.entity';
 import { AppActivityEvent } from './database/entities/app-activity-event.entity';
 import { AdminPermission } from './database/entities/admin-permission.entity';
+import { existsSync } from 'fs';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -66,6 +67,32 @@ import { CartModule } from './modules/cart/cart.module';
 import { ProductOrderModule } from './modules/product-order/product-order.module';
 import { CrossRolePhoneModule } from './common/services/cross-role-phone.module';
 
+function isRunningInDocker() {
+  return process.env.RUNNING_IN_DOCKER === 'true' || existsSync('/.dockerenv');
+}
+
+function getDatabaseHost(configService: ConfigService) {
+  const host = configService.get<string>('DB_HOST', 'localhost');
+  const normalizedHost = host.trim().toLowerCase();
+  const inDocker = isRunningInDocker();
+
+  if (normalizedHost === 'postgres' && !inDocker) {
+    throw new Error(
+      'Invalid database configuration: DB_HOST=postgres only works inside Docker Compose. ' +
+        'Use DB_HOST=127.0.0.1 with DB_PORT=5432 for local Windows PostgreSQL, or DB_HOST=localhost with DB_PORT=5433 for Docker PostgreSQL from the host.',
+    );
+  }
+
+  if (inDocker && ['localhost', '127.0.0.1', '::1'].includes(normalizedHost)) {
+    throw new Error(
+      'Invalid database configuration: a Dockerized backend cannot reach PostgreSQL through localhost. ' +
+        'Use DB_HOST=postgres and DB_PORT=5432 inside Docker Compose.',
+    );
+  }
+
+  return host;
+}
+
 @Module({
   imports: [
     // Configuration
@@ -79,7 +106,7 @@ import { CrossRolePhoneModule } from './common/services/cross-role-phone.module'
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         type: 'postgres' as const,
-        host: configService.get<string>('DB_HOST', 'localhost'),
+        host: getDatabaseHost(configService),
         port: parseInt(configService.get<string>('DB_PORT', '5432')),
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', ''),
