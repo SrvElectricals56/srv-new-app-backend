@@ -5,7 +5,7 @@ RELEASE_DIR="${RELEASE_DIR:-/opt/srv/current}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-srv-staging}"
 CREDENTIAL_FILE="${CREDENTIAL_FILE:-/opt/srv/secrets/staging-admin.txt}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@srvelectricals.com}"
-PUBLIC_API_URL="${PUBLIC_API_URL:-http://139.59.52.48/api/v1}"
+PUBLIC_API_URL="${PUBLIC_API_URL:-https://staging.srvelectricals.in/api/v1}"
 
 if [[ -e "${CREDENTIAL_FILE}" ]]; then
   echo "${CREDENTIAL_FILE} already exists; refusing to rotate credentials implicitly." >&2

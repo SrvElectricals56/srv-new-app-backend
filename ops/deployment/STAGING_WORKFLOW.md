@@ -23,6 +23,10 @@ ssh srvdeploy@139.59.52.48
 srv-deploy-staging
 ```
 
+The staging origin is `https://staging.srvelectricals.in`. Nginx redirects HTTP
+to HTTPS and uses the automatically renewed Let's Encrypt certificate for that
+hostname.
+
 The deployment records the backend, admin, and mobile commit IDs, builds new
 images, runs pending TypeORM schema migrations, replaces the containers, and
 runs authenticated smoke tests. A failed application deployment restores the

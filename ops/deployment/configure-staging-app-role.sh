@@ -6,8 +6,8 @@ MIGRATION_ENV="${SECRETS_DIR}/migration.env"
 CA_FILE="${SECRETS_DIR}/managed-postgres-ca.crt"
 BACKEND_ENV="${SECRETS_DIR}/backend.env"
 APP_ROLE="${APP_ROLE:-srv_app}"
-PUBLIC_APP_URL="${PUBLIC_APP_URL:-http://139.59.52.48}"
-PUBLIC_ADMIN_URL="${PUBLIC_ADMIN_URL:-http://139.59.52.48}"
+PUBLIC_APP_URL="${PUBLIC_APP_URL:-https://staging.srvelectricals.in}"
+PUBLIC_ADMIN_URL="${PUBLIC_ADMIN_URL:-https://staging.srvelectricals.in}"
 
 if [[ ! "${APP_ROLE}" =~ ^[a-z][a-z0-9_]*$ ]]; then
   echo "Invalid PostgreSQL role name: ${APP_ROLE}" >&2

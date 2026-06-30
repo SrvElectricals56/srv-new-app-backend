@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 RELEASE_DIR="${RELEASE_DIR:-/opt/srv/current}"
-PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://139.59.52.48}"
-SERVER_NAME="${SERVER_NAME:-139.59.52.48}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://staging.srvelectricals.in}"
+SERVER_NAME="${SERVER_NAME:-staging.srvelectricals.in}"
 BACKEND_ENV="${BACKEND_ENV:-/opt/srv/secrets/backend.env}"
 MIGRATION_ENV="${MIGRATION_ENV:-/opt/srv/secrets/migration.env}"
 MIGRATION_DATABASE="${MIGRATION_DATABASE:-srv_staging}"
@@ -66,12 +66,10 @@ nginx_config="$(mktemp)"
 cleanup() { rm -f "${nginx_config}"; }
 trap cleanup EXIT
 
-cat >"${nginx_config}" <<EOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name ${SERVER_NAME};
+sudo install -d -o root -g root -m 0755 /var/www/letsencrypt
 
+write_proxy_locations() {
+  cat <<'EOF'
     client_max_body_size 510m;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
@@ -86,26 +84,26 @@ server {
     location = /api-healthz {
         access_log off;
         proxy_pass http://127.0.0.1:3001/health;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location /api/ {
         limit_req zone=srv_api_per_ip burst=80 nodelay;
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
     }
 
     location /uploads/ {
         proxy_pass http://127.0.0.1:3001;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
         expires 1h;
         add_header Cache-Control "public, max-age=3600";
     }
@@ -113,13 +111,63 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+EOF
+}
+
+if [[ "${PUBLIC_ORIGIN}" == https://* ]]; then
+  cert_dir="/etc/letsencrypt/live/${SERVER_NAME}"
+  sudo test -r "${cert_dir}/fullchain.pem"
+  sudo test -r "${cert_dir}/privkey.pem"
+  sudo test -r /etc/letsencrypt/options-ssl-nginx.conf
+  sudo test -r /etc/letsencrypt/ssl-dhparams.pem
+
+  cat >"${nginx_config}" <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name ${SERVER_NAME};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
     }
 }
+
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate ${cert_dir}/fullchain.pem;
+    ssl_certificate_key ${cert_dir}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    add_header Strict-Transport-Security "max-age=31536000" always;
 EOF
+  write_proxy_locations >>"${nginx_config}"
+  printf '}\n' >>"${nginx_config}"
+else
+  cat >"${nginx_config}" <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name ${SERVER_NAME};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+EOF
+  write_proxy_locations >>"${nginx_config}"
+  printf '}\n' >>"${nginx_config}"
+fi
 
 sudo install -o root -g root -m 0644 "${nginx_config}" /etc/nginx/sites-available/srv-staging
 sudo ln -sfn /etc/nginx/sites-available/srv-staging /etc/nginx/sites-enabled/srv-staging

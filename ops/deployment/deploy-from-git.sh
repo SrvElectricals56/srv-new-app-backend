@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 BRANCH="${BRANCH:-staging}"
-PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://139.59.52.48}"
-SERVER_NAME="${SERVER_NAME:-139.59.52.48}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://staging.srvelectricals.in}"
+SERVER_NAME="${SERVER_NAME:-staging.srvelectricals.in}"
 REPOSITORIES_DIR="${REPOSITORIES_DIR:-/opt/srv/repositories}"
 RELEASES_DIR="${RELEASES_DIR:-/opt/srv/releases}"
 CURRENT_LINK="${CURRENT_LINK:-/opt/srv/current}"
