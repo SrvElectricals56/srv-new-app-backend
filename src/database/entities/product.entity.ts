@@ -8,6 +8,8 @@ import {
 } from 'typeorm';
 import { Scan } from './scan.entity';
 import { PointsConfig } from './points-config.entity';
+import { numericTransformer } from '../numeric.transformer';
+import { ProductVariant } from './product-variant.entity';
 
 @Entity('products')
 export class Product {
@@ -29,7 +31,7 @@ export class Product {
   @Column({ nullable: true })
   image: string;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numericTransformer })
   points: number;
 
   @Column({ nullable: true })
@@ -64,6 +66,9 @@ export class Product {
 
   @OneToMany(() => PointsConfig, (config) => config.product)
   pointsConfigs: PointsConfig[];
+
+  @OneToMany(() => ProductVariant, (variant) => variant.product)
+  variants: ProductVariant[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

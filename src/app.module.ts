@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
+import { readFileSync } from 'node:fs';
 
 // Entities
 import { Admin } from './database/entities/admin.entity';
@@ -15,6 +17,7 @@ import { Notification } from './database/entities/notification.entity';
 import { Offer } from './database/entities/offer.entity';
 import { PointsConfig } from './database/entities/points-config.entity';
 import { Product } from './database/entities/product.entity';
+import { ProductVariant } from './database/entities/product-variant.entity';
 import { ProductCartItem } from './database/entities/product-cart-item.entity';
 import { ProductOrder } from './database/entities/product-order.entity';
 import { QrCode } from './database/entities/qr-code.entity';
@@ -110,16 +113,29 @@ function getDatabaseHost(configService: ConfigService) {
         database: configService.get<string>('DB_DATABASE', 'srv_admin'),
         entities: [
           Admin, Banner, Dealer, Electrician, AppUser, CounterBoy,
-          Notification, Offer, PointsConfig, Product, ProductCartItem, ProductOrder, QrCode, Redemption,
+          Notification, Offer, PointsConfig, Product, ProductVariant, ProductCartItem, ProductOrder, QrCode, Redemption,
           Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play, AppIcon, AppActivityEvent,
           AdminPermission,
         ],
         synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
         logging: configService.get<string>('DB_LOGGING') === 'true',
         migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
-        migrationsRun: false,
-        ssl: false,
-        extra: { ssl: false },
+        migrationsRun:
+          configService.get<string>('DB_MIGRATIONS_RUN') === 'true',
+        ssl: configService.get<string>('DB_SSL') === 'true'
+          ? {
+              rejectUnauthorized:
+                configService.get<string>('DB_SSL_REJECT_UNAUTHORIZED') !== 'false',
+              ...(configService.get<string>('DB_SSL_CA_PATH')
+                ? {
+                    ca: readFileSync(
+                      configService.get<string>('DB_SSL_CA_PATH'),
+                      'utf8',
+                    ),
+                  }
+                : {}),
+            }
+          : false,
       }),
       inject: [ConfigService],
     }),
@@ -169,6 +185,12 @@ function getDatabaseHost(configService: ConfigService) {
     AppIconModule,
     CartModule,
     ProductOrderModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

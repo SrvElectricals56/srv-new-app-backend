@@ -2,8 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Logger,
-  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -18,10 +16,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
 
 @Injectable()
-export class QrCodeService implements OnModuleInit {
-  private readonly logger = new Logger(QrCodeService.name);
-  private schemaEnsured = false;
-
+export class QrCodeService {
   constructor(
     @InjectRepository(QrCode)
     private qrCodeRepository: Repository<QrCode>,
@@ -39,13 +34,7 @@ export class QrCodeService implements OnModuleInit {
     private adminRepository: Repository<Admin>,
   ) {}
 
-  async onModuleInit() {
-    await this.ensureLegacyColumns();
-  }
-
   async generate(generateQrCodeDto: GenerateQrCodeDto, adminId?: string) {
-    await this.ensureLegacyColumns();
-
     const { productId, quantity, rewardPoints } = generateQrCodeDto;
 
     const product = await this.productRepository.findOne({
@@ -145,8 +134,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async getStats() {
-    await this.ensureLegacyColumns();
-
     const row = await this.qrCodeRepository
       .createQueryBuilder('qr')
       .select('COUNT(*)::int', 'total')
@@ -163,8 +150,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async findBatches(page: number = 1, limit: number = 20, search?: string) {
-    await this.ensureLegacyColumns();
-
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
     const offset = (safePage - 1) * safeLimit;
@@ -185,7 +170,7 @@ export class QrCodeService implements OnModuleInit {
           COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "id",
           COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchId",
           MAX(q."batchNo") AS "batchNo",
-          MAX(q."productId") AS "productId",
+          MAX(q."productId"::text) AS "productId",
           MAX(q."productName") AS "productName",
           MIN(q."createdAt") AS "generatedDate",
           COALESCE(MAX(q."rewardPoints"), 0) AS "points",
@@ -232,8 +217,6 @@ export class QrCodeService implements OnModuleInit {
     search?: string,
     batchId?: string,
   ) {
-    await this.ensureLegacyColumns();
-
     const skip = (page - 1) * limit;
     const queryBuilder = this.qrCodeRepository
       .createQueryBuilder('qrCode')
@@ -386,8 +369,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async findOne(id: string) {
-    await this.ensureLegacyColumns();
-
     const qrCode = await this.qrCodeRepository.findOne({
       where: { id },
       relations: ['product'],
@@ -404,8 +385,6 @@ export class QrCodeService implements OnModuleInit {
     batchId: string,
     body: { productId?: string; rewardPoints?: number },
   ) {
-    await this.ensureLegacyColumns();
-
     const updates: Partial<QrCode> = {};
 
     if (body.productId) {
@@ -453,8 +432,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async remove(id: string) {
-    await this.ensureLegacyColumns();
-
     let qrCode = await this.qrCodeRepository.findOne({ where: { id } });
     if (!qrCode) {
       qrCode = await this.qrCodeRepository.findOne({ where: { code: id } });
@@ -467,8 +444,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async removeBatch(batchId: string) {
-    await this.ensureLegacyColumns();
-
     const result = await this.qrCodeRepository
       .createQueryBuilder()
       .delete()
@@ -489,8 +464,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async removeAll(productId?: string) {
-    await this.ensureLegacyColumns();
-
     if (productId) {
       const result = await this.qrCodeRepository.delete({ productId });
       return {
@@ -502,64 +475,6 @@ export class QrCodeService implements OnModuleInit {
     const count = await this.qrCodeRepository.count();
     await this.qrCodeRepository.clear();
     return { message: 'All QR codes deleted', deleted: count };
-  }
-
-  private async ensureLegacyColumns() {
-    if (this.schemaEnsured) {
-      return;
-    }
-
-    try {
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "batchNo" integer
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "sequenceNo" integer
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "rewardPoints" integer NOT NULL DEFAULT 0
-      `);
-
-      await this.qrCodeRepository.query(`
-        UPDATE "qr_codes"
-        SET "rewardPoints" = COALESCE("rewardPoints", 0)
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "createdBy" character varying
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "legacyRedeemerId" integer,
-        ADD COLUMN IF NOT EXISTS "redeemerName" character varying,
-        ADD COLUMN IF NOT EXISTS "redeemerPhone" character varying,
-        ADD COLUMN IF NOT EXISTS "redeemerCode" character varying
-      `);
-
-      await this.qrCodeRepository.query(`
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_batchId" ON "qr_codes" ("batchId");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_batchNo" ON "qr_codes" ("batchNo");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_productId" ON "qr_codes" ("productId");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_isScanned_isActive" ON "qr_codes" ("isScanned", "isActive");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_createdAt" ON "qr_codes" ("createdAt" DESC);
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_legacyRedeemerId" ON "qr_codes" ("legacyRedeemerId");
-      `);
-
-      this.schemaEnsured = true;
-    } catch (error) {
-      this.logger.error(
-        'Unable to ensure qr_codes legacy columns exist',
-        error as Error,
-      );
-      throw error;
-    }
   }
 
   private async getNextBatchNo() {

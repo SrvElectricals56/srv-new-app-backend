@@ -71,89 +71,115 @@ export class DealerService {
     return Boolean(rows?.[0]?.name);
   }
 
-  private async ensureSubDealerSchema() {
-    await this.electricianRepository.query(
-      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerName" character varying',
-    );
-    await this.electricianRepository.query(
-      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerPhone" character varying',
-    );
-    await this.dealerRepository.query(`
-      CREATE TABLE IF NOT EXISTS "sub_dealers" (
-        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        "phone" character varying NOT NULL UNIQUE,
-        "name" character varying NOT NULL DEFAULT 'SRV Dealer',
-        "district" character varying,
-        "pincode" character varying,
-        "electricianCount" integer NOT NULL DEFAULT 0,
-        "firstSeenAt" timestamptz NOT NULL DEFAULT now(),
-        "lastSeenAt" timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-  }
-
   async getSubDealers(page = 1, limit = 20, search?: string) {
-    await this.ensureSubDealerSchema();
     const safePage = Math.max(1, page || 1);
     const safeLimit = Math.min(100, Math.max(1, limit || 20));
     const term = search?.trim() ? `%${search.trim()}%` : null;
-    const where = term
-      ? 'WHERE sd."phone" ILIKE $1 OR sd."name" ILIKE $1 OR COALESCE(sd."district", \'\') ILIKE $1'
-      : '';
-    const values: any[] = term ? [term] : [];
-    const countRows = await this.dealerRepository.query(
-      `SELECT COUNT(*)::int AS total FROM "sub_dealers" sd ${where}`,
-      values,
+    const rows = await this.dealerRepository.query(
+      `WITH phone_rows AS (
+         SELECT sd."id"::text AS "id",
+                'phone'::text AS "identifierType",
+                sd."phone" AS "identifier",
+                sd."phone", NULL::text AS "dealerCode",
+                COALESCE(NULLIF(sd."name", ''), 'SRV Dealer') AS "name",
+                sd."district", sd."pincode",
+                COUNT(DISTINCT e."id")::int AS "electricianCount",
+                sd."firstSeenAt", sd."lastSeenAt"
+         FROM "sub_dealers" sd
+         LEFT JOIN "electricians" e
+           ON RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+            = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
+         WHERE NOT EXISTS (
+           SELECT 1 FROM "dealers" registered
+           WHERE RIGHT(regexp_replace(COALESCE(registered."phone", ''), '\\D', '', 'g'), 10)
+               = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
+         )
+         GROUP BY sd."id", sd."phone", sd."name", sd."district", sd."pincode",
+                  sd."firstSeenAt", sd."lastSeenAt"
+       ), code_rows AS (
+         SELECT ('legacy-code-' || md5(e."fallbackDealerCode")) AS "id",
+                'legacy_code'::text AS "identifierType",
+                e."fallbackDealerCode" AS "identifier",
+                NULL::text AS "phone", e."fallbackDealerCode" AS "dealerCode",
+                COALESCE(MAX(NULLIF(e."fallbackDealerName", '')), 'Legacy Dealer') AS "name",
+                MAX(NULLIF(e."district", '')) AS "district",
+                MAX(NULLIF(e."pincode", '')) AS "pincode",
+                COUNT(*)::int AS "electricianCount",
+                MIN(e."joinedDate") AS "firstSeenAt",
+                MAX(e."updatedAt") AS "lastSeenAt"
+         FROM "electricians" e
+         WHERE e."dealerId" IS NULL
+           AND NULLIF(btrim(e."fallbackDealerCode"), '') IS NOT NULL
+           AND lower(btrim(e."fallbackDealerCode")) NOT IN ('undefined', 'null', 'n/a')
+         GROUP BY e."fallbackDealerCode"
+       ), combined AS (
+         SELECT * FROM phone_rows
+         UNION ALL
+         SELECT * FROM code_rows
+       ), filtered AS (
+         SELECT * FROM combined
+         WHERE $1::text IS NULL
+            OR "identifier" ILIKE $1
+            OR "name" ILIKE $1
+            OR COALESCE("district", '') ILIKE $1
+       )
+       SELECT filtered.*, COUNT(*) OVER()::int AS "total"
+       FROM filtered
+       ORDER BY "lastSeenAt" DESC NULLS LAST, "identifier" ASC
+       LIMIT $2 OFFSET $3`,
+      [term, safeLimit, (safePage - 1) * safeLimit],
     );
-    const data = await this.dealerRepository.query(
-      `SELECT sd."id", sd."phone", 'SRV Dealer' AS "name", sd."district", sd."pincode",
-              COUNT(DISTINCT e."id")::int AS "electricianCount",
-              sd."firstSeenAt", sd."lastSeenAt"
-       FROM "sub_dealers" sd
-       LEFT JOIN "dealers" d
-         ON RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10)
-          = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
-       LEFT JOIN "electricians" e
-         ON RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
-          = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
-          OR (d."id" IS NOT NULL AND e."dealerId" = d."id"::text)
-       ${where}
-       GROUP BY sd."id", sd."phone", sd."district", sd."pincode", sd."firstSeenAt", sd."lastSeenAt"
-       ORDER BY sd."lastSeenAt" DESC
-       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
-      [...values, safeLimit, (safePage - 1) * safeLimit],
-    );
-    return { data, total: Number(countRows[0]?.total ?? 0), page: safePage, limit: safeLimit };
+    const total = Number(rows[0]?.total ?? 0);
+    const data = rows.map(({ total: _total, ...row }) => row);
+    return { data, total, page: safePage, limit: safeLimit };
   }
 
   async getSubDealerElectricians(id: string) {
-    await this.ensureSubDealerSchema();
-    const subDealerRows = await this.dealerRepository.query(
-      'SELECT "phone" FROM "sub_dealers" WHERE "id" = $1',
+    const phoneRows = await this.dealerRepository.query(
+      'SELECT "phone" FROM "sub_dealers" WHERE "id"::text = $1',
       [id],
     );
-    const phone = subDealerRows?.[0]?.phone;
-    if (!phone) {
+    const legacyCodeRows = phoneRows.length
+      ? []
+      : await this.dealerRepository.query(
+          `SELECT "fallbackDealerCode" AS "dealerCode"
+           FROM "electricians"
+           WHERE "dealerId" IS NULL
+             AND NULLIF(btrim("fallbackDealerCode"), '') IS NOT NULL
+             AND lower(btrim("fallbackDealerCode")) NOT IN ('undefined', 'null', 'n/a')
+             AND ('legacy-code-' || md5("fallbackDealerCode")) = $1
+           LIMIT 1`,
+          [id],
+        );
+    const phone = phoneRows?.[0]?.phone ?? null;
+    const dealerCode = legacyCodeRows?.[0]?.dealerCode ?? null;
+    if (!phone && !dealerCode) {
       throw new NotFoundException('Sub dealer not found');
     }
 
     const data = await this.electricianRepository.query(
       `SELECT e."id", e."name", e."phone", e."electricianCode", e."subCategory", e."tier", e."status",
               e."city", e."district", e."state", e."pincode", e."address",
-              e."fallbackDealerName", e."fallbackDealerPhone",
+              e."fallbackDealerName", e."fallbackDealerPhone", e."fallbackDealerCode",
               e."totalPoints", e."totalScans", e."walletBalance", e."joinedDate"
        FROM "electricians" e
-       LEFT JOIN "dealers" d ON e."dealerId" = d."id"::text
-       WHERE RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
-              = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10)
-          OR RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10)
-              = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10)
+       WHERE ($1::text IS NOT NULL AND
+              RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+                = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10))
+          OR ($2::text IS NOT NULL AND e."dealerId" IS NULL AND e."fallbackDealerCode" = $2)
        ORDER BY e."joinedDate" DESC NULLS LAST, e."updatedAt" DESC NULLS LAST
        LIMIT 500`,
-      [phone],
+      [phone, dealerCode],
     );
 
-    return { data, total: data.length, phone };
+    return {
+      data,
+      total: data.length,
+      phone,
+      dealerCode,
+      identifier: phone ?? dealerCode,
+      identifierType: phone ? 'phone' : 'legacy_code',
+    };
   }
 
   async create(createDealerDto: CreateDealerDto) {
