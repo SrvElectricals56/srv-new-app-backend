@@ -26,6 +26,71 @@ export class SettingsService {
     });
   }
 
+  async globalSearch(query: string, requestedLimit = 8) {
+    const term = query?.trim();
+    if (!term || term.length < 2) return { query: term ?? '', results: [], total: 0 };
+
+    const limit = Math.min(Math.max(Number(requestedLimit) || 8, 1), 20);
+    const pattern = `%${term}%`;
+    const rows = await this.dataSource.query(
+      `WITH matches AS (
+        SELECT 'Electrician'::text AS "type", e.id::text AS "id", e.name AS "title",
+               concat_ws(' • ', e."electricianCode", e.phone, e.city) AS "subtitle",
+               'electricians'::text AS "page", e."joinedDate" AS "sortDate"
+        FROM electricians e
+        WHERE concat_ws(' ', e.name, e.phone, e."electricianCode", e.city, e.district, e.state) ILIKE $1
+        UNION ALL
+        SELECT 'Dealer', d.id::text, d.name,
+               concat_ws(' • ', d."dealerCode", d.phone, d.town), 'dealers', d."joinedDate"
+        FROM dealers d
+        WHERE concat_ws(' ', d.name, d.phone, d."dealerCode", d.town, d.district, d.state) ILIKE $1
+        UNION ALL
+        SELECT 'Customer', u.id::text, u.name,
+               concat_ws(' • ', u."userCode", u.phone, u.city), 'app-users', u."joinedDate"
+        FROM app_users u
+        WHERE concat_ws(' ', u.name, u.phone, u."userCode", u.email, u.city, u.district, u.state) ILIKE $1
+        UNION ALL
+        SELECT 'Counter Boy', c.id::text, c.name,
+               concat_ws(' • ', c."counterboyCode", c.phone, c.city), 'counterboys', c."joinedDate"
+        FROM counterboys c
+        WHERE concat_ws(' ', c.name, c.phone, c."counterboyCode", c.city, c.district, c.state) ILIKE $1
+        UNION ALL
+        SELECT 'Product', p.id::text, p.name,
+               concat_ws(' • ', p.sku, p.category, p.sub), 'products', p."createdAt"
+        FROM products p
+        WHERE concat_ws(' ', p.name, p.sku, p.category, p.sub, p.description) ILIKE $1
+        UNION ALL
+        SELECT 'QR Code', q.id::text, q.code,
+               concat_ws(' • ', q."productName", 'Batch ' || COALESCE(q."batchNo"::text, '-'),
+                 CASE WHEN q."isScanned" THEN 'Scanned' ELSE 'Available' END), 'qr-codes', q."createdAt"
+        FROM qr_codes q
+        WHERE LOWER(q.code) = LOWER($3)
+           OR q."legacyId"::text = $3
+           OR q."batchNo"::text = $3
+        UNION ALL
+        SELECT 'Product Order', o.id::text, o."productName",
+               concat_ws(' • ', o."userName", o."userPhone", o."userCode", o.status::text),
+               'product-orders', o."orderedAt"
+        FROM product_orders o
+        WHERE concat_ws(' ', o.id::text, o."productName", o."userName", o."userPhone", o."userCode",
+                         o."trackingNumber", o.status::text) ILIKE $1
+        UNION ALL
+        SELECT 'Gift Order', g.id::text, g."giftName",
+               concat_ws(' • ', g."userName", g."userCode", g.status::text), 'gift-orders', g."orderedAt"
+        FROM gift_orders g
+        WHERE concat_ws(' ', g.id::text, g."giftName", g."userName", g."userCode",
+                         g."trackingNumber", g.status::text) ILIKE $1
+      )
+      SELECT "type", "id", "title", "subtitle", "page"
+      FROM matches
+      ORDER BY "sortDate" DESC NULLS LAST, "title" ASC
+      LIMIT $2`,
+      [pattern, limit, term.replace(/\.png$/i, '')],
+    );
+
+    return { query: term, results: rows, total: rows.length };
+  }
+
   async findOne(key: string) {
     const setting = await this.settingsRepository.findOne({
       where: { key },

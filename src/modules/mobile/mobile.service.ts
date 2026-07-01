@@ -868,6 +868,12 @@ export class MobileService {
       testimonialsEnabled: map['testimonialsEnabled'] !== 'false',
       playEnabled: map['playEnabled'] !== 'false',
       dealerCanAddElectrician: map['dealerCanAddElectrician'] !== 'false',
+      minimumOrderAmounts: {
+        electrician: Number(map['minimumOrderAmountElectrician'] ?? 5000),
+        dealer: Number(map['minimumOrderAmountDealer'] ?? 5000),
+        user: Number(map['minimumOrderAmountUser'] ?? 5000),
+        counterboy: Number(map['minimumOrderAmountCounterboy'] ?? 5000),
+      },
       upiOnlyMode: map['upiOnlyMode'] === 'true',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
@@ -1815,6 +1821,8 @@ export class MobileService {
   // ── Electricians (for dealer) ──────────────────────────────────────────────
 
   async getDealerElectricians(dealerId: string, page: number = 1, limit: number = 50, search?: string) {
+    const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
+    if (!dealer) throw new NotFoundException('Dealer not found');
     const skip = (page - 1) * limit;
     const qb = this.electricianRepository
       .createQueryBuilder('electrician')
@@ -1835,7 +1843,12 @@ export class MobileService {
         'electrician.totalScans',
         'electrician.totalRedemptions',
       ])
-      .where('electrician.dealerId = :dealerId', { dealerId });
+      .where(`(
+        electrician.dealerId = :dealerId
+        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
+        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone });
 
     if (search) {
       qb.andWhere(
@@ -1850,11 +1863,8 @@ export class MobileService {
   }
 
   async getDealerElectriciansCallList(dealerId: string) {
-    const electricians = await this.electricianRepository.find({
-      where: { dealerId },
-      select: ['id', 'name', 'phone', 'city', 'status'],
-      order: { name: 'ASC' },
-    });
+    const result = await this.getDealerElectricians(dealerId, 1, 500);
+    const electricians = result.data.sort((a, b) => a.name.localeCompare(b.name));
 
     return {
       data: electricians.map(e => ({

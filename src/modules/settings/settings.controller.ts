@@ -5,6 +5,7 @@ import {
   Post,
   Body,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
@@ -36,6 +37,12 @@ export class SettingsController {
   @ApiResponse({ status: 200, description: 'List of app ratings with user details' })
   getRatingHistory() {
     return this.settingsService.getRatingHistory();
+  }
+
+  @Get('global-search')
+  @ApiOperation({ summary: 'Search users, catalog, QR codes and orders from the admin panel' })
+  globalSearch(@Query('q') query: string, @Query('limit') limit?: string) {
+    return this.settingsService.globalSearch(query, Number(limit));
   }
 
   @Get(':key')
