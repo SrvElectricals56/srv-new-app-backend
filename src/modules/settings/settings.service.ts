@@ -37,6 +37,7 @@ export class SettingsService {
 
     if (digits.length >= 4) {
       const numericValue = /^\d+$/.test(normalizedTerm) ? normalizedTerm : digits;
+      const batchNoValue = Number(numericValue) <= 2147483647 ? numericValue : null;
       const rows = await this.dataSource.query(
         `WITH matches AS (
           (SELECT 'Electrician'::text AS "type", e.id::text AS "id", e.name AS "title",
@@ -77,7 +78,7 @@ export class SettingsService {
                     CASE WHEN q."isScanned" THEN 'Scanned' ELSE 'Available' END), 'qr-codes', q."createdAt"
            FROM qr_codes q
            WHERE q."legacyId" = $4::bigint
-              OR q."batchNo" = $4::integer
+              OR q."batchNo" = $5::integer
            ORDER BY q."createdAt" DESC NULLS LAST
            LIMIT $3)
         )
@@ -85,7 +86,7 @@ export class SettingsService {
         FROM matches
         ORDER BY "sortDate" DESC NULLS LAST, "title" ASC
         LIMIT $3`,
-        [digits, normalizedTerm, limit, numericValue],
+        [digits, normalizedTerm, limit, numericValue, batchNoValue],
       );
 
       return { query: term, results: rows, total: rows.length };
