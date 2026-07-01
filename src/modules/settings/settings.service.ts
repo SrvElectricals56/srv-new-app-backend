@@ -36,6 +36,7 @@ export class SettingsService {
     const digits = term.replace(/\D/g, '').slice(-10);
 
     if (digits.length >= 4) {
+      const numericValue = /^\d+$/.test(normalizedTerm) ? normalizedTerm : digits;
       const rows = await this.dataSource.query(
         `WITH matches AS (
           (SELECT 'Electrician'::text AS "type", e.id::text AS "id", e.name AS "title",
@@ -75,8 +76,8 @@ export class SettingsService {
                   concat_ws(' • ', q."productName", 'Batch ' || COALESCE(q."batchNo"::text, '-'),
                     CASE WHEN q."isScanned" THEN 'Scanned' ELSE 'Available' END), 'qr-codes', q."createdAt"
            FROM qr_codes q
-           WHERE q."legacyId"::text = $2
-              OR q."batchNo"::text = $2
+           WHERE q."legacyId" = $4::bigint
+              OR q."batchNo" = $4::integer
            ORDER BY q."createdAt" DESC NULLS LAST
            LIMIT $3)
         )
@@ -84,7 +85,7 @@ export class SettingsService {
         FROM matches
         ORDER BY "sortDate" DESC NULLS LAST, "title" ASC
         LIMIT $3`,
-        [digits, normalizedTerm, limit],
+        [digits, normalizedTerm, limit, numericValue],
       );
 
       return { query: term, results: rows, total: rows.length };

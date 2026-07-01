@@ -263,15 +263,26 @@ export class QrCodeService {
     if (trimmedSearch) {
       const normalizedCode = trimmedSearch.replace(/\.png$/i, '');
       const numericSearch = /^\d+$/.test(trimmedSearch);
-      queryBuilder.andWhere(
-        `(
-          LOWER(qrCode.code) = LOWER(:exactCode)
-          OR qrCode.productName ILIKE :search
-          OR qrCode.batchId = :exactCode
-          ${numericSearch ? 'OR CAST(qrCode.batchNo AS text) = :exactCode OR "qrCode"."legacyId"::text = :exactCode' : ''}
-        )`,
-        { exactCode: normalizedCode, search: `%${trimmedSearch}%` },
-      );
+      if (numericSearch) {
+        queryBuilder.andWhere(
+          `(
+            LOWER(qrCode.code) = LOWER(:exactCode)
+            OR qrCode.batchId = :exactCode
+            OR qrCode.batchNo = CAST(:numericExact AS integer)
+            OR "qrCode"."legacyId" = CAST(:numericExact AS bigint)
+          )`,
+          { exactCode: normalizedCode, numericExact: normalizedCode },
+        );
+      } else {
+        queryBuilder.andWhere(
+          `(
+            LOWER(qrCode.code) = LOWER(:exactCode)
+            OR qrCode.productName ILIKE :search
+            OR qrCode.batchId = :exactCode
+          )`,
+          { exactCode: normalizedCode, search: `%${trimmedSearch}%` },
+        );
+      }
     }
 
     if (batchId) {
