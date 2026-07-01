@@ -120,6 +120,35 @@ export class QrCodeService {
       }
     }
 
+    await this.qrCodeRepository.query(
+      `
+        INSERT INTO "qr_code_batches" (
+          "batchId",
+          "batchNo",
+          "productId",
+          "productName",
+          "generatedDate",
+          "points",
+          "qty",
+          "usedQty",
+          "activeQty",
+          "createdBy",
+          "updatedAt"
+        )
+        VALUES ($1,$2,$3,$4,now(),$5,$6,0,$6,$7,now())
+        ON CONFLICT ("batchId") DO UPDATE SET
+          "batchNo" = EXCLUDED."batchNo",
+          "productId" = EXCLUDED."productId",
+          "productName" = EXCLUDED."productName",
+          "points" = EXCLUDED."points",
+          "qty" = "qr_code_batches"."qty" + EXCLUDED."qty",
+          "activeQty" = "qr_code_batches"."activeQty" + EXCLUDED."activeQty",
+          "createdBy" = COALESCE(EXCLUDED."createdBy", "qr_code_batches"."createdBy"),
+          "updatedAt" = now()
+      `,
+      [batchId, batchNo, productId, product.name, frozenRewardPoints, savedCodes.length, adminId ?? null],
+    );
+
     return {
       message: `${quantity} QR codes generated successfully`,
       batchId,
@@ -134,12 +163,14 @@ export class QrCodeService {
   }
 
   async getStats() {
-    const row = await this.qrCodeRepository
-      .createQueryBuilder('qr')
-      .select('COUNT(*)::int', 'total')
-      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = false AND qr."isActive" = true)::int', 'active')
-      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = true)::int', 'used')
-      .getRawOne();
+    const rows = await this.qrCodeRepository.query(`
+      SELECT
+        COALESCE(SUM("qty"), 0)::int AS "total",
+        COALESCE(SUM("activeQty"), 0)::int AS "active",
+        COALESCE(SUM("usedQty"), 0)::int AS "used"
+      FROM "qr_code_batches"
+    `);
+    const row = rows?.[0] ?? {};
 
     return {
       total: Number(row?.total ?? 0),
@@ -153,34 +184,34 @@ export class QrCodeService {
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
     const offset = (safePage - 1) * safeLimit;
-    const whereSql = search
+    const trimmedSearch = search?.trim();
+    const whereSql = trimmedSearch
       ? `WHERE (
-          q."productName" ILIKE $1
-          OR q."batchId" ILIKE $1
-          OR CAST(q."batchNo" AS text) ILIKE $1
+          b."productName" ILIKE $1
+          OR b."batchId" ILIKE $1
+          OR CAST(b."batchNo" AS text) ILIKE $1
         )`
       : '';
-    const params = search ? [`%${search}%`] : [];
+    const params = trimmedSearch ? [`%${trimmedSearch}%`] : [];
     const limitParam = params.length + 1;
     const offsetParam = params.length + 2;
 
     const data = await this.qrCodeRepository.query(
       `
         SELECT
-          COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "id",
-          COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchId",
-          MAX(q."batchNo") AS "batchNo",
-          MAX(q."productId"::text) AS "productId",
-          MAX(q."productName") AS "productName",
-          MIN(q."createdAt") AS "generatedDate",
-          COALESCE(MAX(q."rewardPoints"), 0) AS "points",
-          COUNT(*)::int AS "qty",
-          SUM(CASE WHEN q."isScanned" = true THEN 1 ELSE 0 END)::int AS "usedQty",
-          SUM(CASE WHEN q."isScanned" = false THEN 1 ELSE 0 END)::int AS "activeQty"
-        FROM "qr_codes" q
+          b."batchId" AS "id",
+          b."batchId",
+          b."batchNo",
+          b."productId",
+          b."productName",
+          b."generatedDate",
+          b."points",
+          b."qty",
+          b."usedQty",
+          b."activeQty"
+        FROM "qr_code_batches" b
         ${whereSql}
-        GROUP BY COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text)
-        ORDER BY MAX(q."batchNo") DESC NULLS LAST, MIN(q."createdAt") DESC
+        ORDER BY b."batchNo" DESC NULLS LAST, b."generatedDate" DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       `,
       [...params, safeLimit, offset],
@@ -189,12 +220,8 @@ export class QrCodeService {
     const countRows = await this.qrCodeRepository.query(
       `
         SELECT COUNT(*)::int AS total
-        FROM (
-          SELECT COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchKey"
-          FROM "qr_codes" q
-          ${whereSql}
-          GROUP BY COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text)
-        ) batches
+        FROM "qr_code_batches" b
+        ${whereSql}
       `,
       params,
     );
@@ -217,7 +244,10 @@ export class QrCodeService {
     search?: string,
     batchId?: string,
   ) {
-    const skip = (page - 1) * limit;
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(500, Math.max(1, Number(limit) || 20));
+    const skip = (safePage - 1) * safeLimit;
+    const trimmedSearch = search?.trim();
     const queryBuilder = this.qrCodeRepository
       .createQueryBuilder('qrCode')
       .leftJoinAndSelect('qrCode.product', 'product');
@@ -230,15 +260,17 @@ export class QrCodeService {
       queryBuilder.andWhere('qrCode.isScanned = :isScanned', { isScanned });
     }
 
-    if (search) {
+    if (trimmedSearch) {
+      const normalizedCode = trimmedSearch.replace(/\.png$/i, '');
+      const numericSearch = /^\d+$/.test(trimmedSearch);
       queryBuilder.andWhere(
         `(
-          qrCode.code ILIKE :search
+          LOWER(qrCode.code) = LOWER(:exactCode)
           OR qrCode.productName ILIKE :search
-          OR qrCode.batchId ILIKE :search
-          OR CAST(qrCode.batchNo AS text) ILIKE :search
+          OR qrCode.batchId = :exactCode
+          ${numericSearch ? 'OR CAST(qrCode.batchNo AS text) = :exactCode OR qrCode."legacyId"::text = :exactCode' : ''}
         )`,
-        { search: `%${search}%` },
+        { exactCode: normalizedCode, search: `%${trimmedSearch}%` },
       );
     }
 
@@ -254,7 +286,7 @@ export class QrCodeService {
       .addOrderBy('qrCode.sequenceNo', 'ASC', 'NULLS LAST')
       .addOrderBy('qrCode.createdAt', 'DESC')
       .skip(skip)
-      .take(limit);
+      .take(safeLimit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
     const firstScanMap = await this.getFirstScanMap(data.map((qr) => qr.id));
@@ -335,9 +367,9 @@ export class QrCodeService {
     return {
       data: enriched,
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
     };
   }
 
@@ -394,6 +426,17 @@ export class QrCodeService {
       }
       updates.productId = product.id;
       updates.productName = product.name;
+
+      await this.qrCodeRepository.query(
+        `
+          UPDATE "qr_code_batches"
+          SET "productId" = $2,
+              "productName" = $3,
+              "updatedAt" = now()
+          WHERE "batchId" = $1 OR "batchNo"::text = $1
+        `,
+        [batchId, product.id, product.name],
+      );
     }
 
     if (body.rewardPoints !== undefined) {
@@ -404,6 +447,16 @@ export class QrCodeService {
         );
       }
       updates.rewardPoints = points;
+
+      await this.qrCodeRepository.query(
+        `
+          UPDATE "qr_code_batches"
+          SET "points" = $2,
+              "updatedAt" = now()
+          WHERE "batchId" = $1 OR "batchNo"::text = $1
+        `,
+        [batchId, points],
+      );
     }
 
     if (!Object.keys(updates).length) {
@@ -438,6 +491,21 @@ export class QrCodeService {
       throw new NotFoundException(`QR code "${id}" not found`);
     }
     await this.qrCodeRepository.remove(qrCode);
+    await this.qrCodeRepository.query(
+      `
+        UPDATE "qr_code_batches"
+        SET "qty" = GREATEST("qty" - 1, 0),
+            "usedQty" = GREATEST("usedQty" - CASE WHEN $2::boolean THEN 1 ELSE 0 END, 0),
+            "activeQty" = GREATEST("activeQty" - CASE WHEN $3::boolean THEN 1 ELSE 0 END, 0),
+            "updatedAt" = now()
+        WHERE "batchId" = $1
+      `,
+      [
+        qrCode.batchId ?? (qrCode.batchNo ? String(qrCode.batchNo) : qrCode.id),
+        Boolean(qrCode.isScanned),
+        !qrCode.isScanned && qrCode.isActive,
+      ],
+    );
     return { message: 'QR code deleted successfully' };
   }
 
@@ -454,6 +522,11 @@ export class QrCodeService {
     if (!result.affected) {
       throw new NotFoundException(`QR batch "${batchId}" not found`);
     }
+
+    await this.qrCodeRepository.query(
+      'DELETE FROM "qr_code_batches" WHERE "batchId" = $1 OR "batchNo"::text = $1',
+      [batchId],
+    );
 
     return {
       message: 'QR batch deleted successfully',

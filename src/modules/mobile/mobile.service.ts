@@ -1165,6 +1165,17 @@ export class MobileService {
         lastScannedAt: new Date(),
       });
 
+      await manager.query(
+        `
+          UPDATE "qr_code_batches"
+          SET "usedQty" = "usedQty" + 1,
+              "activeQty" = GREATEST("activeQty" - 1, 0),
+              "updatedAt" = now()
+          WHERE "batchId" = $1
+        `,
+        [qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : qr.id)],
+      );
+
       await manager.getRepository(Product).update(qr.product.id, {
         totalScanned: (qr.product.totalScanned ?? 0) + 1,
       });
