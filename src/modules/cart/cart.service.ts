@@ -598,6 +598,12 @@ export class CartService {
       );
     }
 
+    const cartTotal = orderDrafts.reduce(
+      (total, order) => total + Number(order.price ?? 0) * order.quantity,
+      0,
+    );
+    await this.enforceMinimumOrderAmount(normalizedRole, cartTotal);
+
     const orders = orderDrafts.length ? await this.orderRepo.save(orderDrafts) : [];
 
     for (const order of orders) {
