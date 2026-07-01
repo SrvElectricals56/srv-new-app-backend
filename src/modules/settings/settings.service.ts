@@ -35,6 +35,61 @@ export class SettingsService {
     const normalizedTerm = term.replace(/\.png$/i, '');
     const digits = term.replace(/\D/g, '').slice(-10);
 
+    if (digits.length >= 4) {
+      const rows = await this.dataSource.query(
+        `WITH matches AS (
+          (SELECT 'Electrician'::text AS "type", e.id::text AS "id", e.name AS "title",
+                  concat_ws(' • ', e."electricianCode", e.phone, e.city) AS "subtitle",
+                  'electricians'::text AS "page", e."joinedDate" AS "sortDate"
+           FROM electricians e
+           WHERE regexp_replace(COALESCE(e.phone, ''), '\\D', '', 'g') LIKE '%' || $1 || '%'
+              OR LOWER(COALESCE(e."electricianCode", '')) = LOWER($2)
+           ORDER BY e."joinedDate" DESC NULLS LAST
+           LIMIT $3)
+          UNION ALL
+          (SELECT 'Dealer', d.id::text, d.name,
+                  concat_ws(' • ', d."dealerCode", d.phone, d.town), 'dealers', d."joinedDate"
+           FROM dealers d
+           WHERE regexp_replace(COALESCE(d.phone, ''), '\\D', '', 'g') LIKE '%' || $1 || '%'
+              OR LOWER(COALESCE(d."dealerCode", '')) = LOWER($2)
+           ORDER BY d."joinedDate" DESC NULLS LAST
+           LIMIT $3)
+          UNION ALL
+          (SELECT 'Customer', u.id::text, u.name,
+                  concat_ws(' • ', u."userCode", u.phone, u.city), 'app-users', u."joinedDate"
+           FROM app_users u
+           WHERE regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE '%' || $1 || '%'
+              OR LOWER(COALESCE(u."userCode", '')) = LOWER($2)
+           ORDER BY u."joinedDate" DESC NULLS LAST
+           LIMIT $3)
+          UNION ALL
+          (SELECT 'Counter Boy', c.id::text, c.name,
+                  concat_ws(' • ', c."counterboyCode", c.phone, c.city), 'counterboys', c."joinedDate"
+           FROM counterboys c
+           WHERE regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') LIKE '%' || $1 || '%'
+              OR LOWER(COALESCE(c."counterboyCode", '')) = LOWER($2)
+           ORDER BY c."joinedDate" DESC NULLS LAST
+           LIMIT $3)
+          UNION ALL
+          (SELECT 'QR Code', q.id::text, q.code,
+                  concat_ws(' • ', q."productName", 'Batch ' || COALESCE(q."batchNo"::text, '-'),
+                    CASE WHEN q."isScanned" THEN 'Scanned' ELSE 'Available' END), 'qr-codes', q."createdAt"
+           FROM qr_codes q
+           WHERE q."legacyId"::text = $2
+              OR q."batchNo"::text = $2
+           ORDER BY q."createdAt" DESC NULLS LAST
+           LIMIT $3)
+        )
+        SELECT "type", "id", "title", "subtitle", "page"
+        FROM matches
+        ORDER BY "sortDate" DESC NULLS LAST, "title" ASC
+        LIMIT $3`,
+        [digits, normalizedTerm, limit],
+      );
+
+      return { query: term, results: rows, total: rows.length };
+    }
+
     const rows = await this.dataSource.query(
       `WITH matches AS (
         (SELECT 'Electrician'::text AS "type", e.id::text AS "id", e.name AS "title",

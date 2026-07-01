@@ -268,7 +268,7 @@ export class QrCodeService {
           LOWER(qrCode.code) = LOWER(:exactCode)
           OR qrCode.productName ILIKE :search
           OR qrCode.batchId = :exactCode
-          ${numericSearch ? 'OR CAST(qrCode.batchNo AS text) = :exactCode OR qrCode."legacyId"::text = :exactCode' : ''}
+          ${numericSearch ? 'OR CAST(qrCode.batchNo AS text) = :exactCode OR "qrCode"."legacyId"::text = :exactCode' : ''}
         )`,
         { exactCode: normalizedCode, search: `%${trimmedSearch}%` },
       );
