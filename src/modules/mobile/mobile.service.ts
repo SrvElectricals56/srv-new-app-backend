@@ -254,6 +254,129 @@ export class MobileService {
     return this.getUserRepositoryByRole(role, manager).update(userId, data);
   }
 
+  private async buildFirstScanDetails(
+    qr: QrCode,
+    existingScan: Scan | null,
+    manager: EntityManager,
+  ) {
+    const normalizeFirstScan = (details: Record<string, any>) => ({
+      name: details.name ?? null,
+      phone: details.phone ?? null,
+      role: details.role ?? null,
+      dealerName: details.dealerName ?? null,
+      dealerPhone: details.dealerPhone ?? null,
+      productName: details.productName ?? (qr as any).product?.name ?? qr.productName ?? null,
+      scannedAt: details.scannedAt ?? qr.lastScannedAt ?? null,
+    });
+
+    const rawRows = await manager.query(
+      `
+        SELECT DISTINCT ON (s."qrCodeId")
+          s."id",
+          s."userId",
+          s."userName",
+          s."role"::text AS "role",
+          COALESCE(e."name", d."name", u."name", cb."name", qe."name", qd."name", qu."name", qcb."name", s."userName", q."redeemerName") AS "name",
+          COALESCE(e."phone", d."phone", u."phone", cb."phone", qe."phone", qd."phone", qu."phone", qcb."phone", q."redeemerPhone") AS "phone",
+          COALESCE(linked_dealer."name", q_linked_dealer."name", d."name", qd."name") AS "dealerName",
+          COALESCE(linked_dealer."phone", q_linked_dealer."phone", d."phone", qd."phone") AS "dealerPhone",
+          s."productName",
+          s."scannedAt"
+        FROM "qr_codes" q
+        LEFT JOIN "scans" s
+          ON s."qrCodeId" = q."id"
+        LEFT JOIN "electricians" e
+          ON s."role"::text = 'electrician' AND e."id"::text = s."userId"
+        LEFT JOIN "dealers" d
+          ON s."role"::text = 'dealer' AND d."id"::text = s."userId"
+        LEFT JOIN "app_users" u
+          ON s."role"::text = 'user' AND u."id"::text = s."userId"
+        LEFT JOIN "counterboys" cb
+          ON s."role"::text = 'counterboy' AND cb."id"::text = s."userId"
+        LEFT JOIN "dealers" linked_dealer
+          ON linked_dealer."id"::text = COALESCE(e."dealerId"::text, cb."dealerId"::text)
+        LEFT JOIN "electricians" qe
+          ON qe."id"::text = q."lastScannedBy"
+        LEFT JOIN "dealers" qd
+          ON qd."id"::text = q."lastScannedBy"
+        LEFT JOIN "app_users" qu
+          ON qu."id"::text = q."lastScannedBy"
+        LEFT JOIN "counterboys" qcb
+          ON qcb."id"::text = q."lastScannedBy"
+        LEFT JOIN "dealers" q_linked_dealer
+          ON q_linked_dealer."id"::text = COALESCE(qe."dealerId"::text, qcb."dealerId"::text)
+        WHERE q."id" = $1
+        ORDER BY s."qrCodeId", s."scannedAt" ASC NULLS LAST
+      `,
+      [qr.id],
+    );
+    const raw = rawRows?.[0];
+    if (raw?.name || raw?.phone || raw?.dealerName || raw?.dealerPhone || raw?.scannedAt) {
+      return normalizeFirstScan({
+        ...raw,
+        role: raw.role ?? existingScan?.role ?? null,
+      });
+    }
+
+    const scanRole = existingScan?.role || UserRole.ELECTRICIAN;
+    const scanUserId = existingScan?.userId || qr.lastScannedBy;
+    let resolvedRole = scanRole;
+    let user = scanUserId
+      ? await this.getUserByRole(scanUserId, scanRole, manager)
+      : null;
+
+    if (scanUserId && !user && !existingScan) {
+      const rolesToTry = [
+        UserRole.ELECTRICIAN,
+        UserRole.DEALER,
+        UserRole.USER,
+        UserRole.COUNTERBOY,
+      ].filter((candidate) => candidate !== scanRole);
+      for (const candidateRole of rolesToTry) {
+        user = await this.getUserByRole(scanUserId, candidateRole, manager);
+        if (user) {
+          resolvedRole = candidateRole;
+          break;
+        }
+      }
+    }
+    const userRecord = user as any;
+
+    let dealer: any = null;
+    if (userRecord?.dealerId) {
+      dealer = await manager.getRepository(Dealer).findOne({
+        where: { id: userRecord.dealerId } as any,
+      });
+    } else if (this.normalizeRole(resolvedRole) === UserRole.DEALER) {
+      dealer = userRecord;
+    }
+
+    return normalizeFirstScan({
+      name: userRecord?.name ?? existingScan?.userName ?? qr.redeemerName ?? null,
+      phone: userRecord?.phone ?? qr.redeemerPhone ?? null,
+      role: resolvedRole,
+      dealerName: dealer?.name ?? userRecord?.dealerName ?? null,
+      dealerPhone: dealer?.phone ?? userRecord?.dealerPhone ?? null,
+      productName: existingScan?.productName ?? (qr as any).product?.name ?? null,
+      scannedAt:
+        existingScan?.scannedAt instanceof Date
+          ? existingScan.scannedAt.toISOString()
+          : existingScan?.scannedAt ?? qr.lastScannedAt ?? null,
+    });
+  }
+
+  private async throwQrAlreadyRedeemed(
+    qr: QrCode,
+    existingScan: Scan | null,
+    manager: EntityManager,
+  ): Promise<never> {
+    throw new ConflictException({
+      message: 'QR code is already redeemed - Please scan valid QR code',
+      code: 'QR_ALREADY_REDEEMED',
+      firstScan: await this.buildFirstScanDetails(qr, existingScan, manager),
+    });
+  }
+
   private normalizePhone(phone: string): string {
     return String(phone ?? '').replace(/\D/g, '').slice(-10);
   }
@@ -1156,19 +1279,11 @@ export class MobileService {
         throw new BadRequestException('Product is not active');
       }
 
-      if (qr.isScanned) {
-        throw new ConflictException(
-          'QR code is already redeemed - Please scan valid QR code',
-        );
-      }
-
       const existingScan = await manager.getRepository(Scan).findOne({
         where: { qrCodeId: qr.id } as any,
       });
-      if (existingScan) {
-        throw new ConflictException(
-          'QR code is already redeemed - Please scan valid QR code',
-        );
+      if (qr.isScanned || existingScan) {
+        await this.throwQrAlreadyRedeemed(qr, existingScan, manager);
       }
 
       const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
@@ -1194,6 +1309,8 @@ export class MobileService {
         scanCount: (qr.scanCount ?? 0) + 1,
         lastScannedBy: userId,
         lastScannedAt: new Date(),
+        redeemerName: userRecord.name ?? 'Unknown',
+        redeemerPhone: userRecord.phone ?? null,
       });
 
       await manager.getRepository(Product).update(qr.product.id, {
@@ -1266,36 +1383,40 @@ export class MobileService {
       throw new BadRequestException('QR code is required');
     }
 
-    const qr = await this.qrCodeRepository.findOne({
-      where: { code: trimmedQrCode, isActive: true },
-      relations: ['product'],
+    return this.dataSource.transaction(async (manager) => {
+      const qr = await manager.getRepository(QrCode).findOne({
+        where: { code: trimmedQrCode, isActive: true },
+        relations: ['product'],
+      });
+
+      if (!qr || !qr.product || !qr.product.isActive) {
+        throw new NotFoundException(
+          'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
+        );
+      }
+
+      const existingScan = await manager.getRepository(Scan).findOne({
+        where: { qrCodeId: qr.id } as any,
+        order: { scannedAt: 'ASC' },
+      });
+      if (qr.isScanned || existingScan) {
+        await this.throwQrAlreadyRedeemed(qr, existingScan, manager);
+      }
+
+      const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
+
+      return {
+        success: true,
+        msg: 'QR code scan successfully.',
+        productId: qr.product.id,
+        productName: qr.product.name,
+        productImage: this.normalizeUploadUrl(qr.product.image) ?? qr.product.image ?? null,
+        qrcodeprice: points,
+        points,
+        batchId: qr.batchId ?? null,
+        batchNo: qr.batchNo ?? null,
+      };
     });
-
-    if (!qr || !qr.product || !qr.product.isActive) {
-      throw new NotFoundException(
-        'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
-      );
-    }
-
-    if (qr.isScanned) {
-      throw new ConflictException(
-        'QR code is already redeemed - Please scan valid QR code',
-      );
-    }
-
-    const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
-
-    return {
-      success: true,
-      msg: 'QR code scan successfully.',
-      productId: qr.product.id,
-      productName: qr.product.name,
-      productImage: this.normalizeUploadUrl(qr.product.image) ?? qr.product.image ?? null,
-      qrcodeprice: points,
-      points,
-      batchId: qr.batchId ?? null,
-      batchNo: qr.batchNo ?? null,
-    };
   }
 
   async getScanHistory(userId: string, page: number = 1, limit: number = 20) {

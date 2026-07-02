@@ -31,10 +31,23 @@ async function bootstrap() {
     .map((origin) => origin.trim())
     .filter(Boolean);
   const allowAllCors = corsOrigins.includes('*');
+  const isDevelopment = configService.get<string>('NODE_ENV') !== 'production';
+  const serverHost = configService.get<string>('SERVER_HOST');
+  const isAllowedDevOrigin = (origin: string) => {
+    if (!isDevelopment) return false;
+    try {
+      const { hostname, protocol } = new URL(origin);
+      const devHosts = new Set(['localhost', '127.0.0.1', '::1']);
+      if (serverHost) devHosts.add(serverHost);
+      return protocol === 'http:' && devHosts.has(hostname);
+    } catch {
+      return false;
+    }
+  };
   app.enableCors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       // Allow mobile apps (no origin) and explicitly configured web origins only.
-      if (!origin || allowAllCors || corsOrigins.includes(origin)) {
+      if (!origin || allowAllCors || corsOrigins.includes(origin) || isAllowedDevOrigin(origin)) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
