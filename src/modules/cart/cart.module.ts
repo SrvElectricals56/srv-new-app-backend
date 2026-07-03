@@ -7,6 +7,7 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { Wallet } from '../../database/entities/wallet.entity';
 import { CartController } from './cart.controller';
 import { CartService } from './cart.service';
 import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
@@ -22,6 +23,7 @@ import { RazorpayWebhookController } from './razorpay-webhook.controller';
       Dealer,
       AppUser,
       CounterBoy,
+      Wallet,
     ]),
     MobileAuthModule, // needed for MobileJwtGuard
   ],

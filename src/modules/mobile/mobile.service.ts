@@ -480,6 +480,16 @@ export class MobileService {
       throw new NotFoundException('User not found');
     }
 
+    if (currentRole) {
+      const normalizedCurrentRole = this.normalizeRole(currentRole);
+      if (normalizedCurrentRole !== UserRole.ELECTRICIAN) {
+        throw new BadRequestException('Only electricians can transfer points');
+      }
+      if (receiverData.role !== UserRole.ELECTRICIAN) {
+        throw new BadRequestException('Points can only be transferred to another electrician');
+      }
+    }
+
     if (
       currentUserId &&
       currentRole &&
@@ -1800,6 +1810,12 @@ export class MobileService {
 
       const receiverData = await this.findReceiverByPhone(receiverPhone, manager);
       if (!receiverData) throw new NotFoundException('Receiver not found');
+      if (normalizedRole !== UserRole.ELECTRICIAN) {
+        throw new BadRequestException('Only electricians can transfer points');
+      }
+      if (receiverData.role !== UserRole.ELECTRICIAN) {
+        throw new BadRequestException('Points can only be transferred to another electrician');
+      }
       if (receiverData.user.id === userId && receiverData.role === normalizedRole) {
         throw new BadRequestException('You cannot transfer points to yourself');
       }

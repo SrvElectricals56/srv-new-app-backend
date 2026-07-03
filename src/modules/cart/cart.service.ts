@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -17,7 +17,8 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
-import { UserRole } from '../../common/enums';
+import { Wallet } from '../../database/entities/wallet.entity';
+import { TransactionSource, TransactionType, UserRole } from '../../common/enums';
 
 @Injectable()
 export class CartService implements OnModuleInit {
@@ -81,6 +82,19 @@ export class CartService implements OnModuleInit {
     if (role === UserRole.DEALER) return user?.dealerCode ?? '';
     if (role === UserRole.COUNTERBOY) return user?.counterboyCode ?? '';
     return user?.userCode ?? '';
+  }
+
+  private getRoleRepository(manager: EntityManager, role: UserRole) {
+    switch (role) {
+      case UserRole.ELECTRICIAN:
+        return manager.getRepository(Electrician);
+      case UserRole.DEALER:
+        return manager.getRepository(Dealer);
+      case UserRole.COUNTERBOY:
+        return manager.getRepository(CounterBoy);
+      default:
+        return manager.getRepository(AppUser);
+    }
   }
 
   private async ensurePaymentColumns() {
@@ -379,6 +393,101 @@ export class CartService implements OnModuleInit {
     }
 
     return { message: 'Order submitted successfully', order };
+  }
+
+  async createPointsOrder(
+    userId: string,
+    role: string,
+    body: { productId: string; quantity?: number; shippingAddress?: string },
+  ) {
+    const quantity = Math.max(1, Number(body.quantity ?? 1));
+    if (!body.productId) throw new BadRequestException('productId is required');
+    if (!body.shippingAddress?.trim()) throw new BadRequestException('Shipping address is required');
+
+    const normalizedRole = this.normalizeRole(role);
+
+    return this.orderRepo.manager.transaction(async (manager) => {
+      const userRepository = this.getRoleRepository(manager, normalizedRole);
+      const productRepository = manager.getRepository(Product);
+      const orderRepository = manager.getRepository(ProductOrder);
+      const walletRepository = manager.getRepository(Wallet);
+
+      const [user, product] = await Promise.all([
+        userRepository.findOne({ where: { id: userId } as any, lock: { mode: 'pessimistic_write' } }),
+        productRepository.findOne({ where: { id: body.productId, isActive: true } as any, lock: { mode: 'pessimistic_write' } }),
+      ]);
+
+      if (!user) throw new NotFoundException('User not found');
+      if (!product || product.category === 'gift') throw new NotFoundException('Product not found');
+      this.ensureAvailableStock(product, quantity);
+
+      const unitPrice = Number(product.price ?? 0);
+      const pointsRequired = unitPrice * quantity;
+      if (!Number.isFinite(pointsRequired) || pointsRequired <= 0) {
+        throw new BadRequestException('Product price is not valid for points payment');
+      }
+
+      const balanceBefore = Number((user as any).walletBalance ?? 0);
+      if (balanceBefore < pointsRequired) {
+        throw new BadRequestException(`Insufficient points. You have ${balanceBefore} points but need ${pointsRequired}.`);
+      }
+
+      const balanceAfter = balanceBefore - pointsRequired;
+      const updateData: any = { walletBalance: balanceAfter };
+      if (normalizedRole !== UserRole.DEALER) {
+        updateData.totalPoints = balanceAfter;
+      }
+      await userRepository.update(userId, updateData);
+
+      if (this.hasTrackedStock(product)) {
+        product.stock = Number(product.stock) - quantity;
+        await productRepository.save(product);
+      }
+
+      const order = await orderRepository.save(
+        orderRepository.create({
+          userId,
+          userRole: normalizedRole,
+          userName: (user as any).name ?? '',
+          userPhone: (user as any).phone ?? '',
+          userCode: this.getUserCode(user, normalizedRole),
+          productId: product.id,
+          productName: product.name,
+          productImage: product.image ?? '',
+          quantity,
+          price: unitPrice,
+          status: ProductOrderStatus.PENDING,
+          shippingAddress: body.shippingAddress.trim(),
+          paymentMethod: 'points',
+          paymentStatus: 'paid',
+          paidAt: new Date(),
+          estimatedDeliveryAt: this.estimateDeliveryDate(),
+          deliveryNotes: 'Paid with wallet points. Order is waiting for dispatch.',
+        }),
+      );
+
+      await walletRepository.save(
+        walletRepository.create({
+          userId,
+          userRole: normalizedRole,
+          type: TransactionType.DEBIT,
+          source: TransactionSource.PURCHASE,
+          amount: pointsRequired,
+          balanceBefore,
+          balanceAfter,
+          description: `Product purchase with points - ${product.name}`,
+          referenceId: order.id,
+          referenceType: 'product_order',
+        }),
+      );
+
+      return {
+        message: 'Order placed successfully using points',
+        order,
+        walletBalance: balanceAfter,
+        pointsUsed: pointsRequired,
+      };
+    });
   }
 
   async createRazorpayOrder(

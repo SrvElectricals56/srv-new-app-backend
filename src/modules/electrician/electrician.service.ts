@@ -147,6 +147,12 @@ export class ElectricianService {
     const data: any = { ...createElectricianDto };
     if (!data.dealerId || data.dealerId.trim() === '') {
       data.dealerId = null;
+      if (!data.fallbackDealerName?.trim()) {
+        throw new BadRequestException('Dealer is required to add an electrician');
+      }
+      data.fallbackDealerName = data.fallbackDealerName.trim();
+    } else {
+      data.dealerId = data.dealerId.trim();
     }
     if (!data.status) {
       data.status = UserStatus.ACTIVE;

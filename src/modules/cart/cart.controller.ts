@@ -74,6 +74,16 @@ export class CartController {
     return this.cartService.createOrder(req.user.id, req.user.role, body);
   }
 
+  @Post('product-orders/points')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Buy now with wallet points' })
+  createPointsOrder(
+    @Request() req: any,
+    @Body() body: { productId: string; quantity?: number; shippingAddress?: string },
+  ) {
+    return this.cartService.createPointsOrder(req.user.id, req.user.role, body);
+  }
+
   @Post('payments/razorpay/order')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a secure Razorpay order for a product purchase' })
