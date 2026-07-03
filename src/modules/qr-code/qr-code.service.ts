@@ -2,8 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  Logger,
-  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -18,10 +16,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
 
 @Injectable()
-export class QrCodeService implements OnModuleInit {
-  private readonly logger = new Logger(QrCodeService.name);
-  private schemaEnsured = false;
-
+export class QrCodeService {
   constructor(
     @InjectRepository(QrCode)
     private qrCodeRepository: Repository<QrCode>,
@@ -39,13 +34,7 @@ export class QrCodeService implements OnModuleInit {
     private adminRepository: Repository<Admin>,
   ) {}
 
-  async onModuleInit() {
-    await this.ensureLegacyColumns();
-  }
-
   async generate(generateQrCodeDto: GenerateQrCodeDto, adminId?: string) {
-    await this.ensureLegacyColumns();
-
     const { productId, quantity, rewardPoints } = generateQrCodeDto;
 
     const product = await this.productRepository.findOne({
@@ -131,6 +120,35 @@ export class QrCodeService implements OnModuleInit {
       }
     }
 
+    await this.qrCodeRepository.query(
+      `
+        INSERT INTO "qr_code_batches" (
+          "batchId",
+          "batchNo",
+          "productId",
+          "productName",
+          "generatedDate",
+          "points",
+          "qty",
+          "usedQty",
+          "activeQty",
+          "createdBy",
+          "updatedAt"
+        )
+        VALUES ($1,$2,$3,$4,now(),$5,$6,0,$6,$7,now())
+        ON CONFLICT ("batchId") DO UPDATE SET
+          "batchNo" = EXCLUDED."batchNo",
+          "productId" = EXCLUDED."productId",
+          "productName" = EXCLUDED."productName",
+          "points" = EXCLUDED."points",
+          "qty" = "qr_code_batches"."qty" + EXCLUDED."qty",
+          "activeQty" = "qr_code_batches"."activeQty" + EXCLUDED."activeQty",
+          "createdBy" = COALESCE(EXCLUDED."createdBy", "qr_code_batches"."createdBy"),
+          "updatedAt" = now()
+      `,
+      [batchId, batchNo, productId, product.name, frozenRewardPoints, savedCodes.length, adminId ?? null],
+    );
+
     return {
       message: `${quantity} QR codes generated successfully`,
       batchId,
@@ -145,14 +163,14 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async getStats() {
-    await this.ensureLegacyColumns();
-
-    const row = await this.qrCodeRepository
-      .createQueryBuilder('qr')
-      .select('COUNT(*)::int', 'total')
-      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = false AND qr."isActive" = true)::int', 'active')
-      .addSelect('COUNT(*) FILTER (WHERE qr."isScanned" = true)::int', 'used')
-      .getRawOne();
+    const rows = await this.qrCodeRepository.query(`
+      SELECT
+        COALESCE(SUM("qty"), 0)::int AS "total",
+        COALESCE(SUM("activeQty"), 0)::int AS "active",
+        COALESCE(SUM("usedQty"), 0)::int AS "used"
+      FROM "qr_code_batches"
+    `);
+    const row = rows?.[0] ?? {};
 
     return {
       total: Number(row?.total ?? 0),
@@ -163,39 +181,37 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async findBatches(page: number = 1, limit: number = 20, search?: string) {
-    await this.ensureLegacyColumns();
-
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
     const offset = (safePage - 1) * safeLimit;
-    const whereSql = search
+    const trimmedSearch = search?.trim();
+    const whereSql = trimmedSearch
       ? `WHERE (
-          q."productName" ILIKE $1
-          OR q."batchId" ILIKE $1
-          OR CAST(q."batchNo" AS text) ILIKE $1
+          b."productName" ILIKE $1
+          OR b."batchId" ILIKE $1
+          OR CAST(b."batchNo" AS text) ILIKE $1
         )`
       : '';
-    const params = search ? [`%${search}%`] : [];
+    const params = trimmedSearch ? [`%${trimmedSearch}%`] : [];
     const limitParam = params.length + 1;
     const offsetParam = params.length + 2;
 
     const data = await this.qrCodeRepository.query(
       `
         SELECT
-          COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "id",
-          COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchId",
-          MAX(q."batchNo") AS "batchNo",
-          MAX(q."productId") AS "productId",
-          MAX(q."productName") AS "productName",
-          MIN(q."createdAt") AS "generatedDate",
-          COALESCE(MAX(q."rewardPoints"), 0) AS "points",
-          COUNT(*)::int AS "qty",
-          SUM(CASE WHEN q."isScanned" = true THEN 1 ELSE 0 END)::int AS "usedQty",
-          SUM(CASE WHEN q."isScanned" = false THEN 1 ELSE 0 END)::int AS "activeQty"
-        FROM "qr_codes" q
+          b."batchId" AS "id",
+          b."batchId",
+          b."batchNo",
+          b."productId",
+          b."productName",
+          b."generatedDate",
+          b."points",
+          b."qty",
+          b."usedQty",
+          b."activeQty"
+        FROM "qr_code_batches" b
         ${whereSql}
-        GROUP BY COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text)
-        ORDER BY MAX(q."batchNo") DESC NULLS LAST, MIN(q."createdAt") DESC
+        ORDER BY b."batchNo" DESC NULLS LAST, b."generatedDate" DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       `,
       [...params, safeLimit, offset],
@@ -204,12 +220,8 @@ export class QrCodeService implements OnModuleInit {
     const countRows = await this.qrCodeRepository.query(
       `
         SELECT COUNT(*)::int AS total
-        FROM (
-          SELECT COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text) AS "batchKey"
-          FROM "qr_codes" q
-          ${whereSql}
-          GROUP BY COALESCE(q."batchId", CAST(q."batchNo" AS text), q."id"::text)
-        ) batches
+        FROM "qr_code_batches" b
+        ${whereSql}
       `,
       params,
     );
@@ -232,9 +244,10 @@ export class QrCodeService implements OnModuleInit {
     search?: string,
     batchId?: string,
   ) {
-    await this.ensureLegacyColumns();
-
-    const skip = (page - 1) * limit;
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(500, Math.max(1, Number(limit) || 20));
+    const skip = (safePage - 1) * safeLimit;
+    const trimmedSearch = search?.trim();
     const queryBuilder = this.qrCodeRepository
       .createQueryBuilder('qrCode')
       .leftJoinAndSelect('qrCode.product', 'product');
@@ -247,16 +260,29 @@ export class QrCodeService implements OnModuleInit {
       queryBuilder.andWhere('qrCode.isScanned = :isScanned', { isScanned });
     }
 
-    if (search) {
-      queryBuilder.andWhere(
-        `(
-          qrCode.code ILIKE :search
-          OR qrCode.productName ILIKE :search
-          OR qrCode.batchId ILIKE :search
-          OR CAST(qrCode.batchNo AS text) ILIKE :search
-        )`,
-        { search: `%${search}%` },
-      );
+    if (trimmedSearch) {
+      const normalizedCode = trimmedSearch.replace(/\.png$/i, '');
+      const numericSearch = /^\d+$/.test(trimmedSearch);
+      if (numericSearch) {
+        queryBuilder.andWhere(
+          `(
+            LOWER(qrCode.code) = LOWER(:exactCode)
+            OR qrCode.batchId = :exactCode
+            OR qrCode.batchNo = CAST(:numericExact AS integer)
+            OR "qrCode"."legacyId" = CAST(:numericExact AS bigint)
+          )`,
+          { exactCode: normalizedCode, numericExact: normalizedCode },
+        );
+      } else {
+        queryBuilder.andWhere(
+          `(
+            LOWER(qrCode.code) = LOWER(:exactCode)
+            OR qrCode.productName ILIKE :search
+            OR qrCode.batchId = :exactCode
+          )`,
+          { exactCode: normalizedCode, search: `%${trimmedSearch}%` },
+        );
+      }
     }
 
     if (batchId) {
@@ -271,7 +297,7 @@ export class QrCodeService implements OnModuleInit {
       .addOrderBy('qrCode.sequenceNo', 'ASC', 'NULLS LAST')
       .addOrderBy('qrCode.createdAt', 'DESC')
       .skip(skip)
-      .take(limit);
+      .take(safeLimit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
     const firstScanMap = await this.getFirstScanMap(data.map((qr) => qr.id));
@@ -352,15 +378,13 @@ export class QrCodeService implements OnModuleInit {
     return {
       data: enriched,
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
     };
   }
 
   async findFirstScan(id: string) {
-    await this.ensureLegacyColumns();
-
     let qrCode = await this.qrCodeRepository.findOne({ where: { id } });
     if (!qrCode) {
       qrCode = await this.qrCodeRepository.findOne({ where: { code: id } });
@@ -386,8 +410,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async findOne(id: string) {
-    await this.ensureLegacyColumns();
-
     const qrCode = await this.qrCodeRepository.findOne({
       where: { id },
       relations: ['product'],
@@ -404,8 +426,6 @@ export class QrCodeService implements OnModuleInit {
     batchId: string,
     body: { productId?: string; rewardPoints?: number },
   ) {
-    await this.ensureLegacyColumns();
-
     const updates: Partial<QrCode> = {};
 
     if (body.productId) {
@@ -417,6 +437,17 @@ export class QrCodeService implements OnModuleInit {
       }
       updates.productId = product.id;
       updates.productName = product.name;
+
+      await this.qrCodeRepository.query(
+        `
+          UPDATE "qr_code_batches"
+          SET "productId" = $2,
+              "productName" = $3,
+              "updatedAt" = now()
+          WHERE "batchId" = $1 OR "batchNo"::text = $1
+        `,
+        [batchId, product.id, product.name],
+      );
     }
 
     if (body.rewardPoints !== undefined) {
@@ -427,6 +458,16 @@ export class QrCodeService implements OnModuleInit {
         );
       }
       updates.rewardPoints = points;
+
+      await this.qrCodeRepository.query(
+        `
+          UPDATE "qr_code_batches"
+          SET "points" = $2,
+              "updatedAt" = now()
+          WHERE "batchId" = $1 OR "batchNo"::text = $1
+        `,
+        [batchId, points],
+      );
     }
 
     if (!Object.keys(updates).length) {
@@ -453,8 +494,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async remove(id: string) {
-    await this.ensureLegacyColumns();
-
     let qrCode = await this.qrCodeRepository.findOne({ where: { id } });
     if (!qrCode) {
       qrCode = await this.qrCodeRepository.findOne({ where: { code: id } });
@@ -463,12 +502,25 @@ export class QrCodeService implements OnModuleInit {
       throw new NotFoundException(`QR code "${id}" not found`);
     }
     await this.qrCodeRepository.remove(qrCode);
+    await this.qrCodeRepository.query(
+      `
+        UPDATE "qr_code_batches"
+        SET "qty" = GREATEST("qty" - 1, 0),
+            "usedQty" = GREATEST("usedQty" - CASE WHEN $2::boolean THEN 1 ELSE 0 END, 0),
+            "activeQty" = GREATEST("activeQty" - CASE WHEN $3::boolean THEN 1 ELSE 0 END, 0),
+            "updatedAt" = now()
+        WHERE "batchId" = $1
+      `,
+      [
+        qrCode.batchId ?? (qrCode.batchNo ? String(qrCode.batchNo) : qrCode.id),
+        Boolean(qrCode.isScanned),
+        !qrCode.isScanned && qrCode.isActive,
+      ],
+    );
     return { message: 'QR code deleted successfully' };
   }
 
   async removeBatch(batchId: string) {
-    await this.ensureLegacyColumns();
-
     const result = await this.qrCodeRepository
       .createQueryBuilder()
       .delete()
@@ -482,6 +534,11 @@ export class QrCodeService implements OnModuleInit {
       throw new NotFoundException(`QR batch "${batchId}" not found`);
     }
 
+    await this.qrCodeRepository.query(
+      'DELETE FROM "qr_code_batches" WHERE "batchId" = $1 OR "batchNo"::text = $1',
+      [batchId],
+    );
+
     return {
       message: 'QR batch deleted successfully',
       deleted: result.affected,
@@ -489,8 +546,6 @@ export class QrCodeService implements OnModuleInit {
   }
 
   async removeAll(productId?: string) {
-    await this.ensureLegacyColumns();
-
     if (productId) {
       const result = await this.qrCodeRepository.delete({ productId });
       return {
@@ -502,64 +557,6 @@ export class QrCodeService implements OnModuleInit {
     const count = await this.qrCodeRepository.count();
     await this.qrCodeRepository.clear();
     return { message: 'All QR codes deleted', deleted: count };
-  }
-
-  private async ensureLegacyColumns() {
-    if (this.schemaEnsured) {
-      return;
-    }
-
-    try {
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "batchNo" integer
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "sequenceNo" integer
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "rewardPoints" integer NOT NULL DEFAULT 0
-      `);
-
-      await this.qrCodeRepository.query(`
-        UPDATE "qr_codes"
-        SET "rewardPoints" = COALESCE("rewardPoints", 0)
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "createdBy" character varying
-      `);
-
-      await this.qrCodeRepository.query(`
-        ALTER TABLE "qr_codes"
-        ADD COLUMN IF NOT EXISTS "legacyRedeemerId" integer,
-        ADD COLUMN IF NOT EXISTS "redeemerName" character varying,
-        ADD COLUMN IF NOT EXISTS "redeemerPhone" character varying,
-        ADD COLUMN IF NOT EXISTS "redeemerCode" character varying
-      `);
-
-      await this.qrCodeRepository.query(`
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_batchId" ON "qr_codes" ("batchId");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_batchNo" ON "qr_codes" ("batchNo");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_productId" ON "qr_codes" ("productId");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_isScanned_isActive" ON "qr_codes" ("isScanned", "isActive");
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_createdAt" ON "qr_codes" ("createdAt" DESC);
-        CREATE INDEX IF NOT EXISTS "IDX_qr_codes_legacyRedeemerId" ON "qr_codes" ("legacyRedeemerId");
-      `);
-
-      this.schemaEnsured = true;
-    } catch (error) {
-      this.logger.error(
-        'Unable to ensure qr_codes legacy columns exist',
-        error as Error,
-      );
-      throw error;
-    }
   }
 
   private async getNextBatchNo() {
@@ -614,7 +611,7 @@ export class QrCodeService implements OnModuleInit {
           ON linked_dealer."id"::text = COALESCE(e."dealerId"::text, cb."dealerId"::text)
         LEFT JOIN "wallet_transactions" wt
           ON wt."referenceType" = 'scan'
-         AND wt."referenceId" = s."id"
+         AND wt."referenceId" = s."id"::text
          AND wt."source"::text = 'scan'
         WHERE s."qrCodeId" = ANY($1::text[])
         ORDER BY s."qrCodeId", s."scannedAt" ASC

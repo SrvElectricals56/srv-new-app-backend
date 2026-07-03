@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { UserRole } from '../../common/enums';
+import { numericTransformer } from '../numeric.transformer';
 
 export enum GiftOrderStatus {
   PENDING = 'pending',
@@ -49,7 +50,7 @@ export class GiftOrder {
   @Column({ nullable: true })
   giftImage: string;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   pointsUsed: number;
 
   @Column({

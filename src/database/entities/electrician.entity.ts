@@ -15,6 +15,7 @@ import {
   KYCStatus,
 } from '../../common/enums';
 import { Dealer } from './dealer.entity';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('electricians')
 export class Electrician {
@@ -65,13 +66,13 @@ export class Electrician {
   })
   tier: MemberTier;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   totalPoints: number;
 
   @Column({ default: 0 })
   totalScans: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   walletBalance: number;
 
   @Column({ default: 0 })
@@ -127,7 +128,7 @@ export class Electrician {
   @Column({ nullable: true })
   kycRejectionReason: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   dealerId: string;
 
   @Column({ nullable: true })
@@ -135,6 +136,9 @@ export class Electrician {
 
   @Column({ nullable: true })
   fallbackDealerPhone: string;
+
+  @Column({ nullable: true })
+  fallbackDealerCode: string;
 
   @ManyToOne(() => Dealer, (dealer) => dealer.electricians, {
     onDelete: 'SET NULL',

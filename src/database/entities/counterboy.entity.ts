@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { UserStatus, KYCStatus, MemberTier } from '../../common/enums';
 import { Dealer } from './dealer.entity';
+import { numericTransformer } from '../numeric.transformer';
 
 /**
  * CounterBoy — Independent counter staff role
@@ -58,10 +59,10 @@ export class CounterBoy {
   @Column({ default: 0 })
   totalScans: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   totalPoints: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0, transformer: numericTransformer })
   walletBalance: number;
 
   @Column({ default: 0 })

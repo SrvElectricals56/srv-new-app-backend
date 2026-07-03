@@ -8,26 +8,11 @@ import { CrossRolePhoneService } from '../../common/services/cross-role-phone.se
 
 @Injectable()
 export class AppUserService {
-  private appInstallColumnsEnsured = false;
-
   constructor(
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
     private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
-
-  private async ensureAppInstallColumns() {
-    if (this.appInstallColumnsEnsured) return;
-    await this.appUserRepository.query(`
-      ALTER TABLE "app_users"
-      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
-    `);
-    await this.appUserRepository.query(`
-      ALTER TABLE "app_users"
-      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
-    `);
-    this.appInstallColumnsEnsured = true;
-  }
 
   private async generateUniqueUserCode() {
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -69,14 +54,12 @@ export class AppUserService {
   }
 
   private async findOnePlain(id: string) {
-    await this.ensureAppInstallColumns();
     const user = await this.appUserRepository.findOne({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
     return user;
   }
 
   async create(data: Partial<AppUser>) {
-    await this.ensureAppInstallColumns();
     if (!data.name?.trim() || !data.phone?.trim()) {
       throw new BadRequestException('Name and phone are required');
     }
@@ -125,7 +108,6 @@ export class AppUserService {
   }
 
   async importMany(records: any[]) {
-    await this.ensureAppInstallColumns();
     let created = 0, updated = 0, failed = 0, errors: string[] = [];
 
     for (const record of records) {
@@ -201,7 +183,6 @@ export class AppUserService {
   }
 
   async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean) {
-    await this.ensureAppInstallColumns();
     const skip = (page - 1) * limit;
     const where: any[] = [];
 

@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Product } from './product.entity';
+import { numericTransformer } from '../numeric.transformer';
 
 @Entity('points_config')
 export class PointsConfig {
@@ -20,10 +21,10 @@ export class PointsConfig {
   @Column()
   productName: string;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numericTransformer })
   basePoints: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numericTransformer })
   bonusPoints: number;
 
   @Column({ default: true })

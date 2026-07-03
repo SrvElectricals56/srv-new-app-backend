@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -21,7 +20,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { TransactionSource, TransactionType, UserRole } from '../../common/enums';
 
 @Injectable()
-export class CartService implements OnModuleInit {
+export class CartService {
   constructor(
     @InjectRepository(ProductCartItem)
     private cartRepo: Repository<ProductCartItem>,
@@ -44,12 +43,11 @@ export class CartService implements OnModuleInit {
     @InjectRepository(CounterBoy)
     private counterboyRepo: Repository<CounterBoy>,
 
+    @InjectRepository(Settings)
+    private settingsRepo: Repository<Settings>,
+
     private readonly configService: ConfigService,
   ) {}
-
-  async onModuleInit() {
-    await this.ensurePaymentColumns();
-  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -175,6 +173,23 @@ export class CartService implements OnModuleInit {
       throw new ServiceUnavailableException('Online payment is not configured yet. Please contact support.');
     }
     return { keyId, keySecret };
+  }
+
+  private async enforceMinimumOrderAmount(role: UserRole, amount: number) {
+    const keyByRole: Record<UserRole, string> = {
+      [UserRole.ELECTRICIAN]: 'minimumOrderAmountElectrician',
+      [UserRole.DEALER]: 'minimumOrderAmountDealer',
+      [UserRole.USER]: 'minimumOrderAmountUser',
+      [UserRole.COUNTERBOY]: 'minimumOrderAmountCounterboy',
+    };
+    const setting = await this.settingsRepo.findOne({ where: { key: keyByRole[role] } });
+    const configured = Number(setting?.value ?? 5000);
+    const minimum = Number.isFinite(configured) && configured >= 0 ? configured : 5000;
+    if (!Number.isFinite(amount) || amount < minimum) {
+      throw new BadRequestException(
+        `Minimum order amount for this profile is INR ${minimum.toLocaleString('en-IN')}`,
+      );
+    }
   }
 
   private signaturesMatch(expected: string, received: string) {
@@ -368,6 +383,7 @@ export class CartService implements OnModuleInit {
     if (!user) throw new NotFoundException('User not found');
     if (!product || product.category === 'gift') throw new NotFoundException('Product not found');
     this.ensureAvailableStock(product, quantity);
+    await this.enforceMinimumOrderAmount(normalizedRole, Number(product.price ?? 0) * quantity);
 
     const order = await this.orderRepo.save(
       this.orderRepo.create({
@@ -510,6 +526,7 @@ export class CartService implements OnModuleInit {
     this.ensureAvailableStock(product, quantity);
 
     const unitPrice = Number(product.price ?? 0);
+    await this.enforceMinimumOrderAmount(normalizedRole, unitPrice * quantity);
     const amount = Math.round(unitPrice * quantity * 100);
     if (!Number.isFinite(amount) || amount < 100) {
       throw new BadRequestException('Online payment amount must be at least INR 1');
@@ -753,6 +770,12 @@ export class CartService implements OnModuleInit {
         }),
       );
     }
+
+    const cartTotal = orderDrafts.reduce(
+      (total, order) => total + Number(order.price ?? 0) * order.quantity,
+      0,
+    );
+    await this.enforceMinimumOrderAmount(normalizedRole, cartTotal);
 
     const orders = orderDrafts.length ? await this.orderRepo.save(orderDrafts) : [];
 

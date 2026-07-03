@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { CreateGiftProductDto } from './dto/create-gift-product.dto';
 import { UpdateGiftProductDto } from './dto/update-gift-product.dto';
 import { Product } from '../../database/entities/product.entity';
@@ -11,10 +11,7 @@ import { RedemptionStatus } from '../../common/enums';
 
 @Injectable()
 export class GiftService {
-  private giftOrderSchemaPromise: Promise<void> | null = null;
-
   constructor(
-    private dataSource: DataSource,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
     @InjectRepository(GiftOrder)
@@ -23,22 +20,6 @@ export class GiftService {
     private redemptionRepository: Repository<Redemption>,
     private redemptionService: RedemptionService,
   ) {}
-
-  private async ensureGiftOrderSchema() {
-    if (!this.giftOrderSchemaPromise) {
-      this.giftOrderSchemaPromise = this.dataSource.query(`
-        ALTER TABLE "gift_orders"
-        ADD COLUMN IF NOT EXISTS "courierName" varchar,
-        ADD COLUMN IF NOT EXISTS "deliveryNotes" text,
-        ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz,
-        ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz;
-      `).catch((error) => {
-        this.giftOrderSchemaPromise = null;
-        throw error;
-      });
-    }
-    await this.giftOrderSchemaPromise;
-  }
 
   // ─── Gift Products ────────────────────────────────────────────────────────
 
@@ -163,7 +144,6 @@ export class GiftService {
     status?: string,
     role?: string,
   ) {
-    await this.ensureGiftOrderSchema();
     const skip = (page - 1) * limit;
 
     const qb = this.giftOrderRepository.createQueryBuilder('o');
@@ -251,7 +231,6 @@ export class GiftService {
   }
 
   async updateOrderStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string }) {
-    await this.ensureGiftOrderSchema();
     const order = await this.giftOrderRepository.findOne({ where: { id } });
 
     if (!order) {

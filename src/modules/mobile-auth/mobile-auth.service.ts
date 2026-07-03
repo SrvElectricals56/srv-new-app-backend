@@ -1,6 +1,5 @@
 import {
   Injectable,
-  OnModuleInit,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
@@ -11,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
@@ -20,16 +20,17 @@ import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login
 import { ElectricianSubCategory, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
 
 // In-memory OTP store (production mein Redis use karein)
-const otpStore = new Map<string, { otp: string; expiresAt: number }>();
+const otpStore = new Map<
+  string,
+  { otp: string; expiresAt: number; failedAttempts: number }
+>();
 const SIGNUP_OTP_VERIFIED = 'VERIFIED';
 
 @Injectable()
-export class MobileAuthService implements OnModuleInit {
-  private appUserInstallColumnsEnsured = false;
-  private counterboyInstallColumnsEnsured = false;
-
+export class MobileAuthService {
   constructor(
     @InjectRepository(Electrician)
     private electricianRepository: Repository<Electrician>,
@@ -47,38 +48,23 @@ export class MobileAuthService implements OnModuleInit {
     private configService: ConfigService,
   ) {}
 
-  async onModuleInit() {
-    await this.ensureSubDealerSchema();
-  }
-
-  private async ensureSubDealerSchema() {
-    await this.electricianRepository.query(
-      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerName" character varying',
-    );
-    await this.electricianRepository.query(
-      'ALTER TABLE "electricians" ADD COLUMN IF NOT EXISTS "fallbackDealerPhone" character varying',
-    );
-    await this.electricianRepository.query(`
-      CREATE TABLE IF NOT EXISTS "sub_dealers" (
-        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        "phone" character varying NOT NULL UNIQUE,
-        "name" character varying NOT NULL DEFAULT 'SRV Dealer',
-        "district" character varying,
-        "pincode" character varying,
-        "electricianCount" integer NOT NULL DEFAULT 0,
-        "firstSeenAt" timestamptz NOT NULL DEFAULT now(),
-        "lastSeenAt" timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-  }
-
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  private getFixedOtp(): string | null {
+    return resolveFixedOtp({
+      nodeEnv: this.configService.get<string>('NODE_ENV'),
+      appEnv: this.configService.get<string>('APP_ENV'),
+      testMode: this.configService.get<string>('OTP_TEST_MODE'),
+      testCode: this.configService.get<string>('OTP_TEST_CODE'),
+    });
+  }
+
   private generateOtp(): string {
-    if (this.configService.get('NODE_ENV') === 'development') {
-      return '1234';
-    }
-    return Math.floor(1000 + Math.random() * 9000).toString();
+    return this.getFixedOtp() ?? randomInt(1000, 10_000).toString();
+  }
+
+  private exposeTestOtp(): boolean {
+    return this.getFixedOtp() !== null;
   }
 
   private async generateTokens(payload: { sub: string; phone: string; role: string }) {
@@ -222,32 +208,6 @@ export class MobileAuthService implements OnModuleInit {
     }
   }
 
-  private async ensureAppUserInstallColumns() {
-    if (this.appUserInstallColumnsEnsured) return;
-    await this.appUserRepository.query(`
-      ALTER TABLE "app_users"
-      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
-    `);
-    await this.appUserRepository.query(`
-      ALTER TABLE "app_users"
-      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
-    `);
-    this.appUserInstallColumnsEnsured = true;
-  }
-
-  private async ensureCounterboyInstallColumns() {
-    if (this.counterboyInstallColumnsEnsured) return;
-    await this.counterboyRepository.query(`
-      ALTER TABLE "counterboys"
-      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
-    `);
-    await this.counterboyRepository.query(`
-      ALTER TABLE "counterboys"
-      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
-    `);
-    this.counterboyInstallColumnsEnsured = true;
-  }
-
   private async getUserEntityByRole(userId: string, role: string): Promise<any> {
     return this.getRepositoryByRole(role).findOne({
       where: { id: userId } as any,
@@ -279,7 +239,6 @@ export class MobileAuthService implements OnModuleInit {
         break;
       }
       case 'user': {
-        await this.ensureAppUserInstallColumns();
         const existing = await this.appUserRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
         const update: any = { lastActivityAt: now };
         if (existing && !existing.appInstalled) {
@@ -290,7 +249,6 @@ export class MobileAuthService implements OnModuleInit {
         break;
       }
       case 'counterboy': {
-        await this.ensureCounterboyInstallColumns();
         const existing = await this.counterboyRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
         const update: any = { lastActivityAt: now };
         if (existing && !existing.appInstalled) {
@@ -350,12 +308,16 @@ export class MobileAuthService implements OnModuleInit {
 
     const otp = this.generateOtp();
     const key = `${phone}:${role}`;
-    otpStore.set(key, { otp, expiresAt: Date.now() + 5 * 60 * 1000 });
+    otpStore.set(key, {
+      otp,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+      failedAttempts: 0,
+    });
 
     return {
       success: true,
       message: 'OTP sent successfully',
-      ...(this.configService.get('NODE_ENV') === 'development' && { devOtp: otp }),
+      ...(this.exposeTestOtp() && { devOtp: otp }),
     };
   }
 
@@ -369,7 +331,16 @@ export class MobileAuthService implements OnModuleInit {
       otpStore.delete(key);
       throw new BadRequestException('OTP expired. Please request a new OTP.');
     }
-    if (stored.otp !== otp) throw new UnauthorizedException('Invalid OTP.');
+    if (stored.otp !== otp) {
+      stored.failedAttempts += 1;
+      if (stored.failedAttempts >= 5) {
+        otpStore.delete(key);
+        throw new UnauthorizedException(
+          'Too many invalid OTP attempts. Request a new OTP.',
+        );
+      }
+      throw new UnauthorizedException('Invalid OTP.');
+    }
     otpStore.delete(key);
 
     const user = await this.findUserByPhone(phone, role);
@@ -389,12 +360,16 @@ export class MobileAuthService implements OnModuleInit {
 
     const otp = this.generateOtp();
     const key = this.buildSignupOtpKey(phone, role);
-    otpStore.set(key, { otp, expiresAt: Date.now() + 10 * 60 * 1000 });
+    otpStore.set(key, {
+      otp,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+      failedAttempts: 0,
+    });
 
     return {
       success: true,
       message: 'OTP sent successfully',
-      ...(this.configService.get('NODE_ENV') === 'development' && { devOtp: otp }),
+      ...(this.exposeTestOtp() && { devOtp: otp }),
     };
   }
 
@@ -409,9 +384,22 @@ export class MobileAuthService implements OnModuleInit {
       otpStore.delete(key);
       throw new BadRequestException('OTP expired. Please request a new OTP.');
     }
-    if (stored.otp !== otp) throw new UnauthorizedException('Invalid OTP.');
+    if (stored.otp !== otp) {
+      stored.failedAttempts += 1;
+      if (stored.failedAttempts >= 5) {
+        otpStore.delete(key);
+        throw new UnauthorizedException(
+          'Too many invalid OTP attempts. Request a new OTP.',
+        );
+      }
+      throw new UnauthorizedException('Invalid OTP.');
+    }
     // Mark as verified for signup completion
-    otpStore.set(key, { otp: SIGNUP_OTP_VERIFIED, expiresAt: Date.now() + 15 * 60 * 1000 });
+    otpStore.set(key, {
+      otp: SIGNUP_OTP_VERIFIED,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      failedAttempts: 0,
+    });
 
     return { success: true, message: 'OTP verified successfully' };
   }
@@ -464,7 +452,6 @@ export class MobileAuthService implements OnModuleInit {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician');
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'electrician');
 
-    await this.ensureSubDealerSchema();
     const normalizedDealerPhone = this.normalizePhone(data.dealerPhone);
     let dealerId: string | undefined;
     let dealerCode: string | undefined;
@@ -543,7 +530,6 @@ export class MobileAuthService implements OnModuleInit {
     state?: string; district?: string; address?: string; pincode?: string;
     password?: string;
   }) {
-    await this.ensureAppUserInstallColumns();
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user');
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'user');
 
@@ -580,7 +566,6 @@ export class MobileAuthService implements OnModuleInit {
     state?: string; district?: string; address?: string; pincode?: string;
     password?: string;
   }) {
-    await this.ensureCounterboyInstallColumns();
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy');
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'counterboy');
 

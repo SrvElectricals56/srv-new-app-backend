@@ -12,6 +12,7 @@ import { CartController } from './cart.controller';
 import { CartService } from './cart.service';
 import { MobileAuthModule } from '../mobile-auth/mobile-auth.module';
 import { RazorpayWebhookController } from './razorpay-webhook.controller';
+import { Settings } from '../../database/entities/settings.entity';
 
 @Module({
   imports: [

@@ -9,8 +9,6 @@ import { CrossRolePhoneService } from '../../common/services/cross-role-phone.se
 
 @Injectable()
 export class CounterBoyService {
-  private appInstallColumnsEnsured = false;
-
   constructor(
     @InjectRepository(CounterBoy)
     private counterboyRepository: Repository<CounterBoy>,
@@ -18,19 +16,6 @@ export class CounterBoyService {
     private dealerRepository: Repository<Dealer>,
     private readonly crossRolePhoneService: CrossRolePhoneService,
   ) {}
-
-  private async ensureAppInstallColumns() {
-    if (this.appInstallColumnsEnsured) return;
-    await this.counterboyRepository.query(`
-      ALTER TABLE "counterboys"
-      ADD COLUMN IF NOT EXISTS "appInstalled" boolean NOT NULL DEFAULT false
-    `);
-    await this.counterboyRepository.query(`
-      ALTER TABLE "counterboys"
-      ADD COLUMN IF NOT EXISTS "firstAppLoginAt" timestamptz
-    `);
-    this.appInstallColumnsEnsured = true;
-  }
 
   private async generateUniqueCounterBoyCode() {
     const prefix = `CB${String(Date.now()).slice(-6)}`;
@@ -77,7 +62,6 @@ export class CounterBoyService {
   }
 
   private async findOnePlain(id: string) {
-    await this.ensureAppInstallColumns();
     const cb = await this.counterboyRepository.findOne({ where: { id } });
     if (!cb) throw new NotFoundException('Counter boy not found');
     return cb;
@@ -94,7 +78,6 @@ export class CounterBoyService {
   }
 
   async importMany(records: any[]) {
-    await this.ensureAppInstallColumns();
     let created = 0, updated = 0, failed = 0, errors: string[] = [];
 
     for (const record of records) {
@@ -166,7 +149,6 @@ export class CounterBoyService {
   }
 
   async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean) {
-    await this.ensureAppInstallColumns();
     const skip = (page - 1) * limit;
 
     const query = this.counterboyRepository
@@ -231,7 +213,6 @@ export class CounterBoyService {
   }
 
   async create(data: Partial<CounterBoy>) {
-    await this.ensureAppInstallColumns();
     if (!data.name?.trim() || !data.phone?.trim()) {
       throw new BadRequestException('Name and phone are required');
     }

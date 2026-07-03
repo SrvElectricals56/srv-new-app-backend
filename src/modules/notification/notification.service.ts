@@ -106,18 +106,6 @@ export class NotificationService {
       throw new BadRequestException('Notification already sent');
     }
 
-    await this.dataSource.query(`
-      CREATE TABLE IF NOT EXISTS "mobile_push_tokens" (
-        "token" text PRIMARY KEY,
-        "userId" text NOT NULL,
-        "userRole" varchar(50) NOT NULL,
-        "platform" varchar(20),
-        "enabled" boolean NOT NULL DEFAULT true,
-        "createdAt" timestamptz NOT NULL DEFAULT now(),
-        "updatedAt" timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-
     const targetUserIds = (notification.targetUserIds ?? []).filter(Boolean);
     const targetRole = this.normalizeTargetRole(notification.targetRole);
     const params: any[] = [];

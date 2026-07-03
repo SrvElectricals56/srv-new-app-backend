@@ -29,11 +29,10 @@ import { ProductCategory } from '../../database/entities/product-category.entity
 import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
 import { UserRole, UserStatus, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
+import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 
 @Injectable()
 export class MobileService {
-  private persistenceSetupPromise: Promise<void> | null = null;
-
   constructor(
     private dataSource: DataSource,
     private readonly configService: ConfigService,
@@ -114,52 +113,6 @@ export class MobileService {
       if (uploadPathIndex >= 0) return `${publicBaseUrl}${trimmed.slice(uploadPathIndex)}`;
       return trimmed;
     }
-  }
-
-  private async ensurePersistenceArtifacts() {
-    if (!this.persistenceSetupPromise) {
-      this.persistenceSetupPromise = this.dataSource.query(`
-        ALTER TABLE "support_tickets"
-        ADD COLUMN IF NOT EXISTS "photoUrl" text,
-        ADD COLUMN IF NOT EXISTS "photoUrls" text[];
-
-        ALTER TABLE "gift_orders"
-        ADD COLUMN IF NOT EXISTS "courierName" varchar,
-        ADD COLUMN IF NOT EXISTS "deliveryNotes" text,
-        ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz,
-        ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz;
-
-        ALTER TABLE "redemptions"
-        ADD COLUMN IF NOT EXISTS giftproductid varchar,
-        ADD COLUMN IF NOT EXISTS giftname varchar,
-        ADD COLUMN IF NOT EXISTS giftimage text;
-      `).then(async () => {
-        await this.dataSource.query(`
-          CREATE TABLE IF NOT EXISTS "app_ratings" (
-            "userId" varchar(255) PRIMARY KEY,
-            "userRole" varchar(50) NOT NULL,
-            "rating" integer NOT NULL,
-            "review" text NULL,
-            "createdAt" timestamptz NOT NULL DEFAULT now(),
-            "updatedAt" timestamptz NOT NULL DEFAULT now()
-          );
-          CREATE TABLE IF NOT EXISTS "mobile_push_tokens" (
-            "token" text PRIMARY KEY,
-            "userId" text NOT NULL,
-            "userRole" varchar(50) NOT NULL,
-            "platform" varchar(20),
-            "enabled" boolean NOT NULL DEFAULT true,
-            "createdAt" timestamptz NOT NULL DEFAULT now(),
-            "updatedAt" timestamptz NOT NULL DEFAULT now()
-          );
-        `);
-      }).catch((error) => {
-        this.persistenceSetupPromise = null;
-        throw error;
-      });
-    }
-
-    await this.persistenceSetupPromise;
   }
 
   private normalizeRole(role: string): UserRole {
@@ -967,7 +920,6 @@ export class MobileService {
   }
 
   async registerPushToken(userId: string, role: string, token: string, platform?: string) {
-    await this.ensurePersistenceArtifacts();
     if (!token || !/^ExponentPushToken\[[^\]]+\]$|^ExpoPushToken\[[^\]]+\]$/.test(token)) {
       throw new BadRequestException('Invalid Expo push token');
     }
@@ -1049,6 +1001,12 @@ export class MobileService {
       testimonialsEnabled: map['testimonialsEnabled'] !== 'false',
       playEnabled: map['playEnabled'] !== 'false',
       dealerCanAddElectrician: map['dealerCanAddElectrician'] !== 'false',
+      minimumOrderAmounts: {
+        electrician: Number(map['minimumOrderAmountElectrician'] ?? 5000),
+        dealer: Number(map['minimumOrderAmountDealer'] ?? 5000),
+        user: Number(map['minimumOrderAmountUser'] ?? 5000),
+        counterboy: Number(map['minimumOrderAmountCounterboy'] ?? 5000),
+      },
       upiOnlyMode: map['upiOnlyMode'] === 'true',
       playStoreUrl: map['playStoreUrl'] ?? 'https://play.google.com/store/apps/details?id=com.srvelectricals.app',
       appStoreUrl: map['appStoreUrl'] ?? '',
@@ -1269,24 +1227,28 @@ export class MobileService {
   // ── Scan ───────────────────────────────────────────────────────────────────
 
   async submitScan(userId: string, role: string, qrCode: string, mode: 'single' | 'multi') {
-    const trimmedQrCode = qrCode?.trim();
-    if (!trimmedQrCode) {
+    const qrCandidates = extractQrCodeCandidates(qrCode);
+    if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const qr = await manager
+      const createLookup = () => manager
         .getRepository(QrCode)
         .createQueryBuilder('qr')
         .innerJoinAndSelect('qr.product', 'product')
-        .setLock('pessimistic_write')
-        .where('qr.code = :qrCode', { qrCode: trimmedQrCode })
-        .andWhere('qr.isActive = :isActive', { isActive: true })
+        .setLock('pessimistic_write');
+
+      let qr = await createLookup()
+        .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates })
         .getOne();
 
-      if (!qr) throw new NotFoundException('QR code not found or invalid');
-      if (!qr.product || !qr.product.isActive) {
-        throw new BadRequestException('Product is not active');
+      if (!qr) {
+        qr = await createLookup()
+          .where('LOWER(qr.code) IN (:...qrCodes)', {
+            qrCodes: qrCandidates.map((candidate) => candidate.toLowerCase()),
+          })
+          .getOne();
       }
 
       const existingScan = await manager.getRepository(Scan).findOne({
@@ -1322,6 +1284,17 @@ export class MobileService {
         redeemerName: userRecord.name ?? 'Unknown',
         redeemerPhone: userRecord.phone ?? null,
       });
+
+      await manager.query(
+        `
+          UPDATE "qr_code_batches"
+          SET "usedQty" = "usedQty" + 1,
+              "activeQty" = GREATEST("activeQty" - 1, 0),
+              "updatedAt" = now()
+          WHERE "batchId" = $1
+        `,
+        [qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : qr.id)],
+      );
 
       await manager.getRepository(Product).update(qr.product.id, {
         totalScanned: (qr.product.totalScanned ?? 0) + 1,
@@ -1388,8 +1361,8 @@ export class MobileService {
   }
 
   async previewQrCode(qrCode: string) {
-    const trimmedQrCode = qrCode?.trim();
-    if (!trimmedQrCode) {
+    const qrCandidates = extractQrCodeCandidates(qrCode);
+    if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
     }
 
@@ -1664,7 +1637,6 @@ export class MobileService {
   }
 
   async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string }) {
-    await this.ensurePersistenceArtifacts();
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
@@ -1913,7 +1885,6 @@ export class MobileService {
   }
 
   async getRedemptionHistory(userId: string, page: number = 1, limit: number = 20) {
-    await this.ensurePersistenceArtifacts();
     const skip = (page - 1) * limit;
     const [data, total] = await this.redemptionRepository.findAndCount({
       where: { userId },
@@ -1974,6 +1945,8 @@ export class MobileService {
   // ── Electricians (for dealer) ──────────────────────────────────────────────
 
   async getDealerElectricians(dealerId: string, page: number = 1, limit: number = 50, search?: string) {
+    const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
+    if (!dealer) throw new NotFoundException('Dealer not found');
     const skip = (page - 1) * limit;
     const qb = this.electricianRepository
       .createQueryBuilder('electrician')
@@ -1994,7 +1967,12 @@ export class MobileService {
         'electrician.totalScans',
         'electrician.totalRedemptions',
       ])
-      .where('electrician.dealerId = :dealerId', { dealerId });
+      .where(`(
+        electrician.dealerId = :dealerId
+        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
+        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone });
 
     if (search) {
       qb.andWhere(
@@ -2009,11 +1987,8 @@ export class MobileService {
   }
 
   async getDealerElectriciansCallList(dealerId: string) {
-    const electricians = await this.electricianRepository.find({
-      where: { dealerId },
-      select: ['id', 'name', 'phone', 'city', 'status'],
-      order: { name: 'ASC' },
-    });
+    const result = await this.getDealerElectricians(dealerId, 1, 500);
+    const electricians = result.data.sort((a, b) => a.name.localeCompare(b.name));
 
     return {
       data: electricians.map(e => ({
@@ -2071,7 +2046,6 @@ export class MobileService {
   async createSupportTicket(userId: string, role: string, data: {
     subject: string; comment: string; photoUrl?: string; photoUrls?: string[];
   }) {
-    await this.ensurePersistenceArtifacts();
     const user = await this.getUserByRole(userId, role);
     const userRole = this.normalizeRole(role);
     const photoUrls = [...new Set((data.photoUrls ?? []).filter(Boolean))].slice(0, 5);
@@ -2248,7 +2222,6 @@ export class MobileService {
   // ── Rating ─────────────────────────────────────────────────────────────────
 
   async submitRating(userId: string, rating: number, review?: string) {
-    await this.ensurePersistenceArtifacts();
 
     const numericRating = Number(rating);
     if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
@@ -2290,7 +2263,6 @@ export class MobileService {
   }
 
   async getRating(userId: string) {
-    await this.ensurePersistenceArtifacts();
 
     const rows = await this.dataSource.query(
       `

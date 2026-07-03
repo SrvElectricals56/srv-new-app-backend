@@ -1,18 +1,7 @@
-import { DataSource } from 'typeorm';
+import 'dotenv/config';
 import { Admin } from '../entities/admin.entity';
 import { AdminRole } from '../../common/enums';
-
-const AppDataSource = new DataSource({
-  type: 'postgres',
-  host: 'localhost',
-  port: 5432,
-  username: 'postgres',
-  password: '4268',
-  database: 'srv_admin',
-  entities: [__dirname + '/../entities/*.entity{.ts,.js}'],
-  synchronize: true,
-  dropSchema: true,
-});
+import AppDataSource from '../data-source';
 
 async function seed() {
   try {
@@ -21,16 +10,26 @@ async function seed() {
 
     const adminRepository = AppDataSource.getRepository(Admin);
 
+    const defaultAdminEmail =
+      process.env.DEFAULT_ADMIN_EMAIL || 'admin@srvelectricals.com';
+
     // Check if admin already exists
     const existingAdmin = await adminRepository.findOne({
-      where: { email: 'admin@srvelectricals.com' },
+      where: { email: defaultAdminEmail },
     });
 
     if (!existingAdmin) {
+      const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD;
+      if (!defaultAdminPassword) {
+        throw new Error(
+          'DEFAULT_ADMIN_PASSWORD is required when creating the initial admin.',
+        );
+      }
+
       // Create default admin
       const admin = adminRepository.create({
-        email: 'admin@srvelectricals.com',
-        password: 'Admin@123', // Will be hashed by the entity
+        email: defaultAdminEmail,
+        password: defaultAdminPassword,
         name: 'Super Admin',
         role: AdminRole.SUPER_ADMIN,
         phone: '+91-9876543210',
@@ -40,7 +39,7 @@ async function seed() {
       await adminRepository.save(admin);
       console.log('✅ Default admin created successfully');
       console.log('📧 Email: admin@srvelectricals.com');
-      console.log('🔑 Password: Admin@123');
+      console.log('🔑 Password: configured through DEFAULT_ADMIN_PASSWORD');
     } else {
       console.log('ℹ️  Default admin already exists');
     }
