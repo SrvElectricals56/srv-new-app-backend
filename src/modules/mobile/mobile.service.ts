@@ -1365,6 +1365,7 @@ export class MobileService {
     if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
     }
+    const trimmedQrCode = qrCandidates[0];
 
     return this.dataSource.transaction(async (manager) => {
       const qr = await manager.getRepository(QrCode).findOne({
