@@ -24,6 +24,7 @@ import { Settings } from '../../database/entities/settings.entity';
       Dealer,
       AppUser,
       CounterBoy,
+      Settings,
       Wallet,
     ]),
     MobileAuthModule, // needed for MobileJwtGuard
