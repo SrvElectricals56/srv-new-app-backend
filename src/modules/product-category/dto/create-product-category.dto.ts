@@ -24,6 +24,13 @@ export class CreateProductCategoryDto {
   @Min(0)
   sortOrder?: number;
 
+  @ApiPropertyOptional({ description: 'Displayed product count override' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  productCount?: number;
+
   @ApiPropertyOptional({ description: 'Is category active', default: true })
   @IsOptional()
   @IsBoolean()

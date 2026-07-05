@@ -80,6 +80,13 @@ export class PlayController {
     );
   }
 
+  @Delete(':id/comments/:commentId')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Delete a play comment from admin panel' })
+  deleteComment(@Param('id') id: string, @Param('commentId') commentId: string) {
+    return this.playService.deleteComment(id, commentId);
+  }
+
   @Delete(':id')
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Delete a play' })
@@ -121,6 +128,13 @@ export class MobilePlayController {
   @ApiOperation({ summary: 'Toggle like for a play' })
   toggleLike(@Param('id') id: string, @Request() req: any) {
     return this.playService.toggleLike(id, req.user.id, req.user.role, req.user.name);
+  }
+
+  @Post(':id/share')
+  @UseGuards(MobileJwtGuard)
+  @ApiOperation({ summary: 'Record a play share' })
+  recordShare(@Param('id') id: string, @Request() req: any) {
+    return this.playService.recordShare(id, req.user.id, req.user.role, req.user.name);
   }
 
   @Post(':id/comments')

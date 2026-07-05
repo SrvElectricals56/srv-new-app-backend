@@ -17,6 +17,9 @@ export class ProductCategory {
   @Column({ type: 'integer', default: 0 })
   sortOrder: number;
 
+  @Column({ type: 'integer', nullable: true })
+  productCount: number | null;
+
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 

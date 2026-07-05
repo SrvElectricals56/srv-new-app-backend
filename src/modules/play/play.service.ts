@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -7,6 +7,7 @@ import {
   type PlayComment,
   type PlayCommentReply,
   type PlayLike,
+  type PlayShare,
   type PlayViewer,
 } from '../../database/entities/play.entity';
 
@@ -16,16 +17,21 @@ type PlayTargetRole = (typeof PLAY_TARGET_ROLES)[number];
 type PlayInteractionsResponse = {
   playId: string;
   likeCount: number;
+  shareCount: number;
   likedByMe: boolean;
   comments: PlayComment[];
 };
 
 @Injectable()
-export class PlayService {
+export class PlayService implements OnModuleInit {
   constructor(
     @InjectRepository(Play)
     private playRepository: Repository<Play>,
   ) {}
+
+  async onModuleInit() {
+    await this.ensureInteractionColumns();
+  }
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
 
@@ -143,6 +149,20 @@ export class PlayService {
     return this.buildInteractions({ ...play, likes }, userId);
   }
 
+  async recordShare(id: string, userId: string, role: string, userName?: string | null) {
+    const play = await this.findVisibleEntity(id, role);
+    const shares = this.getSharesArray(play);
+    shares.push({
+      userId,
+      role,
+      userName: userName?.trim() || null,
+      sharedAt: new Date().toISOString(),
+    });
+
+    await this.playRepository.update(id, { shares });
+    return this.buildInteractions({ ...play, shares }, userId);
+  }
+
   async addComment(id: string, user: { id: string; role: string; name?: string | null }, message: string) {
     const trimmed = message.trim();
     if (!trimmed) {
@@ -205,6 +225,19 @@ export class PlayService {
     return this.buildInteractions({ ...play, comments });
   }
 
+  async deleteComment(id: string, commentId: string) {
+    const play = await this.findOneEntity(id);
+    const comments = this.getCommentsArray(play);
+    const nextComments = comments.filter((comment) => comment.id !== commentId);
+
+    if (nextComments.length === comments.length) {
+      throw new NotFoundException('Comment not found');
+    }
+
+    await this.playRepository.update(id, { comments: nextComments });
+    return this.buildInteractions({ ...play, comments: nextComments });
+  }
+
   async getStats() {
     const all = await this.playRepository.find();
     const totalViews = all.reduce((sum, p) => sum + (p.viewCount ?? 0), 0);
@@ -213,6 +246,7 @@ export class PlayService {
     ).size;
     const totalLikes = all.reduce((sum, play) => sum + this.getLikesArray(play).length, 0);
     const totalComments = all.reduce((sum, play) => sum + this.getCommentsCount(play), 0);
+    const totalShares = all.reduce((sum, play) => sum + this.getSharesArray(play).length, 0);
     return {
       totalPlays: all.length,
       activePlays: all.filter((p) => p.isActive).length,
@@ -220,6 +254,7 @@ export class PlayService {
       uniqueViewers,
       totalLikes,
       totalComments,
+      totalShares,
     };
   }
 
@@ -323,15 +358,28 @@ export class PlayService {
   }
 
   private serializePlay(play: Play) {
-    const { viewers: _viewers, likes: _likes, comments: _comments, ...rest } = play;
+    const {
+      viewers: _viewers,
+      likes: _likes,
+      comments: _comments,
+      shares: _shares,
+      ...rest
+    } = play;
     return {
       ...rest,
       targetRoles: this.getTargetRoles(play),
+      likeCount: this.getLikesArray(play).length,
+      commentCount: this.getCommentsCount(play),
+      shareCount: this.getSharesArray(play).length,
     };
   }
 
   private getLikesArray(play: Play): PlayLike[] {
     return Array.isArray(play.likes) ? play.likes : [];
+  }
+
+  private getSharesArray(play: Play): PlayShare[] {
+    return Array.isArray(play.shares) ? play.shares : [];
   }
 
   private getCommentsArray(play: Play): PlayComment[] {
@@ -352,13 +400,27 @@ export class PlayService {
   private buildInteractions(play: Play, userId?: string): PlayInteractionsResponse {
     const likes = this.getLikesArray(play);
     const comments = this.getCommentsArray(play);
+    const shares = this.getSharesArray(play);
 
     return {
       playId: play.id,
       likeCount: likes.length,
+      shareCount: shares.length,
       likedByMe: userId ? likes.some((like) => like.userId === userId) : false,
       comments,
     };
+  }
+
+  private async ensureInteractionColumns() {
+    const queryRunner = this.playRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    try {
+      await queryRunner.query(
+        `ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "shares" jsonb NOT NULL DEFAULT '[]'::jsonb`,
+      );
+    } finally {
+      await queryRunner.release();
+    }
   }
 
 }

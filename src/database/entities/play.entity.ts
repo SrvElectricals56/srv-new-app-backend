@@ -16,6 +16,13 @@ export type PlayLike = {
   likedAt: string;
 };
 
+export type PlayShare = {
+  userId: string;
+  role: string;
+  userName?: string | null;
+  sharedAt: string;
+};
+
 export type PlayCommentReply = {
   id: string;
   message: string;
@@ -74,6 +81,10 @@ export class Play {
   // JSON array of { userId, role, userName?, likedAt }
   @Column({ type: 'jsonb', default: '[]' })
   likes: PlayLike[];
+
+  // JSON array of { userId, role, userName?, sharedAt }
+  @Column({ type: 'jsonb', default: '[]' })
+  shares: PlayShare[];
 
   // JSON array of comments with nested replies.
   @Column({ type: 'jsonb', default: '[]' })

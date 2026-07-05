@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ProductCategory } from '../../database/entities/product-category.entity';
@@ -7,13 +7,17 @@ import { CreateProductCategoryDto } from './dto/create-product-category.dto';
 import { UpdateProductCategoryDto } from './dto/update-product-category.dto';
 
 @Injectable()
-export class ProductCategoryService {
+export class ProductCategoryService implements OnModuleInit {
   constructor(
     @InjectRepository(ProductCategory)
     private readonly categoryRepository: Repository<ProductCategory>,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
   ) {}
+
+  async onModuleInit() {
+    await this.ensureProductCountColumn();
+  }
 
   async create(createDto: CreateProductCategoryDto): Promise<ProductCategory> {
     const category = this.categoryRepository.create({
@@ -22,6 +26,7 @@ export class ProductCategoryService {
       glyph: createDto.glyph?.trim() || null,
       imageUrl: createDto.imageUrl?.trim() || null,
       sortOrder: Number(createDto.sortOrder ?? 0),
+      productCount: createDto.productCount !== undefined ? Number(createDto.productCount ?? 0) : null,
     });
     return await this.categoryRepository.save(category);
   }
@@ -43,7 +48,7 @@ export class ProductCategoryService {
 
     return categories.map(cat => ({
       ...cat,
-      productCount: countMap.get(cat.label) ?? 0,
+      productCount: cat.productCount ?? countMap.get(cat.label) ?? 0,
     }));
   }
 
@@ -62,6 +67,7 @@ export class ProductCategoryService {
     if (updateDto.glyph !== undefined) cleaned.glyph = updateDto.glyph?.trim() || null;
     if (updateDto.imageUrl !== undefined) cleaned.imageUrl = updateDto.imageUrl?.trim() || null;
     if (updateDto.sortOrder !== undefined) cleaned.sortOrder = Number(updateDto.sortOrder ?? 0);
+    if (updateDto.productCount !== undefined) cleaned.productCount = Number(updateDto.productCount ?? 0);
     if (updateDto.isActive !== undefined) cleaned.isActive = updateDto.isActive;
     Object.assign(category, cleaned);
     return await this.categoryRepository.save(category);
@@ -70,5 +76,17 @@ export class ProductCategoryService {
   async remove(id: string): Promise<void> {
     const category = await this.findOne(id);
     await this.categoryRepository.remove(category);
+  }
+
+  private async ensureProductCountColumn() {
+    const queryRunner = this.categoryRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    try {
+      await queryRunner.query(
+        `ALTER TABLE "product_categories" ADD COLUMN IF NOT EXISTS "productCount" integer`,
+      );
+    } finally {
+      await queryRunner.release();
+    }
   }
 }
