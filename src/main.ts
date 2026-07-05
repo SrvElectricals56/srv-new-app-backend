@@ -17,7 +17,6 @@ async function bootstrap() {
 
   // The JSON limit is intentionally smaller than upload limits. Large images,
   // PDFs, and videos must use the guarded multipart upload endpoints.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const express = require('express');
   const bodyLimit = configService.get<string>('BODY_LIMIT') || '10mb';
   app.use(
