@@ -46,7 +46,12 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto) {
-    const admin = await this.validateUser(loginDto.identifier, loginDto.password);
+    const identifier = loginDto.identifier?.trim() || loginDto.email?.trim();
+    if (!identifier) {
+      throw new BadRequestException('Username or email is required');
+    }
+
+    const admin = await this.validateUser(identifier, loginDto.password);
 
     const payload = {
       sub: admin.id,
