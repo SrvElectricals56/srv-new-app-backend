@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -23,15 +23,11 @@ type PlayInteractionsResponse = {
 };
 
 @Injectable()
-export class PlayService implements OnModuleInit {
+export class PlayService {
   constructor(
     @InjectRepository(Play)
     private playRepository: Repository<Play>,
   ) {}
-
-  async onModuleInit() {
-    await this.ensureInteractionColumns();
-  }
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
 
@@ -409,18 +405,6 @@ export class PlayService implements OnModuleInit {
       likedByMe: userId ? likes.some((like) => like.userId === userId) : false,
       comments,
     };
-  }
-
-  private async ensureInteractionColumns() {
-    const queryRunner = this.playRepository.manager.connection.createQueryRunner();
-    await queryRunner.connect();
-    try {
-      await queryRunner.query(
-        `ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "shares" jsonb NOT NULL DEFAULT '[]'::jsonb`,
-      );
-    } finally {
-      await queryRunner.release();
-    }
   }
 
 }
