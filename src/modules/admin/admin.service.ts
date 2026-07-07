@@ -17,15 +17,34 @@ export class AdminService {
   ) {}
 
   async create(createAdminDto: CreateAdminDto) {
-    const existingAdmin = await this.adminRepository.findOne({
-      where: { email: createAdminDto.email },
-    });
+    const normalizedEmail = createAdminDto.email?.trim().toLowerCase() || null;
+    const normalizedName = createAdminDto.name.trim().toLowerCase();
 
-    if (existingAdmin) {
-      throw new ConflictException('Admin with this email already exists');
+    if (normalizedEmail) {
+      const existingAdmin = await this.adminRepository
+        .createQueryBuilder('admin')
+        .where('LOWER(admin.email) = :email', { email: normalizedEmail })
+        .getOne();
+
+      if (existingAdmin) {
+        throw new ConflictException('Admin with this email already exists');
+      }
     }
 
-    const admin = this.adminRepository.create(createAdminDto);
+    const existingName = await this.adminRepository
+      .createQueryBuilder('admin')
+      .where('LOWER(admin.name) = :name', { name: normalizedName })
+      .getOne();
+
+    if (existingName) {
+      throw new ConflictException('Admin with this username already exists');
+    }
+
+    const admin = this.adminRepository.create({
+      ...createAdminDto,
+      name: createAdminDto.name.trim(),
+      email: normalizedEmail,
+    });
     const savedAdmin = await this.adminRepository.save(admin);
     
     const { password, ...result } = savedAdmin;
@@ -81,13 +100,34 @@ export class AdminService {
       throw new NotFoundException('Admin not found');
     }
 
-    if (updateAdminDto.email && updateAdminDto.email !== admin.email) {
-      const existingAdmin = await this.adminRepository.findOne({
-        where: { email: updateAdminDto.email },
-      });
+    const normalizedEmail =
+      updateAdminDto.email === undefined
+        ? undefined
+        : updateAdminDto.email?.trim().toLowerCase() || null;
 
-      if (existingAdmin) {
-        throw new ConflictException('Admin with this email already exists');
+    if (normalizedEmail !== undefined && normalizedEmail !== (admin.email?.toLowerCase() ?? null)) {
+      if (normalizedEmail) {
+        const existingAdmin = await this.adminRepository
+          .createQueryBuilder('admin')
+          .where('LOWER(admin.email) = :email', { email: normalizedEmail })
+          .andWhere('admin.id != :id', { id })
+          .getOne();
+
+        if (existingAdmin) {
+          throw new ConflictException('Admin with this email already exists');
+        }
+      }
+    }
+
+    if (typeof updateAdminDto.name === 'string' && updateAdminDto.name.trim().toLowerCase() !== admin.name.trim().toLowerCase()) {
+      const existingName = await this.adminRepository
+        .createQueryBuilder('admin')
+        .where('LOWER(admin.name) = :name', { name: updateAdminDto.name.trim().toLowerCase() })
+        .andWhere('admin.id != :id', { id })
+        .getOne();
+
+      if (existingName) {
+        throw new ConflictException('Admin with this username already exists');
       }
     }
 
@@ -101,7 +141,11 @@ export class AdminService {
     }
 
     // Merge the updates into the entity
-    Object.assign(admin, updateAdminDto);
+    Object.assign(admin, {
+      ...updateAdminDto,
+      ...(typeof updateAdminDto.name === 'string' ? { name: updateAdminDto.name.trim() } : {}),
+      ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
+    });
 
     // Save the entity (this will trigger @BeforeUpdate hook for password hashing)
     const savedAdmin = await this.adminRepository.save(admin);

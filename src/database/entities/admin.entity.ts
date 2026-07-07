@@ -15,8 +15,8 @@ export class Admin {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
-  email: string;
+  @Column({ unique: true, nullable: true })
+  email: string | null;
 
   @Column()
   password: string;

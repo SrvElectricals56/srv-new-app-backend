@@ -19,8 +19,13 @@ export class AuthService {
     private configService: ConfigService,
   ) {}
 
-  async validateUser(email: string, password: string): Promise<any> {
-    const admin = await this.adminRepository.findOne({ where: { email } });
+  async validateUser(identifier: string, password: string): Promise<any> {
+    const normalizedIdentifier = identifier.trim().toLowerCase();
+    const admin = await this.adminRepository
+      .createQueryBuilder('admin')
+      .where('LOWER(admin.email) = :identifier', { identifier: normalizedIdentifier })
+      .orWhere('LOWER(admin.name) = :identifier', { identifier: normalizedIdentifier })
+      .getOne();
 
     if (!admin) {
       throw new UnauthorizedException('Invalid credentials');
@@ -41,7 +46,7 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto) {
-    const admin = await this.validateUser(loginDto.email, loginDto.password);
+    const admin = await this.validateUser(loginDto.identifier, loginDto.password);
 
     const payload = {
       sub: admin.id,
@@ -67,7 +72,7 @@ export class AuthService {
       refreshToken,
       admin: {
         id: admin.id,
-        email: admin.email,
+        email: admin.email ?? null,
         name: admin.name,
         role: admin.role,
       },

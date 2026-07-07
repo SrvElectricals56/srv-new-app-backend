@@ -8,9 +8,10 @@ export class CreateAdminDto {
   @IsUUID()
   id?: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
   @IsEmail()
-  email: string;
+  email?: string | null;
 
   @ApiProperty()
   @IsString()
