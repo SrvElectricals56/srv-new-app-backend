@@ -127,6 +127,12 @@ export class MobileService {
     }
   }
 
+  private estimateDeliveryDate(from = new Date()) {
+    const estimated = new Date(from);
+    estimated.setDate(estimated.getDate() + 5);
+    return estimated;
+  }
+
   private getUserRepositoryByRole(role: string, manager?: EntityManager) {
     switch (this.normalizeRole(role)) {
       case UserRole.ELECTRICIAN:
@@ -798,6 +804,10 @@ export class MobileService {
         price: Number(product.price ?? 0),
         status: ProductOrderStatus.PENDING,
         shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
+        paymentMethod: 'cod',
+        paymentStatus: 'pending',
+        estimatedDeliveryAt: this.estimateDeliveryDate(),
+        deliveryNotes: 'Order confirmed. Expected delivery in 4 to 5 days.',
       }),
     );
 
@@ -1430,6 +1440,35 @@ export class MobileService {
       skip,
       take: limit,
     });
+    const redemptionIds = transactions
+      .filter((tx) => tx.referenceType === 'redemption' && tx.referenceId)
+      .map((tx) => String(tx.referenceId));
+    const linkedRedemptions = redemptionIds.length
+      ? await this.redemptionRepository
+          .createQueryBuilder('redemption')
+          .where('redemption.id IN (:...ids)', { ids: redemptionIds })
+          .getMany()
+      : [];
+    const redemptionById = new Map(linkedRedemptions.map((redemption) => [redemption.id, redemption]));
+    const enrichedTransactions = transactions.map((tx) => {
+      const linkedRedemption = tx.referenceType === 'redemption' && tx.referenceId
+        ? redemptionById.get(String(tx.referenceId))
+        : undefined;
+      return linkedRedemption
+        ? {
+            ...tx,
+            linkedRedemption: {
+              id: linkedRedemption.id,
+              type: linkedRedemption.type,
+              status: linkedRedemption.status,
+              giftName: (linkedRedemption as any).giftName ?? null,
+              points: linkedRedemption.points,
+              amount: linkedRedemption.amount,
+              requestedAt: linkedRedemption.requestedAt,
+            },
+          }
+        : tx;
+    });
 
     return {
       balance: summary.balance,
@@ -1443,7 +1482,7 @@ export class MobileService {
       totalPoints: summary.totalPoints,
       totalScans: summary.totalScans,
       transactions: {
-        data: transactions,
+        data: enrichedTransactions,
         total,
         page,
         limit,
@@ -1783,11 +1822,15 @@ export class MobileService {
 
       const receiverData = await this.findReceiverByPhone(receiverPhone, manager);
       if (!receiverData) throw new NotFoundException('Receiver not found');
-      if (normalizedRole !== UserRole.ELECTRICIAN) {
-        throw new BadRequestException('Only electricians can transfer points');
-      }
-      if (receiverData.role !== UserRole.ELECTRICIAN) {
-        throw new BadRequestException('Points can only be transferred to another electrician');
+      const canTransfer =
+        (normalizedRole === UserRole.ELECTRICIAN && receiverData.role === UserRole.ELECTRICIAN) ||
+        (normalizedRole === UserRole.COUNTERBOY && receiverData.role === UserRole.COUNTERBOY);
+      if (!canTransfer) {
+        throw new BadRequestException(
+          normalizedRole === UserRole.COUNTERBOY
+            ? 'Counter boys can only transfer points to another counter boy'
+            : 'Points can only be transferred to another electrician',
+        );
       }
       if (receiverData.user.id === userId && receiverData.role === normalizedRole) {
         throw new BadRequestException('You cannot transfer points to yourself');
@@ -2123,7 +2166,8 @@ export class MobileService {
 
   // ── Orders ─────────────────────────────────────────────────────────────────
 
-  async getMyOrders(userId: string) {
+  async getMyOrders(userId: string, role?: string) {
+    const normalizedRole = role ? this.normalizeRole(role) : null;
     const [giftOrders, productOrders] = await Promise.all([
       this.giftOrderRepository.find({
         where: { userId },
@@ -2132,6 +2176,9 @@ export class MobileService {
       this.productOrderRepository
         .createQueryBuilder('order')
         .where('order.userId = :userId', { userId })
+        .andWhere(normalizedRole ? 'order.userRole = :userRole' : '1=1', {
+          userRole: normalizedRole,
+        })
         .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus = :paid)', {
           razorpay: 'razorpay',
           paid: 'paid',
@@ -2183,7 +2230,9 @@ export class MobileService {
     });
     });
 
-    const productMapped = productOrders.map(o => ({
+    const productMapped = productOrders.map(o => {
+      const estimatedDeliveryAt = o.estimatedDeliveryAt ?? this.estimateDeliveryDate(o.paidAt ?? o.orderedAt ?? new Date());
+      return ({
       id: o.id,
       type: 'product' as const,
       status: o.status,
@@ -2200,7 +2249,7 @@ export class MobileService {
       deliveredAt: o.deliveredAt?.toISOString() ?? null,
       orderedAt: o.orderedAt?.toISOString() ?? null,
       paidAt: o.paidAt?.toISOString() ?? null,
-      estimatedDeliveryAt: o.estimatedDeliveryAt?.toISOString() ?? null,
+      estimatedDeliveryAt: estimatedDeliveryAt.toISOString(),
       dispatchedAt: o.dispatchedAt?.toISOString() ?? null,
       rejectedAt: o.rejectedAt?.toISOString() ?? null,
       shippingAddress: o.shippingAddress ?? null,
@@ -2213,7 +2262,8 @@ export class MobileService {
       rejectionReason: o.rejectionReason ?? null,
       deliveryNotes: o.deliveryNotes ?? null,
       createdAt: o.orderedAt.toISOString(),
-    }));
+    });
+    });
 
     return [...giftMapped, ...productMapped].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -2222,31 +2272,62 @@ export class MobileService {
 
   // ── Rating ─────────────────────────────────────────────────────────────────
 
-  async submitRating(userId: string, rating: number, review?: string) {
+  async submitRating(userId: string, role: string | undefined, rating: number, review?: string) {
 
     const numericRating = Number(rating);
     if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
       throw new BadRequestException('Rating must be an integer between 1 and 5');
     }
 
-    const existingUser = await this.getUserByRole(userId, UserRole.DEALER)
+    await this.dataSource.query(`
+      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+      CREATE TABLE IF NOT EXISTS "app_ratings" (
+        "id" text PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+        "userId" text NOT NULL,
+        "userRole" text NOT NULL,
+        "rating" numeric(2,1) NOT NULL,
+        "review" text,
+        "createdAt" timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      ALTER TABLE "app_ratings" DROP CONSTRAINT IF EXISTS "app_ratings_userRole_check";
+      ALTER TABLE "app_ratings"
+        ADD COLUMN IF NOT EXISTS "id" text DEFAULT uuid_generate_v4()::text,
+        ADD COLUMN IF NOT EXISTS "userId" text,
+        ADD COLUMN IF NOT EXISTS "userRole" text,
+        ADD COLUMN IF NOT EXISTS "rating" numeric(2,1),
+        ADD COLUMN IF NOT EXISTS "review" text,
+        ADD COLUMN IF NOT EXISTS "createdAt" timestamp(3) DEFAULT CURRENT_TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS "updatedAt" timestamp(3) DEFAULT CURRENT_TIMESTAMP;
+      UPDATE "app_ratings" SET "id" = uuid_generate_v4()::text WHERE "id" IS NULL;
+      DELETE FROM "app_ratings" a
+      USING (
+        SELECT ctid, ROW_NUMBER() OVER (
+          PARTITION BY "userId"
+          ORDER BY "updatedAt" DESC NULLS LAST, "createdAt" DESC NULLS LAST, "id" DESC
+        ) AS rn
+        FROM "app_ratings"
+        WHERE "userId" IS NOT NULL
+      ) ranked
+      WHERE a.ctid = ranked.ctid AND ranked.rn > 1;
+      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_app_ratings_userId" ON "app_ratings" ("userId");
+    `);
+
+    const normalizedRequestRole = this.normalizeRole(role ?? UserRole.USER);
+    const existingUser = await this.getUserByRole(userId, normalizedRequestRole)
+      ?? await this.getUserByRole(userId, UserRole.DEALER)
       ?? await this.getUserByRole(userId, UserRole.ELECTRICIAN)
       ?? await this.getUserByRole(userId, UserRole.USER)
       ?? await this.getUserByRole(userId, UserRole.COUNTERBOY);
     const userRole = existingUser
-      ? this.normalizeRole(
-        (existingUser as any).dealerCode ? UserRole.DEALER
-          : (existingUser as any).electricianCode ? UserRole.ELECTRICIAN
-            : (existingUser as any).counterboyCode ? UserRole.COUNTERBOY
-              : UserRole.USER,
-      )
+      ? normalizedRequestRole
       : UserRole.USER;
 
     await this.dataSource.query(
       `
         INSERT INTO "app_ratings" ("userId", "userRole", "rating", "review")
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT ON CONSTRAINT "app_ratings_pkey"
+        ON CONFLICT ("userId")
         DO UPDATE SET
           "userRole" = EXCLUDED."userRole",
           "rating" = EXCLUDED."rating",

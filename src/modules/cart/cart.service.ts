@@ -402,6 +402,8 @@ export class CartService {
         shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
         paymentMethod: 'cod',
         paymentStatus: 'pending',
+        estimatedDeliveryAt: this.estimateDeliveryDate(),
+        deliveryNotes: 'Order confirmed. Expected delivery in 4 to 5 days.',
       }),
     );
 
@@ -768,6 +770,8 @@ export class CartService {
           shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
           paymentMethod: 'cod',
           paymentStatus: 'pending',
+          estimatedDeliveryAt: this.estimateDeliveryDate(),
+          deliveryNotes: 'Order confirmed. Expected delivery in 4 to 5 days.',
         }),
       );
     }
@@ -812,6 +816,13 @@ export class CartService {
       .orderBy('order.orderedAt', 'DESC')
       .getMany();
 
-    return { orders, total: orders.length };
+    const mappedOrders = orders.map((order) => ({
+      ...order,
+      estimatedDeliveryAt:
+        order.estimatedDeliveryAt ??
+        this.estimateDeliveryDate(order.paidAt ?? order.orderedAt ?? new Date()),
+    }));
+
+    return { orders: mappedOrders, total: mappedOrders.length };
   }
 }

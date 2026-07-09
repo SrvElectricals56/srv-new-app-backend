@@ -314,7 +314,7 @@ export class MobileController {
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get gift orders for current user' })
   getMyOrders(@Request() req: any) {
-    return this.mobileService.getMyOrders(req.user.id);
+    return this.mobileService.getMyOrders(req.user.id, req.user.role);
   }
 
   @Patch('profile/photo')
@@ -410,7 +410,7 @@ export class MobileController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit app rating' })
   submitRating(@Request() req: any, @Body() body: { rating: number; review?: string }) {
-    return this.mobileService.submitRating(req.user.id, body.rating, body.review);
+    return this.mobileService.submitRating(req.user.id, req.user.role, body.rating, body.review);
   }
 
   @Get('rating')

@@ -25,7 +25,7 @@ import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<
   string,
-  { otp: string; expiresAt: number; failedAttempts: number }
+  { otp: string; expiresAt: number; failedAttempts: number; verifiedAt?: number }
 >();
 const SIGNUP_OTP_VERIFIED = 'VERIFIED';
 
@@ -87,12 +87,51 @@ export class MobileAuthService {
   private async hashPassword(password?: string) {
     const trimmed = password?.trim();
     if (!trimmed) return null;
+    this.assertStrongPassword(trimmed);
     const salt = await bcrypt.genSalt(10);
     return bcrypt.hash(trimmed, salt);
   }
 
+  private assertStrongPassword(password: string) {
+    if (!/^(?=.*[^A-Za-z0-9])\S{8}$/.test(password)) {
+      throw new BadRequestException(
+        'Password must be exactly 8 characters long and include one special character',
+      );
+    }
+  }
+
+  private verifyStoredOtp(phone: string, role: MobileUserRole, otp: string, keyOverride?: string) {
+    const normalizedPhone = this.normalizePhone(phone);
+    const key = keyOverride ?? this.buildLoginOtpKey(normalizedPhone, role);
+    const stored = otpStore.get(key);
+
+    if (!stored) throw new BadRequestException('OTP not found or expired. Please request a new OTP.');
+    if (Date.now() > stored.expiresAt) {
+      otpStore.delete(key);
+      throw new BadRequestException('OTP expired. Please request a new OTP.');
+    }
+    if (stored.otp !== otp) {
+      stored.failedAttempts += 1;
+      if (stored.failedAttempts >= 5) {
+        otpStore.delete(key);
+        throw new UnauthorizedException('Too many invalid OTP attempts. Request a new OTP.');
+      }
+      throw new UnauthorizedException('Invalid OTP.');
+    }
+
+    return { key, stored, normalizedPhone };
+  }
+
   private normalizePhone(phone?: string | null): string {
     return String(phone ?? '').replace(/\D/g, '').slice(-10);
+  }
+
+  private buildLoginOtpKey(phone: string, role: MobileUserRole): string {
+    return `${this.normalizePhone(phone)}:${role}`;
+  }
+
+  private buildPasswordResetOtpKey(phone: string, role: MobileUserRole): string {
+    return `reset:${this.normalizePhone(phone)}:${role}`;
   }
 
   private normalizeElectricianCode(code?: string | null): string | null {
@@ -284,7 +323,8 @@ export class MobileAuthService {
   // ── Login OTP ──────────────────────────────────────────────────────────────
 
   async sendOtp(dto: MobileLoginDto) {
-    const { phone, role } = dto;
+    const { role } = dto;
+    const phone = this.normalizePhone(dto.phone);
     const user = await this.findUserByPhone(phone, role);
 
     if (!user) {
@@ -307,8 +347,46 @@ export class MobileAuthService {
     }
 
     const otp = this.generateOtp();
-    const key = `${phone}:${role}`;
+    const key = this.buildLoginOtpKey(phone, role);
     otpStore.set(key, {
+      otp,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+      failedAttempts: 0,
+    });
+
+    return {
+      success: true,
+      message: 'OTP sent successfully',
+      ...(this.exposeTestOtp() && { devOtp: otp }),
+    };
+  }
+
+  async sendPasswordResetOtp(dto: MobileLoginDto) {
+    const { role } = dto;
+    const phone = this.normalizePhone(dto.phone);
+    const user = await this.findUserByPhone(phone, role);
+
+    if (!user) {
+      const existingRegistration = await this.crossRolePhoneService.findPrimaryRegistrationByPhone(phone);
+      if (existingRegistration) {
+        throw new ConflictException(
+          this.crossRolePhoneService.buildLoginRoleMismatchMessage(existingRegistration.role),
+        );
+      }
+
+      const roleLabel = role === 'electrician' ? 'Electrician not registered. Please contact your dealer.'
+        : role === 'dealer' ? 'Dealer not registered. Please contact SRV admin.'
+        : role === 'user' ? 'User not registered. Please sign up first.'
+        : 'Counter boy not registered. Please contact your dealer.';
+      throw new NotFoundException(roleLabel);
+    }
+
+    if (user.status === 'suspended') {
+      throw new UnauthorizedException('Account is suspended. Contact support.');
+    }
+
+    const otp = this.generateOtp();
+    otpStore.set(this.buildPasswordResetOtpKey(phone, role), {
       otp,
       expiresAt: Date.now() + 5 * 60 * 1000,
       failedAttempts: 0,
@@ -323,27 +401,10 @@ export class MobileAuthService {
 
   async verifyOtp(dto: VerifyOtpDto) {
     const { phone, role, otp } = dto;
-    const key = `${phone}:${role}`;
-    const stored = otpStore.get(key);
-
-    if (!stored) throw new BadRequestException('OTP not found or expired. Please request a new OTP.');
-    if (Date.now() > stored.expiresAt) {
-      otpStore.delete(key);
-      throw new BadRequestException('OTP expired. Please request a new OTP.');
-    }
-    if (stored.otp !== otp) {
-      stored.failedAttempts += 1;
-      if (stored.failedAttempts >= 5) {
-        otpStore.delete(key);
-        throw new UnauthorizedException(
-          'Too many invalid OTP attempts. Request a new OTP.',
-        );
-      }
-      throw new UnauthorizedException('Invalid OTP.');
-    }
+    const { key, normalizedPhone } = this.verifyStoredOtp(phone, role, otp);
     otpStore.delete(key);
 
-    const user = await this.findUserByPhone(phone, role);
+    const user = await this.findUserByPhone(normalizedPhone, role);
     if (!user) throw new NotFoundException('User not found');
 
     await this.touchActivity(user.id, role);
@@ -641,6 +702,37 @@ export class MobileAuthService {
     return { ...tokens, user: this.formatUserProfile(user, role) };
   }
 
+  async resetPasswordWithOtp(phone: string, role: MobileUserRole, otp: string, newPassword: string) {
+    const trimmedPassword = newPassword?.trim();
+    if (!trimmedPassword) {
+      throw new BadRequestException('New password is required');
+    }
+    this.assertStrongPassword(trimmedPassword);
+
+    const resetKey = this.buildPasswordResetOtpKey(phone, role);
+    const { key, stored, normalizedPhone } = this.verifyStoredOtp(phone, role, otp, resetKey);
+    if (!stored.verifiedAt) {
+      throw new BadRequestException('Please verify OTP before updating password.');
+    }
+
+    const user = await this.findUserByPhone(normalizedPhone, role);
+    if (!user) throw new NotFoundException('User not found.');
+
+    const passwordHash = await this.hashPassword(trimmedPassword);
+    await this.getRepositoryByRole(role).update(user.id, { passwordHash } as any);
+    await (this.getRepositoryByRole(role) as any).increment({ id: user.id }, 'tokenVersion', 1);
+    otpStore.delete(key);
+
+    return { success: true, message: 'Password reset successfully' };
+  }
+
+  async verifyPasswordResetOtp(phone: string, role: MobileUserRole, otp: string) {
+    const resetKey = this.buildPasswordResetOtpKey(phone, role);
+    const { stored } = this.verifyStoredOtp(phone, role, otp, resetKey);
+    stored.verifiedAt = Date.now();
+    return { success: true, message: 'OTP verified successfully' };
+  }
+
   // ── Token Refresh ──────────────────────────────────────────────────────────
 
   async refreshToken(token: string) {
@@ -790,9 +882,7 @@ export class MobileAuthService {
       throw new BadRequestException('New password is required');
     }
 
-    if (newPassword.length < 4) {
-      throw new BadRequestException('New password must be at least 4 characters long');
-    }
+    this.assertStrongPassword(newPassword);
 
     const user = await this.getUserEntityByRole(userId, role);
     if (!user) {
@@ -877,6 +967,7 @@ export class MobileAuthService {
           dealerPhone: user.dealer?.phone ?? user.fallbackDealerPhone ?? null,
           dealerTown: user.dealer?.town ?? null,
           dealerCode: user.dealer?.dealerCode ?? null,
+          aadharNumber: user.aadharNumber ?? null,
           aadharFrontImage: user.aadharFrontImage ?? null,
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
@@ -915,6 +1006,7 @@ export class MobileAuthService {
           bankName: user.bankName,
           accountHolderName: user.accountHolderName,
           profileImage: user.profileImage ?? null,
+          aadharNumber: user.aadharNumber ?? null,
           aadharFrontImage: user.aadharFrontImage ?? null,
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
@@ -950,6 +1042,7 @@ export class MobileAuthService {
           bankName: user.bankName,
           accountHolderName: user.accountHolderName,
           profileImage: user.profileImage ?? null,
+          aadharNumber: user.aadharNumber ?? null,
           aadharFrontImage: user.aadharFrontImage ?? null,
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
@@ -991,6 +1084,7 @@ export class MobileAuthService {
           dealerPhone: user.dealer?.phone ?? null,
           dealerCode: user.dealer?.dealerCode ?? null,
           profileImage: user.profileImage ?? null,
+          aadharNumber: user.aadharNumber ?? null,
           aadharFrontImage: user.aadharFrontImage ?? null,
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,

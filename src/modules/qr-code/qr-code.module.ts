@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { QrCodeController } from './qr-code.controller';
 import { QrCodeService } from './qr-code.service';
 import { QrCode } from '../../database/entities/qr-code.entity';
+import { QrDownloadHistory } from '../../database/entities/qr-download-history.entity';
 import { Product } from '../../database/entities/product.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
@@ -11,7 +12,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([QrCode, Product, Electrician, Dealer, AppUser, CounterBoy, Admin])],
+  imports: [TypeOrmModule.forFeature([QrCode, QrDownloadHistory, Product, Electrician, Dealer, AppUser, CounterBoy, Admin])],
   controllers: [QrCodeController],
   providers: [QrCodeService],
   exports: [QrCodeService],

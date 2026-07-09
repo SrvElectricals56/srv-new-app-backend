@@ -26,11 +26,11 @@ export class QrCodeController {
   constructor(private readonly qrCodeService: QrCodeService) {}
 
   @Post('generate')
-  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
   @ApiOperation({ summary: 'Generate QR codes for a product (up to 20,000)' })
   @ApiResponse({ status: 201, description: 'QR codes generated and saved to database' })
-  generate(@Body() generateQrCodeDto: GenerateQrCodeDto, @CurrentUser('id') adminId: string) {
-    return this.qrCodeService.generate(generateQrCodeDto, adminId);
+  generate(@Body() generateQrCodeDto: GenerateQrCodeDto, @CurrentUser() admin: any) {
+    return this.qrCodeService.generate(generateQrCodeDto, admin);
   }
 
   @Get('stats')
@@ -52,6 +52,45 @@ export class QrCodeController {
       parseInt(page),
       parseInt(limit),
       search,
+    );
+  }
+
+  @Post('download-history')
+  @ApiOperation({ summary: 'Record QR download history for the logged-in admin/staff user' })
+  @ApiResponse({ status: 201, description: 'QR download history recorded' })
+  recordDownloadHistory(
+    @CurrentUser() admin: any,
+    @Body() body: {
+      productId?: string;
+      productName?: string;
+      batchId?: string;
+      batchNo?: number | string | null;
+      quantity?: number;
+      downloadType?: string;
+    },
+  ) {
+    return this.qrCodeService.recordDownloadHistory(admin, body);
+  }
+
+  @Get('download-history')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Get QR download history for super admin' })
+  @ApiResponse({ status: 200, description: 'QR download history list' })
+  getDownloadHistory(
+    @CurrentUser() admin: any,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    return this.qrCodeService.getDownloadHistory(
+      admin,
+      parseInt(page),
+      parseInt(limit),
+      search,
+      fromDate,
+      toDate,
     );
   }
 

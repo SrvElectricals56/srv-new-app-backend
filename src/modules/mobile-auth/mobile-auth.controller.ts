@@ -21,6 +21,7 @@ import {
   RegisterDealerDto,
   RegisterElectricianDto,
   RegisterUserDto,
+  ResetPasswordDto,
   SendSignupOtpDto,
   VerifySignupOtpDto,
 } from './dto/mobile-login.dto';
@@ -55,6 +56,30 @@ export class MobileAuthController {
   @ApiOperation({ summary: 'Login with phone + password (all 4 roles)' })
   passwordLogin(@Body() body: PasswordLoginDto) {
     return this.mobileAuthService.passwordLogin(body.phone, body.role, body.password);
+  }
+
+  @Post('password-reset/send-otp')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send OTP for mobile password reset (all roles)' })
+  sendPasswordResetOtp(@Body() dto: MobileLoginDto) {
+    return this.mobileAuthService.sendPasswordResetOtp(dto);
+  }
+
+  @Post('password-reset/verify-otp')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify mobile password reset OTP before allowing password update (all roles)' })
+  verifyPasswordResetOtp(@Body() dto: VerifyOtpDto) {
+    return this.mobileAuthService.verifyPasswordResetOtp(dto.phone, dto.role, dto.otp);
+  }
+
+  @Post('password-reset/confirm')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset mobile password with OTP (all roles)' })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.mobileAuthService.resetPasswordWithOtp(dto.phone, dto.role, dto.otp, dto.newPassword);
   }
 
   @Post('refresh')
