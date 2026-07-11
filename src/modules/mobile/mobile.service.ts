@@ -237,7 +237,7 @@ export class MobileService {
           s."scannedAt"
         FROM "qr_codes" q
         LEFT JOIN "scans" s
-          ON s."qrCodeId" = q."id"
+          ON s."qrCodeId" = q."id"::text
         LEFT JOIN "electricians" e
           ON s."role"::text = 'electrician' AND e."id"::text = s."userId"
         LEFT JOIN "dealers" d
