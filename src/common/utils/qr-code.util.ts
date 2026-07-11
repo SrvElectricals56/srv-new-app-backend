@@ -1,6 +1,6 @@
 const MAX_QR_INPUT_LENGTH = 2048;
 const MAX_QR_CODE_LENGTH = 255;
-const QR_QUERY_KEYS = ['qrCode', 'qr_code', 'code', 'id'] as const;
+const QR_QUERY_KEYS = ['qrCode', 'qr_code', 'qrcode', 'qr', 'qrId', 'qr_id', 'code', 'id'] as const;
 
 function cleanCandidate(value: unknown): string | null {
   if (typeof value !== 'string') return null;

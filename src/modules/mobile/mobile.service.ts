@@ -330,6 +330,41 @@ export class MobileService {
     });
   }
 
+  private getNumericQrCandidates(qrCandidates: string[]) {
+    return qrCandidates
+      .map((candidate) => candidate.trim())
+      .filter((candidate) => /^\d+$/.test(candidate));
+  }
+
+  private async findQrForScan(
+    manager: EntityManager,
+    qrCandidates: string[],
+    lock = false,
+  ) {
+    const normalizedCandidates = qrCandidates.map((candidate) => candidate.toLowerCase());
+    const numericCandidates = this.getNumericQrCandidates(qrCandidates);
+    const query = manager
+      .getRepository(QrCode)
+      .createQueryBuilder('qr')
+      .innerJoinAndSelect('qr.product', 'product')
+      .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates })
+      .orWhere('LOWER(qr.code) IN (:...normalizedQrCodes)', {
+        normalizedQrCodes: normalizedCandidates,
+      });
+
+    if (numericCandidates.length) {
+      query.orWhere('qr."legacyId"::text IN (:...legacyIds)', {
+        legacyIds: numericCandidates,
+      });
+    }
+
+    if (lock) {
+      query.setLock('pessimistic_write');
+    }
+
+    return query.getOne();
+  }
+
   private normalizePhone(phone: string): string {
     return String(phone ?? '').replace(/\D/g, '').slice(-10);
   }
@@ -1233,22 +1268,12 @@ export class MobileService {
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const createLookup = () => manager
-        .getRepository(QrCode)
-        .createQueryBuilder('qr')
-        .innerJoinAndSelect('qr.product', 'product')
-        .setLock('pessimistic_write');
+      const qr = await this.findQrForScan(manager, qrCandidates, true);
 
-      let qr = await createLookup()
-        .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates })
-        .getOne();
-
-      if (!qr) {
-        qr = await createLookup()
-          .where('LOWER(qr.code) IN (:...qrCodes)', {
-            qrCodes: qrCandidates.map((candidate) => candidate.toLowerCase()),
-          })
-          .getOne();
+      if (!qr || !qr.product) {
+        throw new NotFoundException(
+          'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
+        );
       }
 
       const existingScan = await manager.getRepository(Scan).findOne({
@@ -1256,6 +1281,12 @@ export class MobileService {
       });
       if (qr.isScanned || existingScan) {
         await this.throwQrAlreadyRedeemed(qr, existingScan, manager);
+      }
+
+      if (!qr.isActive || !qr.product.isActive) {
+        throw new NotFoundException(
+          'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
+        );
       }
 
       const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
@@ -1365,15 +1396,11 @@ export class MobileService {
     if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
     }
-    const trimmedQrCode = qrCandidates[0];
 
     return this.dataSource.transaction(async (manager) => {
-      const qr = await manager.getRepository(QrCode).findOne({
-        where: { code: trimmedQrCode, isActive: true },
-        relations: ['product'],
-      });
+      const qr = await this.findQrForScan(manager, qrCandidates);
 
-      if (!qr || !qr.product || !qr.product.isActive) {
+      if (!qr || !qr.product) {
         throw new NotFoundException(
           'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
         );
@@ -1385,6 +1412,12 @@ export class MobileService {
       });
       if (qr.isScanned || existingScan) {
         await this.throwQrAlreadyRedeemed(qr, existingScan, manager);
+      }
+
+      if (!qr.isActive || !qr.product.isActive) {
+        throw new NotFoundException(
+          'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
+        );
       }
 
       const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);

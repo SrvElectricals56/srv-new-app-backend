@@ -26,6 +26,12 @@ describe('extractQrCodeCandidates', () => {
     ).toEqual(['jMA8391758613990308']);
   });
 
+  it('extracts a code from legacy QR id query keys', () => {
+    expect(
+      extractQrCodeCandidates('https://srvelectricals.com/verify?qr_id=123456'),
+    ).toEqual(['123456']);
+  });
+
   it('extracts a code from a URL path and removes a png suffix', () => {
     expect(
       extractQrCodeCandidates(
