@@ -304,7 +304,7 @@ export class CartService {
   async createOrder(
     userId: string,
     role: string,
-    body: { productId: string; quantity?: number; shippingAddress?: string },
+    body: { productId: string; quantity?: number; shippingAddress?: string; cartTotal?: number },
   ) {
     const quantity = Math.max(1, Number(body.quantity ?? 1));
     if (!body.productId) throw new BadRequestException('productId is required');
@@ -319,7 +319,12 @@ export class CartService {
     if (!user) throw new NotFoundException('User not found');
     if (!product || product.category === 'gift') throw new NotFoundException('Product not found');
     this.ensureAvailableStock(product, quantity);
-    await this.enforceMinimumOrderAmount(normalizedRole, Number(product.price ?? 0) * quantity);
+    const lineTotal = Number(product.price ?? 0) * quantity;
+    const checkoutTotal = Number(body.cartTotal ?? lineTotal);
+    await this.enforceMinimumOrderAmount(
+      normalizedRole,
+      Number.isFinite(checkoutTotal) && checkoutTotal >= lineTotal ? checkoutTotal : lineTotal,
+    );
 
     const order = await this.orderRepo.save(
       this.orderRepo.create({
@@ -337,6 +342,8 @@ export class CartService {
         shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
         paymentMethod: 'cod',
         paymentStatus: 'pending',
+        estimatedDeliveryAt: this.estimateDeliveryDate(),
+        deliveryNotes: 'Order confirmed. Expected delivery in 4 to 5 days.',
       }),
     );
 
@@ -445,7 +452,7 @@ export class CartService {
   async createRazorpayOrder(
     userId: string,
     role: string,
-    body: { productId: string; quantity?: number; shippingAddress?: string },
+    body: { productId: string; quantity?: number; shippingAddress?: string; cartTotal?: number },
   ) {
     const quantity = Math.max(1, Number(body.quantity ?? 1));
     if (!body.productId) throw new BadRequestException('productId is required');
@@ -462,7 +469,12 @@ export class CartService {
     this.ensureAvailableStock(product, quantity);
 
     const unitPrice = Number(product.price ?? 0);
-    await this.enforceMinimumOrderAmount(normalizedRole, unitPrice * quantity);
+    const lineTotal = unitPrice * quantity;
+    const checkoutTotal = Number(body.cartTotal ?? lineTotal);
+    await this.enforceMinimumOrderAmount(
+      normalizedRole,
+      Number.isFinite(checkoutTotal) && checkoutTotal >= lineTotal ? checkoutTotal : lineTotal,
+    );
     const amount = Math.round(unitPrice * quantity * 100);
     if (!Number.isFinite(amount) || amount < 100) {
       throw new BadRequestException('Online payment amount must be at least INR 1');
@@ -703,6 +715,8 @@ export class CartService {
           shippingAddress: body.shippingAddress ?? (user as any).address ?? '',
           paymentMethod: 'cod',
           paymentStatus: 'pending',
+          estimatedDeliveryAt: this.estimateDeliveryDate(),
+          deliveryNotes: 'Order confirmed. Expected delivery in 4 to 5 days.',
         }),
       );
     }
@@ -747,6 +761,13 @@ export class CartService {
       .orderBy('order.orderedAt', 'DESC')
       .getMany();
 
-    return { orders, total: orders.length };
+    const mappedOrders = orders.map((order) => ({
+      ...order,
+      estimatedDeliveryAt:
+        order.estimatedDeliveryAt ??
+        this.estimateDeliveryDate(order.paidAt ?? order.orderedAt ?? new Date()),
+    }));
+
+    return { orders: mappedOrders, total: mappedOrders.length };
   }
 }

@@ -21,6 +21,7 @@ import { ProductVariant } from './database/entities/product-variant.entity';
 import { ProductCartItem } from './database/entities/product-cart-item.entity';
 import { ProductOrder } from './database/entities/product-order.entity';
 import { QrCode } from './database/entities/qr-code.entity';
+import { QrDownloadHistory } from './database/entities/qr-download-history.entity';
 import { Redemption } from './database/entities/redemption.entity';
 import { Scan } from './database/entities/scan.entity';
 import { Settings } from './database/entities/settings.entity';
@@ -113,7 +114,7 @@ function getDatabaseHost(configService: ConfigService) {
         database: configService.get<string>('DB_DATABASE', 'srv_admin'),
         entities: [
           Admin, Banner, Dealer, Electrician, AppUser, CounterBoy,
-          Notification, Offer, PointsConfig, Product, ProductVariant, ProductCartItem, ProductOrder, QrCode, Redemption,
+          Notification, Offer, PointsConfig, Product, ProductVariant, ProductCartItem, ProductOrder, QrCode, QrDownloadHistory, Redemption,
           Scan, Settings, SupportTicket, Testimonial, Wallet, GiftOrder, ProductCategory, Play, AppIcon, AppActivityEvent,
           AdminPermission,
         ],

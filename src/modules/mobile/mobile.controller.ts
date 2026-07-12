@@ -314,7 +314,7 @@ export class MobileController {
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get gift orders for current user' })
   getMyOrders(@Request() req: any) {
-    return this.mobileService.getMyOrders(req.user.id);
+    return this.mobileService.getMyOrders(req.user.id, req.user.role);
   }
 
   @Patch('profile/photo')
@@ -381,6 +381,19 @@ export class MobileController {
     return this.mobileService.replyToTicket(req.user.id, id, body.message);
   }
 
+  @Delete('support/tickets/:id/replies/:replyId')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete my own support ticket reply' })
+  deleteTicketReply(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('replyId') replyId: string,
+  ) {
+    return this.mobileService.deleteTicketReply(req.user.id, id, replyId);
+  }
+
   @Patch('support/tickets/:id/close')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')
@@ -410,7 +423,7 @@ export class MobileController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit app rating' })
   submitRating(@Request() req: any, @Body() body: { rating: number; review?: string }) {
-    return this.mobileService.submitRating(req.user.id, body.rating, body.review);
+    return this.mobileService.submitRating(req.user.id, req.user.role, body.rating, body.review);
   }
 
   @Get('rating')

@@ -276,7 +276,7 @@ export class GiftService {
           userId: order.userId,
           points: order.pointsUsed,
           type: 'gift',
-          status: RedemptionStatus.PENDING,
+          giftProductId: order.giftProductId,
         },
         order: { requestedAt: 'DESC' },
       });
@@ -290,6 +290,38 @@ export class GiftService {
     }
 
     await this.giftOrderRepository.update(id, updateData);
+
+    if (status !== GiftOrderStatus.REJECTED) {
+      const linkedRedemption = await this.redemptionRepository.findOne({
+        where: {
+          userId: order.userId,
+          points: order.pointsUsed,
+          type: 'gift',
+          giftProductId: order.giftProductId,
+        },
+        order: { requestedAt: 'DESC' },
+      });
+
+      if (linkedRedemption) {
+        const nextRedemptionStatus =
+          status === GiftOrderStatus.DELIVERED
+            ? RedemptionStatus.COMPLETED
+            : status === GiftOrderStatus.SHIPPED
+              ? RedemptionStatus.PROCESSING
+              : status === GiftOrderStatus.APPROVED
+                ? RedemptionStatus.APPROVED
+                : RedemptionStatus.PENDING;
+
+        await this.redemptionRepository.update(linkedRedemption.id, {
+          status: nextRedemptionStatus,
+          processedBy: extra?.processedBy ?? linkedRedemption.processedBy,
+          processedAt:
+            status === GiftOrderStatus.PENDING
+              ? null
+              : linkedRedemption.processedAt ?? updateData.processedAt ?? new Date(),
+        });
+      }
+    }
 
     const updated = await this.giftOrderRepository.findOne({ where: { id } });
     return {

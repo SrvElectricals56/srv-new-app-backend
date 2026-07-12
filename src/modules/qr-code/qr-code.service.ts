@@ -2,24 +2,29 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { GenerateQrCodeDto } from './dto/generate-qr-code.dto';
 import { QrCode } from '../../database/entities/qr-code.entity';
+import { QrDownloadHistory } from '../../database/entities/qr-download-history.entity';
 import { Product } from '../../database/entities/product.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
+import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 
 @Injectable()
 export class QrCodeService {
   constructor(
     @InjectRepository(QrCode)
     private qrCodeRepository: Repository<QrCode>,
+    @InjectRepository(QrDownloadHistory)
+    private qrDownloadHistoryRepository: Repository<QrDownloadHistory>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
     @InjectRepository(Electrician)
@@ -34,8 +39,227 @@ export class QrCodeService {
     private adminRepository: Repository<Admin>,
   ) {}
 
-  async generate(generateQrCodeDto: GenerateQrCodeDto, adminId?: string) {
+  private async ensureDownloadHistoryTable() {
+    await this.qrDownloadHistoryRepository.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+    await this.qrDownloadHistoryRepository.query(`
+      CREATE TABLE IF NOT EXISTS "qr_download_history" (
+        "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+        "adminId" text,
+        "adminEmail" text,
+        "adminName" text,
+        "adminRole" text NOT NULL DEFAULT 'staff',
+        "productId" text,
+        "productName" text NOT NULL,
+        "batchId" text,
+        "batchNo" integer,
+        "quantity" integer NOT NULL DEFAULT 1,
+        "downloadType" text NOT NULL DEFAULT 'qr',
+        "downloadedAt" timestamptz NOT NULL DEFAULT now(),
+        "createdAt" timestamptz NOT NULL DEFAULT now(),
+        "updatedAt" timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await this.qrDownloadHistoryRepository.query(`
+      ALTER TABLE "qr_download_history"
+        ADD COLUMN IF NOT EXISTS "adminId" text,
+        ADD COLUMN IF NOT EXISTS "adminEmail" text,
+        ADD COLUMN IF NOT EXISTS "adminName" text,
+        ADD COLUMN IF NOT EXISTS "adminRole" text,
+        ADD COLUMN IF NOT EXISTS "productId" text,
+        ADD COLUMN IF NOT EXISTS "productName" text,
+        ADD COLUMN IF NOT EXISTS "batchId" text,
+        ADD COLUMN IF NOT EXISTS "batchNo" integer,
+        ADD COLUMN IF NOT EXISTS "quantity" integer,
+        ADD COLUMN IF NOT EXISTS "downloadType" text,
+        ADD COLUMN IF NOT EXISTS "downloadedAt" timestamptz,
+        ADD COLUMN IF NOT EXISTS "createdAt" timestamptz,
+        ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz
+    `);
+    await this.qrDownloadHistoryRepository.query(`
+      UPDATE "qr_download_history"
+      SET
+        "adminRole" = COALESCE(NULLIF("adminRole", ''), 'staff'),
+        "productName" = COALESCE(NULLIF("productName", ''), 'Unknown Product'),
+        "quantity" = GREATEST(COALESCE("quantity", 1), 1),
+        "downloadType" = COALESCE(NULLIF("downloadType", ''), 'qr'),
+        "downloadedAt" = COALESCE("downloadedAt", now()),
+        "createdAt" = COALESCE("createdAt", now()),
+        "updatedAt" = COALESCE("updatedAt", now())
+    `);
+    await this.qrDownloadHistoryRepository.query(`
+      ALTER TABLE "qr_download_history"
+        ALTER COLUMN "adminRole" SET DEFAULT 'staff',
+        ALTER COLUMN "adminRole" SET NOT NULL,
+        ALTER COLUMN "productName" SET NOT NULL,
+        ALTER COLUMN "quantity" SET DEFAULT 1,
+        ALTER COLUMN "quantity" SET NOT NULL,
+        ALTER COLUMN "downloadType" SET DEFAULT 'qr',
+        ALTER COLUMN "downloadType" SET NOT NULL,
+        ALTER COLUMN "downloadedAt" SET DEFAULT now(),
+        ALTER COLUMN "downloadedAt" SET NOT NULL,
+        ALTER COLUMN "createdAt" SET DEFAULT now(),
+        ALTER COLUMN "createdAt" SET NOT NULL,
+        ALTER COLUMN "updatedAt" SET DEFAULT now(),
+        ALTER COLUMN "updatedAt" SET NOT NULL
+    `);
+    await this.qrDownloadHistoryRepository.query(`
+      CREATE INDEX IF NOT EXISTS "IDX_qr_download_history_downloadedAt"
+      ON "qr_download_history" ("downloadedAt" DESC)
+    `);
+    await this.qrDownloadHistoryRepository.query(`
+      CREATE INDEX IF NOT EXISTS "IDX_qr_download_history_admin"
+      ON "qr_download_history" ("adminEmail", "adminName")
+    `);
+  }
+
+  async recordDownloadHistory(
+    admin: { id: string; email?: string; name?: string; role?: string },
+    body: {
+      productId?: string;
+      productName?: string;
+      batchId?: string;
+      batchNo?: number | string | null;
+      quantity?: number;
+      downloadType?: string;
+    },
+  ) {
+    await this.ensureDownloadHistoryTable();
+
+    const quantity = Math.max(1, Math.floor(Number(body.quantity ?? 1)));
+    if (!Number.isFinite(quantity)) {
+      throw new BadRequestException('quantity must be a valid number');
+    }
+
+    const productName = String(body.productName ?? '').trim();
+    if (!productName) {
+      throw new BadRequestException('productName is required');
+    }
+
+    const batchNo = body.batchNo === null || body.batchNo === undefined || body.batchNo === ''
+      ? null
+      : Number(body.batchNo);
+
+    const rows = await this.qrDownloadHistoryRepository.query(
+      `
+        INSERT INTO "qr_download_history"
+          ("adminId", "adminEmail", "adminName", "adminRole", "productId", "productName",
+           "batchId", "batchNo", "quantity", "downloadType", "downloadedAt", "createdAt", "updatedAt")
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now(),now())
+        RETURNING *
+      `,
+      [
+        admin.id ?? null,
+        admin.email ?? null,
+        admin.name ?? null,
+        admin.role ?? 'staff',
+        body.productId ?? null,
+        productName,
+        body.batchId ?? null,
+        Number.isFinite(batchNo) ? batchNo : null,
+        quantity,
+        String(body.downloadType ?? 'qr').trim() || 'qr',
+      ],
+    );
+
+    return {
+      message: 'QR download history recorded',
+      data: rows?.[0] ?? null,
+    };
+  }
+
+  async getDownloadHistory(
+    admin: { id?: string; role?: string },
+    page = 1,
+    limit = 20,
+    search?: string,
+    fromDate?: string,
+    toDate?: string,
+  ) {
+    await this.ensureDownloadHistoryTable();
+
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+    const offset = (safePage - 1) * safeLimit;
+    const params: any[] = [];
+    const where: string[] = [];
+
+    if (admin.role !== 'super_admin') {
+      if (!admin.id) {
+        throw new ForbiddenException('Admin session is required to view QR history');
+      }
+      params.push(admin.id);
+      where.push(`h."adminId" = $${params.length}`);
+    }
+
+    const trimmedSearch = search?.trim();
+    if (trimmedSearch) {
+      params.push(`%${trimmedSearch}%`);
+      where.push(`(
+        h."adminEmail" ILIKE $${params.length}
+        OR h."adminName" ILIKE $${params.length}
+        OR h."productName" ILIKE $${params.length}
+        OR h."batchId" ILIKE $${params.length}
+        OR CAST(h."batchNo" AS text) ILIKE $${params.length}
+      )`);
+    }
+
+    if (fromDate) {
+      params.push(fromDate);
+      where.push(`h."downloadedAt" >= $${params.length}::date`);
+    }
+
+    if (toDate) {
+      params.push(toDate);
+      where.push(`h."downloadedAt" < ($${params.length}::date + interval '1 day')`);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const limitParam = params.length + 1;
+    const offsetParam = params.length + 2;
+
+    const data = await this.qrDownloadHistoryRepository.query(
+      `
+        SELECT
+          h."id",
+          h."adminId",
+          h."adminEmail",
+          h."adminName",
+          h."adminRole",
+          h."productId",
+          h."productName",
+          h."batchId",
+          h."batchNo",
+          h."quantity",
+          h."downloadType",
+          h."downloadedAt",
+          h."createdAt",
+          h."updatedAt"
+        FROM "qr_download_history" h
+        ${whereSql}
+        ORDER BY h."downloadedAt" DESC
+        LIMIT $${limitParam} OFFSET $${offsetParam}
+      `,
+      [...params, safeLimit, offset],
+    );
+
+    const countRows = await this.qrDownloadHistoryRepository.query(
+      `SELECT COUNT(*)::int AS total FROM "qr_download_history" h ${whereSql}`,
+      params,
+    );
+    const total = Number(countRows?.[0]?.total ?? 0);
+
+    return {
+      data,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
+    };
+  }
+
+  async generate(generateQrCodeDto: GenerateQrCodeDto, admin?: { id?: string; email?: string; name?: string; role?: string }) {
     const { productId, quantity, rewardPoints } = generateQrCodeDto;
+    const adminId = admin?.id;
 
     const product = await this.productRepository.findOne({
       where: { id: productId },
@@ -148,6 +372,20 @@ export class QrCodeService {
       `,
       [batchId, batchNo, productId, product.name, frozenRewardPoints, savedCodes.length, adminId ?? null],
     );
+
+    if (admin?.id) {
+      await this.recordDownloadHistory(
+        admin as { id: string; email?: string; name?: string; role?: string },
+        {
+        productId,
+        productName: product.name,
+        batchId,
+        batchNo,
+        quantity: savedCodes.length,
+        downloadType: 'generated',
+        },
+      );
+    }
 
     return {
       message: `${quantity} QR codes generated successfully`,
@@ -407,6 +645,27 @@ export class QrCodeService {
           }
         : null,
     };
+  }
+
+  async scanLookup(rawQrCode: string) {
+    const candidates = extractQrCodeCandidates(rawQrCode);
+    if (!candidates.length) {
+      throw new BadRequestException('Please provide a valid QR code value');
+    }
+
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        return await this.findFirstScan(candidate);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError instanceof NotFoundException) {
+      throw new NotFoundException('QR code not found in SRV records');
+    }
+    throw lastError ?? new NotFoundException('QR code not found in SRV records');
   }
 
   async findOne(id: string) {

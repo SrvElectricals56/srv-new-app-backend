@@ -591,8 +591,51 @@ export class DealerService {
     };
   }
 
+  private normalizeImportKey(key: string) {
+    return key
+      .toUpperCase()
+      .trim()
+      .replace(/\s*\/\s*/g, '/')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ');
+  }
+
+  private cleanImportString(value: unknown): string | undefined {
+    if (value === null || value === undefined) return undefined;
+    const text = String(value).trim();
+    return text === '' ? undefined : text;
+  }
+
+  private cleanImportNumber(value: unknown): number | undefined {
+    const text = this.cleanImportString(value);
+    if (!text) return undefined;
+    const parsed = Number(text.replace(/,/g, '').replace(/[^\d.-]/g, ''));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private cleanImportBoolean(value: unknown): boolean | undefined {
+    const text = this.cleanImportString(value)?.toLowerCase();
+    if (!text) return undefined;
+    if (['yes', 'y', 'true', '1', 'linked', 'active'].includes(text)) return true;
+    if (['no', 'n', 'false', '0', 'not linked', 'inactive'].includes(text)) return false;
+    return undefined;
+  }
+
+  private cleanImportStatus(value: unknown): UserStatus | undefined {
+    const text = this.cleanImportString(value)?.toLowerCase();
+    if (!text) return undefined;
+    return Object.values(UserStatus).includes(text as UserStatus) ? text as UserStatus : undefined;
+  }
+
+  private cleanImportTier(value: unknown): MemberTier | undefined {
+    const text = this.cleanImportString(value);
+    if (!text) return undefined;
+    return Object.values(MemberTier).find((tier) => tier.toLowerCase() === text.toLowerCase());
+  }
+
   private mapImportColumns(record: any) {
     const map: Record<string, string> = {
+      NAME: 'name',
       'STATE': 'state',
       'DISTRICT': 'district',
       'DEALER NAME': 'contactPerson',
@@ -610,16 +653,36 @@ export class DealerService {
       'LIST CODE': 'listCode',
       'RTO CODE': 'rtoCode',
       'DEALER CODE': 'dealerCode',
+      'DEALERCODE': 'dealerCode',
+      EMAIL: 'email',
+      PINCODE: 'pincode',
+      TIER: 'tier',
+      STATUS: 'status',
+      'BANK LINKED': 'bankLinked',
+      UPI: 'upiId',
+      'UPI ID': 'upiId',
+      'TOTAL ORDERS': 'totalOrders',
+      ORDERS: 'totalOrders',
+      'MONTHLY TARGET': 'monthlyTarget',
+      'ACHIEVED TARGET': 'achievedTarget',
+      WALLET: 'walletBalance',
+      'WALLET BALANCE': 'walletBalance',
+      BONUS: 'bonusPoints',
+      'BONUS POINTS': 'bonusPoints',
     };
 
-    const normalize = (k: string) =>
-      k.toUpperCase().trim().replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ');
+    const allowedDirectFields = new Set([
+      'name', 'phone', 'email', 'dealerCode', 'town', 'district', 'state', 'address',
+      'pincode', 'gstNumber', 'contactPerson', 'salesManName', 'townCode', 'rtoCode',
+      'listCode', 'electricianList', 'tier', 'status', 'bankLinked', 'upiId',
+      'totalOrders', 'monthlyTarget', 'achievedTarget', 'walletBalance', 'bonusPoints',
+    ]);
 
     const mapped: any = {};
 
     for (const [key, value] of Object.entries(record)) {
-      const normalized = normalize(key);
-      const dbField = map[normalized] || null;
+      const normalized = this.normalizeImportKey(key);
+      const dbField = map[normalized] || (allowedDirectFields.has(key) ? key : null);
 
       if (dbField) {
         mapped[dbField] = value;
@@ -631,7 +694,34 @@ export class DealerService {
       mapped.name = mapped.contactPerson;
     }
 
-    return mapped;
+    const cleaned: any = {};
+    [
+      'name', 'phone', 'email', 'dealerCode', 'town', 'district', 'state', 'address',
+      'pincode', 'gstNumber', 'contactPerson', 'salesManName', 'townCode', 'rtoCode',
+      'listCode', 'electricianList', 'upiId',
+    ].forEach((field) => {
+      const value = this.cleanImportString(mapped[field]);
+      if (value !== undefined) cleaned[field] = value;
+    });
+
+    const status = this.cleanImportStatus(mapped.status);
+    if (status) cleaned.status = status;
+    const tier = this.cleanImportTier(mapped.tier);
+    if (tier) cleaned.tier = tier;
+    const bankLinked = this.cleanImportBoolean(mapped.bankLinked);
+    if (bankLinked !== undefined) cleaned.bankLinked = bankLinked;
+
+    ['totalOrders', 'monthlyTarget', 'achievedTarget', 'walletBalance', 'bonusPoints'].forEach((field) => {
+      const value = this.cleanImportNumber(mapped[field]);
+      if (value !== undefined) cleaned[field] = value;
+    });
+
+    if (!cleaned.town && cleaned.district) cleaned.town = cleaned.district;
+    if (!cleaned.district && cleaned.town) cleaned.district = cleaned.town;
+    if (!cleaned.address && cleaned.town) cleaned.address = cleaned.town;
+    if (!cleaned.state) cleaned.state = 'Unknown';
+
+    return cleaned;
   }
 
   async importMany(records: any[]) {
@@ -649,7 +739,7 @@ export class DealerService {
         }
 
         const rawPhone = String(mapped.phone).trim();
-        const phone = rawPhone.replace(/\D/g, '').slice(0, 10);
+        const phone = rawPhone.replace(/\D/g, '').slice(-10);
 
         if (!phone || phone.length < 10) {
           failed++;
