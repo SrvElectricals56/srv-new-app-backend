@@ -1011,6 +1011,14 @@ export class MobileService {
       testimonialsEnabled: map['testimonialsEnabled'] !== 'false',
       playEnabled: map['playEnabled'] !== 'false',
       dealerCanAddElectrician: map['dealerCanAddElectrician'] !== 'false',
+      qrFirstScannerVisibility: {
+        scannerName: map['qrFirstScannerShowScannerName'] !== 'false',
+        scannerPhone: map['qrFirstScannerShowScannerPhone'] !== 'false',
+        dealerName: map['qrFirstScannerShowDealerName'] !== 'false',
+        dealerPhone: map['qrFirstScannerShowDealerPhone'] !== 'false',
+        productName: map['qrFirstScannerShowProductName'] !== 'false',
+        scannedAt: map['qrFirstScannerShowScannedAt'] !== 'false',
+      },
       minimumOrderAmounts: {
         electrician: Number(map['minimumOrderAmountElectrician'] ?? 5000),
         dealer: Number(map['minimumOrderAmountDealer'] ?? 5000),

@@ -16,6 +16,7 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
+import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 
 @Injectable()
 export class QrCodeService {
@@ -644,6 +645,27 @@ export class QrCodeService {
           }
         : null,
     };
+  }
+
+  async scanLookup(rawQrCode: string) {
+    const candidates = extractQrCodeCandidates(rawQrCode);
+    if (!candidates.length) {
+      throw new BadRequestException('Please provide a valid QR code value');
+    }
+
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        return await this.findFirstScan(candidate);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError instanceof NotFoundException) {
+      throw new NotFoundException('QR code not found in SRV records');
+    }
+    throw lastError ?? new NotFoundException('QR code not found in SRV records');
   }
 
   async findOne(id: string) {

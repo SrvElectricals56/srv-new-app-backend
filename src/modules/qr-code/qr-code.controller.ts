@@ -154,6 +154,14 @@ export class QrCodeController {
     return this.qrCodeService.removeBatch(batchId);
   }
 
+  @Post('scan-lookup')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Decode/lookup an uploaded QR value and return first scan details' })
+  @ApiResponse({ status: 200, description: 'QR scan lookup details' })
+  scanLookup(@Body() body: { qrCode?: string }) {
+    return this.qrCodeService.scanLookup(body.qrCode ?? '');
+  }
+
   @Get(':id/first-scan')
   @ApiOperation({ summary: 'Get first scanner details for a QR code' })
   @ApiResponse({ status: 200, description: 'First QR scan details' })

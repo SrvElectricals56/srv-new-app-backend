@@ -796,11 +796,15 @@ export class MobileAuthService {
   async updateProfile(userId: string, role: string, data: any) {
     const commonFields = ['name', 'email', 'city', 'state', 'district', 'pincode', 'address',
       'upiId', 'bankAccount', 'ifsc', 'bankName', 'accountHolderName', 'bankLinked',
-      'language', 'darkMode', 'pushEnabled',
       'aadharFrontImage', 'panDocument', 'gstDocument'];
 
     const updateData: any = {};
     commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
+    if (role === 'user' || role === 'counterboy') {
+      ['language', 'darkMode', 'pushEnabled'].forEach(k => {
+        if (data[k] !== undefined) updateData[k] = data[k];
+      });
+    }
     if (data.profileImage !== undefined) updateData.profileImage = data.profileImage;
 
     // Handle plain-text password field (used by setPasswordFallback on the client)
@@ -828,11 +832,13 @@ export class MobileAuthService {
       }
     }
 
-    switch (role) {
-      case 'electrician': await this.electricianRepository.update(userId, updateData); break;
-      case 'dealer':      await this.dealerRepository.update(userId, updateData); break;
-      case 'user':        await this.appUserRepository.update(userId, updateData); break;
-      case 'counterboy':  await this.counterboyRepository.update(userId, updateData); break;
+    if (Object.keys(updateData).length > 0) {
+      switch (role) {
+        case 'electrician': await this.electricianRepository.update(userId, updateData); break;
+        case 'dealer':      await this.dealerRepository.update(userId, updateData); break;
+        case 'user':        await this.appUserRepository.update(userId, updateData); break;
+        case 'counterboy':  await this.counterboyRepository.update(userId, updateData); break;
+      }
     }
 
     if (data.pushEnabled !== undefined) {
