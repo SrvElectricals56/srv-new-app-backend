@@ -11,7 +11,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { ProductCartItem } from '../../database/entities/product-cart-item.entity';
 import { ProductOrder } from '../../database/entities/product-order.entity';
 import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
-import { UserStatus, MemberTier, UserRole } from '../../common/enums';
+import { UserStatus, MemberTier, UserRole, ElectricianSubCategory } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
@@ -657,30 +657,218 @@ export class ElectricianService {
     };
   }
 
+  private normalizeImportKey(key: string) {
+    return key
+      .toUpperCase()
+      .trim()
+      .replace(/\s*\/\s*/g, '/')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ');
+  }
+
+  private cleanImportString(value: unknown): string | undefined {
+    if (value === null || value === undefined) return undefined;
+    const text = String(value).trim();
+    return text === '' ? undefined : text;
+  }
+
+  private cleanImportNumber(value: unknown): number | undefined {
+    const text = this.cleanImportString(value);
+    if (!text) return undefined;
+    const parsed = Number(text.replace(/,/g, '').replace(/[^\d.-]/g, ''));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private cleanImportBoolean(value: unknown): boolean | undefined {
+    const text = this.cleanImportString(value)?.toLowerCase();
+    if (!text) return undefined;
+    if (['yes', 'y', 'true', '1', 'linked', 'active'].includes(text)) return true;
+    if (['no', 'n', 'false', '0', 'not linked', 'inactive'].includes(text)) return false;
+    return undefined;
+  }
+
+  private cleanImportStatus(value: unknown): UserStatus | undefined {
+    const text = this.cleanImportString(value)?.toLowerCase();
+    if (!text) return undefined;
+    return Object.values(UserStatus).includes(text as UserStatus) ? text as UserStatus : undefined;
+  }
+
+  private cleanImportTier(value: unknown): MemberTier | undefined {
+    const text = this.cleanImportString(value);
+    if (!text) return undefined;
+    return Object.values(MemberTier).find((tier) => tier.toLowerCase() === text.toLowerCase());
+  }
+
+  private cleanImportSubCategory(value: unknown): ElectricianSubCategory | undefined {
+    const text = this.cleanImportString(value);
+    if (!text) return undefined;
+    const normalized = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const exact = Object.values(ElectricianSubCategory).find(
+      (category) => category.toLowerCase() === text.toLowerCase(),
+    );
+    if (exact) return exact;
+
+    const aliases: Record<string, ElectricianSubCategory> = {
+      'general': ElectricianSubCategory.GENERAL_ELECTRICIAN,
+      'general electrician': ElectricianSubCategory.GENERAL_ELECTRICIAN,
+      'industrial': ElectricianSubCategory.INDUSTRIAL_ELECTRICIAN,
+      'industrial wiring': ElectricianSubCategory.INDUSTRIAL_ELECTRICIAN,
+      'commercial wiring': ElectricianSubCategory.CONTRACTOR,
+      'residential': ElectricianSubCategory.RESIDENTIAL_WIRING,
+      'residential wiring': ElectricianSubCategory.RESIDENTIAL_WIRING,
+      'solar': ElectricianSubCategory.SOLAR_INSTALLER,
+      'solar installation': ElectricianSubCategory.SOLAR_INSTALLER,
+      'solar installer': ElectricianSubCategory.SOLAR_INSTALLER,
+      'panel': ElectricianSubCategory.PANEL_BOARD_SPECIALIST,
+      'panel upgrades': ElectricianSubCategory.PANEL_BOARD_SPECIALIST,
+      'panel board': ElectricianSubCategory.PANEL_BOARD_SPECIALIST,
+      'panel board specialist': ElectricianSubCategory.PANEL_BOARD_SPECIALIST,
+      'lighting': ElectricianSubCategory.LIGHTING_SPECIALIST,
+      'lighting specialist': ElectricianSubCategory.LIGHTING_SPECIALIST,
+      'ac appliance': ElectricianSubCategory.AC_APPLIANCE_TECHNICIAN,
+      'ac appliance technician': ElectricianSubCategory.AC_APPLIANCE_TECHNICIAN,
+      'contractor': ElectricianSubCategory.CONTRACTOR,
+    };
+
+    return aliases[normalized] ?? ElectricianSubCategory.GENERAL_ELECTRICIAN;
+  }
+
+  private mapImportColumns(record: any) {
+    const map: Record<string, string> = {
+      NAME: 'name',
+      'FULL NAME': 'name',
+      ELECTRICIAN: 'name',
+      'ELECTRICIAN NAME': 'name',
+      PHONE: 'phone',
+      MOBILE: 'phone',
+      'MOBILE NO': 'phone',
+      'MOBILE NO.': 'phone',
+      'MOBILE NUMBER': 'phone',
+      'PHONE NO': 'phone',
+      'PHONE NO.': 'phone',
+      'PHONE NUMBER': 'phone',
+      EMAIL: 'email',
+      'EMAIL ADDRESS': 'email',
+      CITY: 'city',
+      TOWN: 'city',
+      LOCATION: 'location',
+      DISTRICT: 'district',
+      STATE: 'state',
+      PINCODE: 'pincode',
+      ADDRESS: 'address',
+      CODE: 'electricianCode',
+      'ELECTRICIAN CODE': 'electricianCode',
+      'DEALER ID': 'dealerId',
+      DEALER: 'fallbackDealerName',
+      'DEALER NAME': 'fallbackDealerName',
+      'DEALER PHONE': 'fallbackDealerPhone',
+      'DEALER CODE': 'fallbackDealerCode',
+      CATEGORY: 'subCategory',
+      'SUB CATEGORY': 'subCategory',
+      SUBCATEGORY: 'subCategory',
+      TIER: 'tier',
+      STATUS: 'status',
+      POINTS: 'totalPoints',
+      'TOTAL POINTS': 'totalPoints',
+      SCANS: 'totalScans',
+      'TOTAL SCANS': 'totalScans',
+      REDEMPTIONS: 'totalRedemptions',
+      'TOTAL REDEMPTIONS': 'totalRedemptions',
+      WALLET: 'walletBalance',
+      'WALLET BALANCE': 'walletBalance',
+      'BANK LINKED': 'bankLinked',
+      'APP INSTALLED': 'appInstalled',
+      UPI: 'upiId',
+      'UPI ID': 'upiId',
+      AADHAR: 'aadharNumber',
+      AADHAAR: 'aadharNumber',
+      'AADHAR NUMBER': 'aadharNumber',
+      'AADHAAR NUMBER': 'aadharNumber',
+      PAN: 'panNumber',
+      'PAN NUMBER': 'panNumber',
+    };
+
+    const allowedDirectFields = new Set([
+      'name', 'phone', 'email', 'city', 'state', 'district', 'pincode', 'address',
+      'electricianCode', 'dealerId', 'fallbackDealerName', 'fallbackDealerPhone',
+      'fallbackDealerCode', 'subCategory', 'tier', 'status', 'totalPoints',
+      'walletBalance', 'totalScans', 'totalRedemptions', 'bankLinked', 'upiId',
+      'aadharNumber', 'panNumber', 'appInstalled',
+    ]);
+
+    const mapped: any = {};
+    for (const [key, value] of Object.entries(record)) {
+      const normalized = this.normalizeImportKey(key);
+      const dbField = map[normalized] || (allowedDirectFields.has(key) ? key : null);
+      if (dbField) mapped[dbField] = value;
+    }
+
+    const location = this.cleanImportString(mapped.location);
+    if (location) {
+      const parts = location.split(',').map((part) => part.trim()).filter(Boolean);
+      if (!mapped.city && parts[0]) mapped.city = parts[0];
+      if (!mapped.state && parts.length > 1) mapped.state = parts[parts.length - 1];
+    }
+
+    const cleaned: any = {};
+    [
+      'name', 'phone', 'email', 'city', 'state', 'district', 'pincode', 'address',
+      'electricianCode', 'dealerId', 'fallbackDealerName', 'fallbackDealerPhone',
+      'fallbackDealerCode', 'upiId', 'aadharNumber', 'panNumber',
+    ].forEach((field) => {
+      const value = this.cleanImportString(mapped[field]);
+      if (value !== undefined) cleaned[field] = value;
+    });
+
+    const subCategory = this.cleanImportSubCategory(mapped.subCategory);
+    if (subCategory) cleaned.subCategory = subCategory;
+    const status = this.cleanImportStatus(mapped.status);
+    if (status) cleaned.status = status;
+    const tier = this.cleanImportTier(mapped.tier);
+    if (tier) cleaned.tier = tier;
+    const bankLinked = this.cleanImportBoolean(mapped.bankLinked);
+    if (bankLinked !== undefined) cleaned.bankLinked = bankLinked;
+    const appInstalled = this.cleanImportBoolean(mapped.appInstalled);
+    if (appInstalled !== undefined) cleaned.appInstalled = appInstalled;
+
+    ['totalPoints', 'walletBalance', 'totalScans', 'totalRedemptions'].forEach((field) => {
+      const value = this.cleanImportNumber(mapped[field]);
+      if (value !== undefined) cleaned[field] = value;
+    });
+
+    if (!cleaned.city && cleaned.district) cleaned.city = cleaned.district;
+    if (!cleaned.district && cleaned.city) cleaned.district = cleaned.city;
+    if (!cleaned.state) cleaned.state = 'Unknown';
+
+    return cleaned;
+  }
+
   async importMany(records: any[]) {
     let created = 0, updated = 0, failed = 0, errors: string[] = [];
 
     for (const record of records) {
       try {
-        if (!record.name?.trim() || !record.phone?.trim()) {
+        const mapped = this.mapImportColumns(record);
+
+        if (!mapped.name?.trim() || !mapped.phone?.trim()) {
           failed++;
           errors.push(`Row missing name or phone: ${JSON.stringify(record)}`);
           continue;
         }
 
-        const rawPhone = String(record.phone).trim();
-        const phone = rawPhone.replace(/\D/g, '').slice(0, 10);
+        const rawPhone = String(mapped.phone).trim();
+        const phone = rawPhone.replace(/\D/g, '').slice(-10);
         if (!phone || phone.length < 10) {
           failed++;
           errors.push(`Invalid phone number: ${rawPhone}`);
           continue;
         }
 
-        record.phone = phone;
+        mapped.phone = phone;
         let existing = await this.electricianRepository.findOne({ where: { phone } });
 
         if (existing) {
-          const { id, joinedDate, ...updateData } = record;
+          const { id, joinedDate, updatedAt, ...updateData } = mapped;
           if (updateData.totalPoints !== undefined) {
             const points = Number(updateData.totalPoints);
             updateData.tier = this.tierService.calculateElectricianTier(points);
@@ -689,7 +877,7 @@ export class ElectricianService {
           updated++;
         } else {
           await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'electrician');
-          const data: any = { ...record };
+          const data: any = { ...mapped };
           if (!data.dealerId || data.dealerId.trim() === '') data.dealerId = null;
           data.electricianCode = await this.resolveElectricianCode({
             electricianCode: data.electricianCode,

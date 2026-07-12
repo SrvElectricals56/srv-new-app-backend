@@ -1972,6 +1972,7 @@ export class MobileService {
       const order = matchIndex >= 0 ? unmatchedGiftOrders.splice(matchIndex, 1)[0] : undefined;
       return {
         ...redemption,
+        status: order?.status ?? redemption.status,
         giftName: directGiftName ?? order?.giftName ?? 'Gift redemption',
         giftImage:
           directGiftImage ??
@@ -1980,6 +1981,13 @@ export class MobileService {
           order?.giftImage ??
           null,
         giftProductId: directGiftProductId ?? order?.giftProductId ?? null,
+        processedAt: order?.processedAt ?? redemption.processedAt,
+        dispatchedAt: order?.dispatchedAt ?? null,
+        deliveredAt: order?.deliveredAt ?? null,
+        trackingNumber: order?.trackingNumber ?? null,
+        courierName: order?.courierName ?? null,
+        deliveryNotes: order?.deliveryNotes ?? order?.rejectionReason ?? redemption.rejectionReason ?? null,
+        shippingAddress: order?.shippingAddress ?? null,
       };
     });
 
@@ -2137,7 +2145,29 @@ export class MobileService {
       replies: [...existingReplies, newReply],
       status: SupportTicketStatus.OPEN,
     });
-    return { message: 'Reply sent successfully' };
+    return { message: 'Reply sent successfully', reply: newReply };
+  }
+
+  async deleteTicketReply(userId: string, ticketId: string, replyId: string) {
+    const ticket = await this.supportTicketRepository.findOne({ where: { id: ticketId, userId } });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    const existingReplies = ticket.replies || [];
+    const decodedReplyId = decodeURIComponent(replyId);
+    const nextReplies = existingReplies.filter((reply: any) => {
+      const replyKey = String(reply.id ?? reply.timestamp ?? '');
+      const timestampKey = String(reply.timestamp ?? '');
+      return !(reply.sender === 'user' && (replyKey === decodedReplyId || timestampKey === decodedReplyId));
+    });
+
+    if (nextReplies.length === existingReplies.length) {
+      throw new NotFoundException('Message not found');
+    }
+
+    await this.supportTicketRepository.update(ticketId, {
+      replies: nextReplies,
+    });
+    return { message: 'Message deleted successfully' };
   }
 
   async closeTicket(userId: string, ticketId: string) {
@@ -2156,10 +2186,13 @@ export class MobileService {
     const normalizedRole = this.normalizeRole(role);
     const user = await this.getUserByRole(userId, role);
     const code = this.getReferralCode(user, normalizedRole, userId);
+    const playStoreSetting = await this.settingsRepository.findOne({ where: { key: 'playStoreUrl' } });
+    const appLink = playStoreSetting?.value?.trim() || 'https://play.google.com/store/apps/details?id=com.srvelectricals.app';
+    const separator = appLink.includes('?') ? '&' : '?';
 
     return {
       code,
-      link: null,
+      link: `${appLink}${separator}ref=${encodeURIComponent(code)}`,
       channels: ['whatsapp', 'sms', 'copy'],
     };
   }

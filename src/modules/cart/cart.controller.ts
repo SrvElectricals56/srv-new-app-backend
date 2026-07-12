@@ -69,7 +69,7 @@ export class CartController {
   @ApiOperation({ summary: 'Buy now — create a product order directly' })
   createOrder(
     @Request() req: any,
-    @Body() body: { productId: string; quantity?: number; shippingAddress?: string },
+    @Body() body: { productId: string; quantity?: number; shippingAddress?: string; cartTotal?: number },
   ) {
     return this.cartService.createOrder(req.user.id, req.user.role, body);
   }
@@ -89,7 +89,7 @@ export class CartController {
   @ApiOperation({ summary: 'Create a secure Razorpay order for a product purchase' })
   createRazorpayOrder(
     @Request() req: any,
-    @Body() body: { productId: string; quantity?: number; shippingAddress?: string },
+    @Body() body: { productId: string; quantity?: number; shippingAddress?: string; cartTotal?: number },
   ) {
     return this.cartService.createRazorpayOrder(req.user.id, req.user.role, body);
   }

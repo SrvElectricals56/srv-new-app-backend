@@ -381,6 +381,19 @@ export class MobileController {
     return this.mobileService.replyToTicket(req.user.id, id, body.message);
   }
 
+  @Delete('support/tickets/:id/replies/:replyId')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete my own support ticket reply' })
+  deleteTicketReply(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('replyId') replyId: string,
+  ) {
+    return this.mobileService.deleteTicketReply(req.user.id, id, replyId);
+  }
+
   @Patch('support/tickets/:id/close')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')
