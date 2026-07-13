@@ -1,7 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
+import axios from 'axios';
 import {
   Play,
   type PlayComment,
@@ -22,15 +25,29 @@ type PlayInteractionsResponse = {
   comments: PlayComment[];
 };
 
+type InstagramMediaItem = {
+  id: string;
+  caption?: string;
+  media_type?: 'IMAGE' | 'VIDEO' | 'CAROUSEL_ALBUM' | string;
+  media_url?: string;
+  permalink?: string;
+  thumbnail_url?: string;
+  timestamp?: string;
+};
+
 @Injectable()
 export class PlayService implements OnModuleInit {
+  private readonly logger = new Logger(PlayService.name);
+
   constructor(
     @InjectRepository(Play)
     private playRepository: Repository<Play>,
+    private readonly configService: ConfigService,
   ) {}
 
   async onModuleInit() {
     await this.ensureInteractionColumns();
+    await this.syncInstagramVideos({ silent: true });
   }
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
@@ -258,6 +275,106 @@ export class PlayService implements OnModuleInit {
     };
   }
 
+  async getInstagramSyncStatus() {
+    const accountId = this.getInstagramAccountId();
+    const token = this.getInstagramAccessToken();
+    const lastSync = this.configService.get<string>('INSTAGRAM_LAST_SYNC_NOTE') ?? null;
+    const syncedCount = await this.playRepository.count({
+      where: { externalSource: 'instagram' },
+    });
+
+    return {
+      enabled: Boolean(accountId && token),
+      accountConfigured: Boolean(accountId),
+      tokenConfigured: Boolean(token),
+      syncedCount,
+      lastSync,
+      requiredEnv: ['INSTAGRAM_USER_ID', 'INSTAGRAM_ACCESS_TOKEN'],
+    };
+  }
+
+  async syncInstagramVideos(options: { silent?: boolean; limit?: number } = {}) {
+    const accountId = this.getInstagramAccountId();
+    const token = this.getInstagramAccessToken();
+    const limit = Math.min(Math.max(Number(options.limit) || 25, 1), 100);
+
+    if (!accountId || !token) {
+      const result = {
+        message: 'Instagram sync skipped. Configure INSTAGRAM_USER_ID and INSTAGRAM_ACCESS_TOKEN.',
+        configured: false,
+        created: 0,
+        updated: 0,
+        skipped: 0,
+      };
+      if (!options.silent) return result;
+      this.logger.debug(result.message);
+      return result;
+    }
+
+    try {
+      const media = await this.fetchInstagramMedia(accountId, token, limit);
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const item of media) {
+        if (item.media_type !== 'VIDEO' || !item.media_url) {
+          skipped += 1;
+          continue;
+        }
+
+        const existing = await this.playRepository.findOne({
+          where: { externalSource: 'instagram', externalId: item.id },
+        });
+        const caption = (item.caption ?? '').trim();
+        const title = this.buildInstagramTitle(caption);
+        const payload: Partial<Play> = {
+          title,
+          description: caption || 'SRV Electricals Instagram video',
+          videoUrl: item.media_url,
+          thumbnailUrl: item.thumbnail_url ?? null,
+          category: 'reels',
+          isActive: true,
+          displayOrder: existing?.displayOrder ?? 0,
+          targetRoles: existing?.targetRoles?.length ? existing.targetRoles : [...PLAY_TARGET_ROLES],
+          externalSource: 'instagram',
+          externalId: item.id,
+          externalPermalink: item.permalink ?? null,
+          externalPublishedAt: item.timestamp ? new Date(item.timestamp) : null,
+        };
+
+        if (existing) {
+          await this.playRepository.update(existing.id, payload);
+          updated += 1;
+        } else {
+          await this.playRepository.save(this.playRepository.create(payload));
+          created += 1;
+        }
+      }
+
+      return {
+        message: 'Instagram videos synced successfully',
+        configured: true,
+        fetched: media.length,
+        created,
+        updated,
+        skipped,
+      };
+    } catch (error: any) {
+      const message = error?.response?.data?.error?.message || error?.message || 'Instagram sync failed';
+      if (options.silent) {
+        this.logger.warn(`Instagram sync failed: ${message}`);
+        return { message, configured: true, created: 0, updated: 0, skipped: 0 };
+      }
+      throw new BadRequestException(message);
+    }
+  }
+
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async syncInstagramVideosOnSchedule() {
+    await this.syncInstagramVideos({ silent: true });
+  }
+
   private getViewersArray(play: Play): PlayViewer[] {
     return Array.isArray(play.viewers) ? play.viewers : [];
   }
@@ -418,9 +535,51 @@ export class PlayService implements OnModuleInit {
       await queryRunner.query(
         `ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "shares" jsonb NOT NULL DEFAULT '[]'::jsonb`,
       );
+      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalSource" character varying`);
+      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalId" character varying`);
+      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalPermalink" character varying`);
+      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalPublishedAt" timestamptz`);
+      await queryRunner.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS "IDX_plays_external_source_id" ON "plays" ("externalSource", "externalId") WHERE "externalSource" IS NOT NULL AND "externalId" IS NOT NULL`,
+      );
     } finally {
       await queryRunner.release();
     }
+  }
+
+  private getInstagramAccountId() {
+    return this.configService.get<string>('INSTAGRAM_USER_ID')?.trim();
+  }
+
+  private getInstagramAccessToken() {
+    return this.configService.get<string>('INSTAGRAM_ACCESS_TOKEN')?.trim();
+  }
+
+  private async fetchInstagramMedia(accountId: string, token: string, limit: number) {
+    const apiVersion = this.configService.get<string>('INSTAGRAM_GRAPH_VERSION', 'v23.0');
+    const response = await axios.get<{ data?: InstagramMediaItem[] }>(
+      `https://graph.facebook.com/${apiVersion}/${encodeURIComponent(accountId)}/media`,
+      {
+        params: {
+          fields: 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp',
+          access_token: token,
+          limit,
+        },
+        timeout: 15000,
+      },
+    );
+
+    return Array.isArray(response.data?.data) ? response.data.data : [];
+  }
+
+  private buildInstagramTitle(caption: string) {
+    const firstLine = caption
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+
+    if (!firstLine) return 'SRV Instagram Reel';
+    return firstLine.length > 90 ? `${firstLine.slice(0, 87)}...` : firstLine;
   }
 
 }
