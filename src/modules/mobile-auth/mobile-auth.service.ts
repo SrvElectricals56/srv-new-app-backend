@@ -93,9 +93,9 @@ export class MobileAuthService {
   }
 
   private assertStrongPassword(password: string) {
-    if (!/^(?=.*[^A-Za-z0-9])\S{8}$/.test(password)) {
+    if (!/^(?=.*[A-Z])(?=.*[^A-Za-z0-9])\S{8,}$/.test(password)) {
       throw new BadRequestException(
-        'Password must be exactly 8 characters long and include one special character',
+        'Password must be at least 8 characters long and include one capital letter and one special character',
       );
     }
   }
@@ -124,6 +124,47 @@ export class MobileAuthService {
 
   private normalizePhone(phone?: string | null): string {
     return String(phone ?? '').replace(/\D/g, '').slice(-10);
+  }
+
+  private normalizeEmail(email?: string | null): string {
+    return String(email ?? '').trim().toLowerCase();
+  }
+
+  private getGoogleClientIds() {
+    return [
+      ...(this.configService.get<string>('GOOGLE_CLIENT_IDS') ?? '').split(','),
+      this.configService.get<string>('GOOGLE_WEB_CLIENT_ID') ?? '',
+    ].map((value) => value.trim()).filter(Boolean);
+  }
+
+  private async verifyGoogleIdToken(idToken: string) {
+    const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload) {
+      throw new UnauthorizedException('Invalid Google sign-in token.');
+    }
+
+    const allowedClientIds = this.getGoogleClientIds();
+    if (allowedClientIds.length > 0 && !allowedClientIds.includes(String(payload.aud ?? ''))) {
+      throw new UnauthorizedException('Google sign-in is not configured for this app.');
+    }
+    if (payload.email_verified !== true && payload.email_verified !== 'true') {
+      throw new UnauthorizedException('Google email is not verified.');
+    }
+
+    const email = this.normalizeEmail(payload.email);
+    if (!email) throw new UnauthorizedException('Google account email is required.');
+    return {
+      email,
+      name: String(payload.name ?? payload.given_name ?? email.split('@')[0] ?? 'Customer').trim(),
+      picture: typeof payload.picture === 'string' ? payload.picture : null,
+      sub: String(payload.sub ?? '').trim(),
+    };
+  }
+
+  private buildGoogleCustomerPhone(googleSub: string, email: string) {
+    const source = `${googleSub}${email}`.replace(/\D/g, '');
+    return `9${source.slice(-9).padStart(9, '0')}`;
   }
 
   private buildLoginOtpKey(phone: string, role: MobileUserRole): string {
@@ -620,6 +661,48 @@ export class MobileAuthService {
     const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
     const tokens = await this.generateTokens(payload);
     return { ...tokens, user: this.formatUserProfile(saved, 'user') };
+  }
+
+  async googleCustomerAuth(idToken: string) {
+    if (!idToken?.trim()) throw new BadRequestException('Google token is required.');
+    const googleUser = await this.verifyGoogleIdToken(idToken.trim());
+
+    let user = await this.appUserRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email: googleUser.email })
+      .getOne();
+
+    if (!user) {
+      const stateCode = 'GO';
+      const userCode = `USR${stateCode}${Date.now().toString().slice(-6)}`;
+      const phone = this.buildGoogleCustomerPhone(googleUser.sub, googleUser.email);
+      const existingPhone = await this.appUserRepository.findOne({ where: { phone } });
+      user = this.appUserRepository.create({
+        name: googleUser.name || 'Customer',
+        phone: existingPhone ? `${phone.slice(0, 9)}${Date.now().toString().slice(-1)}` : phone,
+        email: googleUser.email,
+        profileImage: googleUser.picture ?? undefined,
+        userCode,
+        status: UserStatus.ACTIVE,
+        appInstalled: true,
+        firstAppLoginAt: new Date(),
+      });
+      user = await this.appUserRepository.save(user);
+    } else {
+      user.email = googleUser.email;
+      if (googleUser.picture) user.profileImage = googleUser.picture;
+      if (!user.name?.trim()) user.name = googleUser.name || 'Customer';
+      user.appInstalled = true;
+      user.firstAppLoginAt = user.firstAppLoginAt ?? new Date();
+      user = await this.appUserRepository.save(user);
+    }
+
+    if (user.status === 'suspended') throw new UnauthorizedException('Account is suspended.');
+    await this.touchActivity(user.id, 'user');
+
+    const payload = { sub: user.id, phone: user.phone, role: 'user' };
+    const tokens = await this.generateTokens(payload);
+    return { ...tokens, user: this.formatUserProfile(user, 'user') };
   }
 
   async registerCounterBoy(data: {

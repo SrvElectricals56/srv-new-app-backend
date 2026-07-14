@@ -31,6 +31,18 @@ import { UserRole, UserStatus, ScanMode, TransactionType, TransactionSource, Sup
 import { TierService } from '../../common/services/tier.service';
 import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 
+const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
+  [ProductOrderStatus.PENDING]: 'Pending',
+  [ProductOrderStatus.APPROVED]: 'Approved',
+  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Out for Delivery',
+  [ProductOrderStatus.SHIPPED]: 'Shipped',
+  [ProductOrderStatus.DELIVERED]: 'Delivered',
+  [ProductOrderStatus.REJECTED]: 'Rejected',
+  [ProductOrderStatus.CANCELLED]: 'Cancelled',
+  [ProductOrderStatus.RETURNED]: 'Returned',
+  [ProductOrderStatus.REFUNDED]: 'Refunded',
+};
+
 @Injectable()
 export class MobileService {
   constructor(
@@ -131,6 +143,13 @@ export class MobileService {
     const estimated = new Date(from);
     estimated.setDate(estimated.getDate() + 5);
     return estimated;
+  }
+
+  private isWithinHours(value: Date | string | null | undefined, hours: number) {
+    if (!value) return false;
+    const start = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(start.getTime())) return false;
+    return Date.now() - start.getTime() <= hours * 60 * 60 * 1000;
   }
 
   private getUserRepositoryByRole(role: string, manager?: EntityManager) {
@@ -2253,9 +2272,9 @@ export class MobileService {
         .andWhere(normalizedRole ? 'order.userRole = :userRole' : '1=1', {
           userRole: normalizedRole,
         })
-        .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus = :paid)', {
+        .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus IN (:...visiblePaymentStatuses))', {
           razorpay: 'razorpay',
-          paid: 'paid',
+          visiblePaymentStatuses: ['paid', 'failed'],
         })
         .orderBy('order.orderedAt', 'DESC')
         .getMany(),
@@ -2306,10 +2325,21 @@ export class MobileService {
 
     const productMapped = productOrders.map(o => {
       const estimatedDeliveryAt = o.estimatedDeliveryAt ?? this.estimateDeliveryDate(o.paidAt ?? o.orderedAt ?? new Date());
+      const status = String(o.status ?? '').toLowerCase();
+      const canCancel =
+        ['pending', 'approved', 'out_for_delivery'].includes(status) &&
+        this.isWithinHours(o.orderedAt, 24);
+      const canReturn =
+        status === ProductOrderStatus.DELIVERED &&
+        this.isWithinHours(o.deliveredAt, 24);
+      const canRefund =
+        o.paymentStatus === 'paid' &&
+        !['refunded', 'rejected'].includes(status);
       return ({
       id: o.id,
       type: 'product' as const,
       status: o.status,
+      statusLabel: PRODUCT_ORDER_STATUS_LABELS[o.status],
       title: o.productName,
       productName: o.productName,
       productImage: this.normalizeUploadUrl(o.productImage) ?? o.productImage ?? null,
@@ -2326,6 +2356,7 @@ export class MobileService {
       estimatedDeliveryAt: estimatedDeliveryAt.toISOString(),
       dispatchedAt: o.dispatchedAt?.toISOString() ?? null,
       rejectedAt: o.rejectedAt?.toISOString() ?? null,
+      updatedAt: o.updatedAt?.toISOString() ?? null,
       shippingAddress: o.shippingAddress ?? null,
       trackingNumber: o.trackingNumber ?? null,
       courierName: o.courierName ?? null,
@@ -2335,6 +2366,9 @@ export class MobileService {
       refundMessage: o.refundMessage ?? null,
       rejectionReason: o.rejectionReason ?? null,
       deliveryNotes: o.deliveryNotes ?? null,
+      canCancel,
+      canReturn,
+      canRefund,
       createdAt: o.orderedAt.toISOString(),
     });
     });

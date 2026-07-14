@@ -59,9 +59,9 @@ export class VerifySignupOtpDto extends SendSignupOtpDto {
 export class ResetPasswordDto extends VerifyOtpDto {
   @IsString()
   @MinLength(8)
-  @MaxLength(8)
-  @Matches(/^(?=.*[^A-Za-z0-9])\S{8}$/, {
-    message: 'Password must be exactly 8 characters long and include one special character',
+  @MaxLength(128)
+  @Matches(/^(?=.*[A-Z])(?=.*[^A-Za-z0-9])\S{8,}$/, {
+    message: 'Password must be at least 8 characters long and include one capital letter and one special character',
   })
   newPassword: string;
 }
@@ -83,7 +83,7 @@ class BaseRegistrationDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(8)
+  @MaxLength(128)
   password?: string;
 
   @IsOptional()
@@ -174,6 +174,12 @@ export class MobileRefreshDto {
   @IsString()
   @IsNotEmpty()
   refreshToken: string;
+}
+
+export class GoogleCustomerAuthDto {
+  @IsString()
+  @IsNotEmpty()
+  idToken: string;
 }
 
 export class RegisterUserDto {
