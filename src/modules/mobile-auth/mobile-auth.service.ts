@@ -93,9 +93,9 @@ export class MobileAuthService {
   }
 
   private assertStrongPassword(password: string) {
-    if (!/^(?=.*[^A-Za-z0-9])\S{8}$/.test(password)) {
+    if (!/^(?=.*[A-Z])(?=.*[^A-Za-z0-9])\S{8,}$/.test(password)) {
       throw new BadRequestException(
-        'Password must be exactly 8 characters long and include one special character',
+        'Password must be at least 8 characters long and include one capital letter and one special character',
       );
     }
   }
