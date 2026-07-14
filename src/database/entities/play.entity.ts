@@ -59,6 +59,18 @@ export class Play {
   @Column({ nullable: true })
   thumbnailUrl: string;
 
+  @Column({ nullable: true })
+  externalSource: string;
+
+  @Column({ nullable: true })
+  externalId: string;
+
+  @Column({ nullable: true })
+  externalPermalink: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  externalPublishedAt: Date;
+
   @Column({ default: 'reels' })
   category: string;           // reels | guides | tips
 

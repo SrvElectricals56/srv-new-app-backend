@@ -20,6 +20,18 @@ import { Settings } from '../../database/entities/settings.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { TransactionSource, TransactionType, UserRole } from '../../common/enums';
 
+const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
+  [ProductOrderStatus.PENDING]: 'Pending',
+  [ProductOrderStatus.APPROVED]: 'Approved',
+  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Out for Delivery',
+  [ProductOrderStatus.SHIPPED]: 'Shipped',
+  [ProductOrderStatus.DELIVERED]: 'Delivered',
+  [ProductOrderStatus.REJECTED]: 'Rejected',
+  [ProductOrderStatus.CANCELLED]: 'Cancelled',
+  [ProductOrderStatus.RETURNED]: 'Returned',
+  [ProductOrderStatus.REFUNDED]: 'Refunded',
+};
+
 @Injectable()
 export class CartService {
   constructor(
@@ -97,6 +109,12 @@ export class CartService {
   }
 
   private async ensurePaymentColumns() {
+    for (const value of ['out_for_delivery', 'cancelled', 'returned', 'refunded']) {
+      await this.orderRepo.query(`
+        ALTER TYPE "public"."product_orders_status_enum"
+        ADD VALUE IF NOT EXISTS '${value}'
+      `);
+    }
     await this.orderRepo.query(`
       ALTER TABLE "product_orders"
       ADD COLUMN IF NOT EXISTS "paymentMethod" varchar NOT NULL DEFAULT 'cod'
@@ -165,6 +183,13 @@ export class CartService {
     const estimated = new Date(from);
     estimated.setDate(estimated.getDate() + 5);
     return estimated;
+  }
+
+  private isWithinHours(value: Date | string | null | undefined, hours: number) {
+    if (!value) return false;
+    const start = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(start.getTime())) return false;
+    return Date.now() - start.getTime() <= hours * 60 * 60 * 1000;
   }
 
   private getRazorpayCredentials() {
@@ -819,20 +844,106 @@ export class CartService {
       .createQueryBuilder('order')
       .where('order.userId = :userId', { userId })
       .andWhere('order.userRole = :userRole', { userRole: normalizedRole })
-      .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus = :paid)', {
+      .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus IN (:...visiblePaymentStatuses))', {
         razorpay: 'razorpay',
-        paid: 'paid',
+        visiblePaymentStatuses: ['paid', 'failed'],
       })
       .orderBy('order.orderedAt', 'DESC')
       .getMany();
 
-    const mappedOrders = orders.map((order) => ({
-      ...order,
-      estimatedDeliveryAt:
-        order.estimatedDeliveryAt ??
-        this.estimateDeliveryDate(order.paidAt ?? order.orderedAt ?? new Date()),
-    }));
+    const mappedOrders = orders.map((order) => {
+      const status = String(order.status ?? '').toLowerCase();
+      const canCancel =
+        ['pending', 'approved', 'out_for_delivery'].includes(status) &&
+        this.isWithinHours(order.orderedAt, 24);
+      const canReturn =
+        status === ProductOrderStatus.DELIVERED &&
+        this.isWithinHours(order.deliveredAt, 24);
+      const canRefund =
+        order.paymentStatus === 'paid' &&
+        !['refunded', 'rejected'].includes(status);
+
+      return {
+        ...order,
+        statusLabel: PRODUCT_ORDER_STATUS_LABELS[order.status],
+        estimatedDeliveryAt:
+          order.estimatedDeliveryAt ??
+          this.estimateDeliveryDate(order.paidAt ?? order.orderedAt ?? new Date()),
+        updatedAt: order.updatedAt,
+        canCancel,
+        canReturn,
+        canRefund,
+      };
+    });
 
     return { orders: mappedOrders, total: mappedOrders.length };
+  }
+
+  async requestOrderAction(
+    userId: string,
+    role: string,
+    orderId: string,
+    action: 'cancel' | 'return' | 'refund',
+    reason?: string,
+  ) {
+    const normalizedRole = this.normalizeRole(role);
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(orderId)) {
+      throw new NotFoundException('Product order not found');
+    }
+    const order = await this.orderRepo.findOne({
+      where: { id: orderId, userId, userRole: normalizedRole },
+    });
+    if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
+      throw new NotFoundException('Product order not found');
+    }
+
+    const status = String(order.status ?? '').toLowerCase();
+    const note = reason?.trim();
+
+    if (action === 'cancel') {
+      if (!['pending', 'approved', 'out_for_delivery'].includes(status)) {
+        throw new BadRequestException('This order can no longer be cancelled');
+      }
+      if (!this.isWithinHours(order.orderedAt, 24)) {
+        throw new BadRequestException('Order cancellation is available within 24 hours only');
+      }
+      await this.orderRepo.update(order.id, {
+        status: ProductOrderStatus.CANCELLED,
+        refundStatus: order.paymentStatus === 'paid' ? 'pending' : null,
+        refundMessage: order.paymentStatus === 'paid'
+          ? 'Cancellation requested. Refund will be processed within 24 hours.'
+          : 'Order cancelled successfully.',
+        deliveryNotes: note ? `Cancellation requested: ${note}` : 'Cancellation requested by customer.',
+      });
+      return { message: 'Order cancellation requested successfully' };
+    }
+
+    if (action === 'return') {
+      if (status !== ProductOrderStatus.DELIVERED || !this.isWithinHours(order.deliveredAt, 24)) {
+        throw new BadRequestException('Return is available within 24 hours after delivery only');
+      }
+      await this.orderRepo.update(order.id, {
+        status: ProductOrderStatus.RETURNED,
+        refundStatus: order.paymentStatus === 'paid' ? 'pending' : order.refundStatus,
+        refundMessage: 'Return requested. Refund will be processed after admin verification.',
+        deliveryNotes: note ? `Return requested: ${note}` : 'Return requested by customer.',
+      });
+      return { message: 'Return requested successfully' };
+    }
+
+    if (order.paymentStatus !== 'paid') {
+      throw new BadRequestException('Refund can be requested only for paid orders');
+    }
+    if (['refunded', 'rejected'].includes(status)) {
+      throw new BadRequestException('Refund is not available for this order status');
+    }
+    await this.orderRepo.update(order.id, {
+      status: ProductOrderStatus.REFUNDED,
+      refundStatus: 'requested',
+      refundMessage: 'Refund requested. Admin will verify and process it within 24 hours.',
+      deliveryNotes: note ? `Refund requested: ${note}` : 'Refund requested by customer.',
+    });
+    return { message: 'Refund requested successfully' };
   }
 }

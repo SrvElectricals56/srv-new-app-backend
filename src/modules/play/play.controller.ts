@@ -31,6 +31,20 @@ export class PlayController {
     return this.playService.getStats();
   }
 
+  @Get('instagram/status')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Get Instagram Play Zone sync status' })
+  getInstagramSyncStatus() {
+    return this.playService.getInstagramSyncStatus();
+  }
+
+  @Post('instagram/sync')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Sync Instagram videos into Play Zone' })
+  syncInstagramVideos(@Query('limit') limit?: string) {
+    return this.playService.syncInstagramVideos({ limit: Number(limit) || 25 });
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get play by ID' })
   findOne(@Param('id') id: string) {

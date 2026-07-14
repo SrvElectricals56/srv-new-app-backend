@@ -9,6 +9,26 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TransactionType, TransactionSource, UserRole } from '../../common/enums';
 
+const ADMIN_PRODUCT_ORDER_STATUSES = [
+  ProductOrderStatus.PENDING,
+  ProductOrderStatus.OUT_FOR_DELIVERY,
+  ProductOrderStatus.SHIPPED,
+  ProductOrderStatus.DELIVERED,
+  ProductOrderStatus.REJECTED,
+];
+
+const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
+  [ProductOrderStatus.PENDING]: 'Pending',
+  [ProductOrderStatus.APPROVED]: 'Approved',
+  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Out for Delivery',
+  [ProductOrderStatus.SHIPPED]: 'Shipped',
+  [ProductOrderStatus.DELIVERED]: 'Delivered',
+  [ProductOrderStatus.REJECTED]: 'Rejected',
+  [ProductOrderStatus.CANCELLED]: 'Cancelled',
+  [ProductOrderStatus.RETURNED]: 'Returned',
+  [ProductOrderStatus.REFUNDED]: 'Refunded',
+};
+
 @Injectable()
 export class ProductOrderService {
   constructor(
@@ -33,6 +53,29 @@ export class ProductOrderService {
     return estimated;
   }
 
+  private normalizeStatus(status: string) {
+    return String(status ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_');
+  }
+
+  private async ensureAdminStatusEnum() {
+    await this.productOrderRepository.query(`
+      ALTER TYPE "public"."product_orders_status_enum"
+      ADD VALUE IF NOT EXISTS 'out_for_delivery'
+    `);
+  }
+
+  getAvailableStatuses() {
+    return {
+      data: ADMIN_PRODUCT_ORDER_STATUSES.map((status) => ({
+        value: status,
+        label: PRODUCT_ORDER_STATUS_LABELS[status],
+      })),
+    };
+  }
+
   private mapOrder(o: ProductOrder) {
     return {
       id: o.id,
@@ -48,6 +91,7 @@ export class ProductOrderService {
       price: parseFloat(o.price.toString()),
       total: parseFloat(o.price.toString()) * o.quantity,
       status: o.status,
+      statusLabel: PRODUCT_ORDER_STATUS_LABELS[o.status],
       shippingAddress: o.shippingAddress,
       trackingNumber: o.trackingNumber,
       courierName: o.courierName,
@@ -74,7 +118,7 @@ export class ProductOrderService {
       .orderBy('o.orderedAt', 'DESC');
 
     if (status && status !== 'all') {
-      qb.andWhere('o.status = :status', { status });
+      qb.andWhere('o.status = :status', { status: this.normalizeStatus(status) });
     }
     if (role && role !== 'all') {
       qb.andWhere('o.userRole = :role', { role });
@@ -102,37 +146,63 @@ export class ProductOrderService {
     return this.mapOrder(order);
   }
 
-  async updateStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string }) {
+  async updateStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string; refundMessage?: string }) {
+    const normalizedStatus = this.normalizeStatus(status);
     const order = await this.productOrderRepository.findOne({ where: { id } });
     if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
       throw new NotFoundException('Product order not found');
     }
 
-    const validStatuses = Object.values(ProductOrderStatus);
-    if (!validStatuses.includes(status as ProductOrderStatus)) {
-      throw new BadRequestException(`Invalid status: ${status}. Valid: ${validStatuses.join(', ')}`);
+    if (!ADMIN_PRODUCT_ORDER_STATUSES.includes(normalizedStatus as ProductOrderStatus)) {
+      throw new BadRequestException(
+        `Invalid status: ${status}. Valid: ${ADMIN_PRODUCT_ORDER_STATUSES.join(', ')}`,
+      );
     }
+    await this.ensureAdminStatusEnum();
 
     const transitions: Record<string, string[]> = {
-      [ProductOrderStatus.PENDING]: [ProductOrderStatus.APPROVED, ProductOrderStatus.REJECTED, ProductOrderStatus.SHIPPED, ProductOrderStatus.DELIVERED],
-      [ProductOrderStatus.APPROVED]: [ProductOrderStatus.PENDING, ProductOrderStatus.SHIPPED, ProductOrderStatus.REJECTED, ProductOrderStatus.DELIVERED],
-      [ProductOrderStatus.SHIPPED]: [ProductOrderStatus.APPROVED, ProductOrderStatus.DELIVERED, ProductOrderStatus.REJECTED],
-      [ProductOrderStatus.DELIVERED]: [ProductOrderStatus.SHIPPED, ProductOrderStatus.REJECTED],
-      [ProductOrderStatus.REJECTED]: [ProductOrderStatus.PENDING, ProductOrderStatus.APPROVED],
+      [ProductOrderStatus.PENDING]: [
+        ProductOrderStatus.OUT_FOR_DELIVERY,
+        ProductOrderStatus.REJECTED,
+        ProductOrderStatus.SHIPPED,
+        ProductOrderStatus.DELIVERED,
+      ],
+      [ProductOrderStatus.APPROVED]: [
+        ProductOrderStatus.PENDING,
+        ProductOrderStatus.OUT_FOR_DELIVERY,
+        ProductOrderStatus.SHIPPED,
+        ProductOrderStatus.REJECTED,
+        ProductOrderStatus.DELIVERED,
+      ],
+      [ProductOrderStatus.OUT_FOR_DELIVERY]: [
+        ProductOrderStatus.SHIPPED,
+        ProductOrderStatus.DELIVERED,
+        ProductOrderStatus.REJECTED,
+      ],
+      [ProductOrderStatus.SHIPPED]: [
+        ProductOrderStatus.OUT_FOR_DELIVERY,
+        ProductOrderStatus.DELIVERED,
+        ProductOrderStatus.REJECTED,
+      ],
+      [ProductOrderStatus.DELIVERED]: [ProductOrderStatus.REJECTED],
+      [ProductOrderStatus.REJECTED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY],
+      [ProductOrderStatus.CANCELLED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY],
+      [ProductOrderStatus.RETURNED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY],
+      [ProductOrderStatus.REFUNDED]: [],
     };
 
     const allowed = transitions[order.status] ?? [];
-    if (status !== order.status && !allowed.includes(status)) {
+    if (normalizedStatus !== order.status && !allowed.includes(normalizedStatus)) {
       throw new BadRequestException(
-        `Cannot transition from '${order.status}' to '${status}'. Allowed: ${allowed.join(', ') || 'none'}`,
+        `Cannot transition from '${order.status}' to '${normalizedStatus}'. Allowed: ${allowed.join(', ') || 'none'}`,
       );
     }
 
-    const updateData: Partial<ProductOrder> = { status: status as ProductOrderStatus };
-    if (!order.estimatedDeliveryAt && status !== ProductOrderStatus.REJECTED) {
+    const updateData: Partial<ProductOrder> = { status: normalizedStatus as ProductOrderStatus };
+    if (!order.estimatedDeliveryAt && normalizedStatus !== ProductOrderStatus.REJECTED) {
       updateData.estimatedDeliveryAt = this.estimateDeliveryDate(order.paidAt ?? order.orderedAt ?? new Date());
     }
-    if (extra?.rejectionReason && (status === ProductOrderStatus.REJECTED)) {
+    if (extra?.rejectionReason && (normalizedStatus === ProductOrderStatus.REJECTED)) {
       updateData.rejectionReason = extra.rejectionReason;
     }
     if (extra?.trackingNumber) {
@@ -141,38 +211,61 @@ export class ProductOrderService {
     if (extra?.courierName) {
       updateData.courierName = extra.courierName;
     }
-    if (status === ProductOrderStatus.PENDING) {
+    if (normalizedStatus === ProductOrderStatus.PENDING) {
       updateData.deliveryNotes = 'Payment done. Order is waiting for dispatch.';
     }
-    if (status === ProductOrderStatus.APPROVED) {
+    if (normalizedStatus === ProductOrderStatus.APPROVED) {
       updateData.deliveryNotes = 'Order confirmed and ready for packing.';
     }
-    if (status === ProductOrderStatus.SHIPPED) {
+    if (normalizedStatus === ProductOrderStatus.OUT_FOR_DELIVERY) {
+      updateData.dispatchedAt = order.dispatchedAt ?? new Date();
+      updateData.deliveryNotes = 'Order is out for delivery.';
+    }
+    if (normalizedStatus === ProductOrderStatus.SHIPPED) {
       updateData.dispatchedAt = order.dispatchedAt ?? new Date();
       updateData.deliveryNotes = extra?.courierName
         ? `Order dispatched through ${extra.courierName}.`
         : 'Order dispatched. Delivery partner update is awaited.';
     }
-    if (status === ProductOrderStatus.DELIVERED) {
+    if (normalizedStatus === ProductOrderStatus.DELIVERED) {
       updateData.deliveredAt = order.deliveredAt ?? new Date();
       updateData.deliveryNotes = 'Order delivered successfully.';
     }
-    if (status === ProductOrderStatus.REJECTED) {
+    if (normalizedStatus === ProductOrderStatus.REJECTED) {
       const isPaid = order.paymentStatus === 'paid';
       updateData.rejectedAt = new Date();
       updateData.refundStatus = isPaid ? 'pending' : null;
-      updateData.refundMessage = isPaid
+      updateData.refundMessage = extra?.refundMessage || (isPaid
         ? 'Order rejected. Your money will be refunded within 2 business days.'
-        : 'Order rejected before payment confirmation.';
+        : 'Order rejected before payment confirmation.');
       updateData.deliveryNotes = isPaid
         ? 'Rejected by admin. Refund will be processed within 2 business days.'
         : 'Rejected by admin.';
       updateData.rejectionReason = extra?.rejectionReason || order.rejectionReason || 'Rejected by admin';
     }
+    if (status === ProductOrderStatus.CANCELLED) {
+      const isPaid = order.paymentStatus === 'paid';
+      updateData.refundStatus = isPaid ? 'pending' : null;
+      updateData.refundMessage = extra?.refundMessage || (isPaid
+        ? 'Order cancelled. Refund will be processed within 24 hours.'
+        : 'Order cancelled successfully.');
+      updateData.deliveryNotes = 'Order cancelled.';
+    }
+    if (status === ProductOrderStatus.RETURNED) {
+      updateData.refundStatus = order.paymentStatus === 'paid' ? 'pending' : order.refundStatus;
+      updateData.refundMessage = extra?.refundMessage || 'Return accepted. Refund will be processed within 24 hours after pickup verification.';
+      updateData.deliveryNotes = 'Return accepted by admin.';
+    }
+    if (status === ProductOrderStatus.REFUNDED) {
+      updateData.paymentStatus = order.paymentStatus === 'paid' ? 'refunded' : order.paymentStatus;
+      updateData.refundStatus = 'completed';
+      updateData.refundMessage = extra?.refundMessage || 'Refund completed.';
+      updateData.deliveryNotes = 'Refund completed.';
+    }
 
     // ── Credit points to user/counterboy wallet on delivery ──
     if (
-      status === ProductOrderStatus.DELIVERED &&
+      normalizedStatus === ProductOrderStatus.DELIVERED &&
       (order.userRole === UserRole.USER || order.userRole === UserRole.COUNTERBOY)
     ) {
       const pointsConfig = await this.pointsConfigRepository.findOne({
@@ -236,9 +329,11 @@ export class ProductOrderService {
 
     await this.productOrderRepository.update(id, updateData);
     return {
-      message: status === ProductOrderStatus.REJECTED
+      message: normalizedStatus === ProductOrderStatus.REJECTED
         ? 'Order rejected. Refund message sent to customer.'
         : 'Order status updated successfully',
+      status: normalizedStatus,
+      statusLabel: PRODUCT_ORDER_STATUS_LABELS[normalizedStatus as ProductOrderStatus],
       refundMessage: updateData.refundMessage,
     };
   }
@@ -266,15 +361,23 @@ export class ProductOrderService {
       .addSelect('COUNT(*) FILTER (WHERE o.status = :pending)::int', 'pending')
       .addSelect('COUNT(*) FILTER (WHERE o.status = :approved)::int', 'approved')
       .addSelect('COUNT(*) FILTER (WHERE o.status = :shipped)::int', 'shipped')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :outForDelivery)::int', 'outForDelivery')
       .addSelect('COUNT(*) FILTER (WHERE o.status = :delivered)::int', 'delivered')
       .addSelect('COUNT(*) FILTER (WHERE o.status = :rejected)::int', 'rejected')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :cancelled)::int', 'cancelled')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :returned)::int', 'returned')
+      .addSelect('COUNT(*) FILTER (WHERE o.status = :refunded)::int', 'refunded')
       .where('(o.paymentMethod <> :razorpay OR o.paymentStatus = :paid)')
       .setParameters({
         pending: ProductOrderStatus.PENDING,
         approved: ProductOrderStatus.APPROVED,
+        outForDelivery: ProductOrderStatus.OUT_FOR_DELIVERY,
         shipped: ProductOrderStatus.SHIPPED,
         delivered: ProductOrderStatus.DELIVERED,
         rejected: ProductOrderStatus.REJECTED,
+        cancelled: ProductOrderStatus.CANCELLED,
+        returned: ProductOrderStatus.RETURNED,
+        refunded: ProductOrderStatus.REFUNDED,
         razorpay: 'razorpay',
         paid: 'paid',
       })
@@ -284,9 +387,13 @@ export class ProductOrderService {
       total: Number(row?.total ?? 0),
       pending: Number(row?.pending ?? 0),
       approved: Number(row?.approved ?? 0),
+      outForDelivery: Number(row?.outForDelivery ?? 0),
       shipped: Number(row?.shipped ?? 0),
       delivered: Number(row?.delivered ?? 0),
       rejected: Number(row?.rejected ?? 0),
+      cancelled: Number(row?.cancelled ?? 0),
+      returned: Number(row?.returned ?? 0),
+      refunded: Number(row?.refunded ?? 0),
     };
   }
 }

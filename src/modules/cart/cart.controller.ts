@@ -134,4 +134,37 @@ export class CartController {
   getMyOrders(@Request() req: any) {
     return this.cartService.getMyOrders(req.user.id, req.user.role);
   }
+
+  @Put('product-orders/:id/cancel')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request product order cancellation within 24 hours' })
+  cancelOrder(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.cartService.requestOrderAction(req.user.id, req.user.role, id, 'cancel', body.reason);
+  }
+
+  @Put('product-orders/:id/return')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request product order return within 24 hours of delivery' })
+  returnOrder(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.cartService.requestOrderAction(req.user.id, req.user.role, id, 'return', body.reason);
+  }
+
+  @Put('product-orders/:id/refund')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request product order refund within 24 hours of delivery' })
+  refundOrder(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.cartService.requestOrderAction(req.user.id, req.user.role, id, 'refund', body.reason);
+  }
 }

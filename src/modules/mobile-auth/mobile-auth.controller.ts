@@ -17,6 +17,7 @@ import {
   VerifyOtpDto,
   MobileRefreshDto,
   PasswordLoginDto,
+  GoogleCustomerAuthDto,
   RegisterCounterBoyDto,
   RegisterDealerDto,
   RegisterElectricianDto,
@@ -56,6 +57,14 @@ export class MobileAuthController {
   @ApiOperation({ summary: 'Login with phone + password (all 4 roles)' })
   passwordLogin(@Body() body: PasswordLoginDto) {
     return this.mobileAuthService.passwordLogin(body.phone, body.role, body.password);
+  }
+
+  @Post('google/user')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Signup or login customer with Google' })
+  googleCustomerAuth(@Body() body: GoogleCustomerAuthDto) {
+    return this.mobileAuthService.googleCustomerAuth(body.idToken);
   }
 
   @Post('password-reset/send-otp')
