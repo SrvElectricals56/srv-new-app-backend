@@ -42,6 +42,20 @@ export class ProductOrderController {
     return this.productOrderService.getStats();
   }
 
+  @Get('summary/stats')
+  @ApiOperation({ summary: 'Get product order stats' })
+  @ApiResponse({ status: 200, description: 'Order statistics' })
+  getStatsAlias() {
+    return this.productOrderService.getStats();
+  }
+
+  @Get('statuses/options')
+  @ApiOperation({ summary: 'Get admin product order status options' })
+  @ApiResponse({ status: 200, description: 'Available product order statuses' })
+  getStatusOptions() {
+    return this.productOrderService.getAvailableStatuses();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get product order by ID' })
   @ApiResponse({ status: 200, description: 'Product order details' })
@@ -55,12 +69,13 @@ export class ProductOrderController {
   @ApiResponse({ status: 200, description: 'Order status updated' })
   updateStatus(
     @Param('id') id: string,
-    @Body() body: { status: string; rejectionReason?: string; trackingNumber?: string; courierName?: string },
+    @Body() body: { status: string; rejectionReason?: string; trackingNumber?: string; courierName?: string; refundMessage?: string },
   ) {
     return this.productOrderService.updateStatus(id, body.status, {
       rejectionReason: body.rejectionReason,
       trackingNumber: body.trackingNumber,
       courierName: body.courierName,
+      refundMessage: body.refundMessage,
     });
   }
 
