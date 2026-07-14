@@ -10,9 +10,13 @@ import { UserRole } from '../../common/enums';
 export enum ProductOrderStatus {
   PENDING = 'pending',
   APPROVED = 'approved',
+  OUT_FOR_DELIVERY = 'out_for_delivery',
   SHIPPED = 'shipped',
   DELIVERED = 'delivered',
   REJECTED = 'rejected',
+  CANCELLED = 'cancelled',
+  RETURNED = 'returned',
+  REFUNDED = 'refunded',
 }
 
 @Entity('product_orders')

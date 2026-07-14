@@ -176,6 +176,12 @@ export class MobileRefreshDto {
   refreshToken: string;
 }
 
+export class GoogleCustomerAuthDto {
+  @IsString()
+  @IsNotEmpty()
+  idToken: string;
+}
+
 export class RegisterUserDto {
   @IsString()
   @IsNotEmpty()
