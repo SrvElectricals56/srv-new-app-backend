@@ -44,6 +44,7 @@ export class VerifyOtpDto {
 export class PasswordLoginDto extends MobileLoginDto {
   @IsString()
   @MinLength(1)
+  @MaxLength(128)
   password: string;
 }
 
@@ -58,8 +59,9 @@ export class VerifySignupOtpDto extends SendSignupOtpDto {
 export class ResetPasswordDto extends VerifyOtpDto {
   @IsString()
   @MinLength(8)
-  @Matches(/^\S{8,}$/, {
-    message: 'Password must be at least 8 characters long',
+  @MaxLength(128)
+  @Matches(/^(?=.*[A-Z])(?=.*[^A-Za-z0-9])\S{8,}$/, {
+    message: 'Password must be at least 8 characters long and include one capital letter and one special character',
   })
   newPassword: string;
 }
@@ -81,6 +83,7 @@ class BaseRegistrationDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(128)
   password?: string;
 
   @IsOptional()

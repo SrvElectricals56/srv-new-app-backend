@@ -46,7 +46,6 @@ export class PlayService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    await this.ensureInteractionColumns();
     await this.syncInstagramVideos({ silent: true });
   }
 
@@ -526,25 +525,6 @@ export class PlayService implements OnModuleInit {
       likedByMe: userId ? likes.some((like) => like.userId === userId) : false,
       comments,
     };
-  }
-
-  private async ensureInteractionColumns() {
-    const queryRunner = this.playRepository.manager.connection.createQueryRunner();
-    await queryRunner.connect();
-    try {
-      await queryRunner.query(
-        `ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "shares" jsonb NOT NULL DEFAULT '[]'::jsonb`,
-      );
-      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalSource" character varying`);
-      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalId" character varying`);
-      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalPermalink" character varying`);
-      await queryRunner.query(`ALTER TABLE "plays" ADD COLUMN IF NOT EXISTS "externalPublishedAt" timestamptz`);
-      await queryRunner.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "IDX_plays_external_source_id" ON "plays" ("externalSource", "externalId") WHERE "externalSource" IS NOT NULL AND "externalId" IS NOT NULL`,
-      );
-    } finally {
-      await queryRunner.release();
-    }
   }
 
   private getInstagramAccountId() {
