@@ -8,6 +8,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TransactionType, TransactionSource, UserRole } from '../../common/enums';
+import { NotificationService } from '../notification/notification.service';
 
 const ADMIN_PRODUCT_ORDER_STATUSES = [
   ProductOrderStatus.PENDING,
@@ -15,12 +16,13 @@ const ADMIN_PRODUCT_ORDER_STATUSES = [
   ProductOrderStatus.SHIPPED,
   ProductOrderStatus.DELIVERED,
   ProductOrderStatus.REJECTED,
+  ProductOrderStatus.REFUNDED,
 ];
 
 const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
   [ProductOrderStatus.PENDING]: 'Pending',
   [ProductOrderStatus.APPROVED]: 'Approved',
-  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Out for Delivery',
+  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Shipped',
   [ProductOrderStatus.SHIPPED]: 'Shipped',
   [ProductOrderStatus.DELIVERED]: 'Delivered',
   [ProductOrderStatus.REJECTED]: 'Rejected',
@@ -45,12 +47,19 @@ export class ProductOrderService {
     @InjectRepository(CounterBoy)
     private counterBoyRepository: Repository<CounterBoy>,
     private dataSource: DataSource,
+    private notificationService: NotificationService,
   ) {}
 
   private estimateDeliveryDate(from = new Date()) {
     const estimated = new Date(from);
     estimated.setDate(estimated.getDate() + 5);
     return estimated;
+  }
+
+  private getOrderCode(id: string) {
+    let hash = 0;
+    for (const character of String(id)) hash = ((hash * 31) + character.charCodeAt(0)) | 0;
+    return `SRV${String(Math.abs(hash) % 100000).padStart(5, '0')}`;
   }
 
   private normalizeStatus(status: string) {
@@ -79,6 +88,7 @@ export class ProductOrderService {
   private mapOrder(o: ProductOrder) {
     return {
       id: o.id,
+      orderCode: this.getOrderCode(o.id),
       userId: o.userId,
       userRole: o.userRole,
       userName: o.userName,
@@ -107,6 +117,10 @@ export class ProductOrderService {
       refundStatus: o.refundStatus,
       refundMessage: o.refundMessage,
       deliveryNotes: o.deliveryNotes,
+      cancelReason: o.cancelReason,
+      returnReason: o.returnReason,
+      refundReason: o.refundReason,
+      customerActionAt: o.customerActionAt,
       orderedAt: o.orderedAt,
       updatedAt: o.updatedAt,
     };
@@ -166,6 +180,7 @@ export class ProductOrderService {
         ProductOrderStatus.REJECTED,
         ProductOrderStatus.SHIPPED,
         ProductOrderStatus.DELIVERED,
+        ProductOrderStatus.REFUNDED,
       ],
       [ProductOrderStatus.APPROVED]: [
         ProductOrderStatus.PENDING,
@@ -173,21 +188,24 @@ export class ProductOrderService {
         ProductOrderStatus.SHIPPED,
         ProductOrderStatus.REJECTED,
         ProductOrderStatus.DELIVERED,
+        ProductOrderStatus.REFUNDED,
       ],
       [ProductOrderStatus.OUT_FOR_DELIVERY]: [
         ProductOrderStatus.SHIPPED,
         ProductOrderStatus.DELIVERED,
         ProductOrderStatus.REJECTED,
+        ProductOrderStatus.REFUNDED,
       ],
       [ProductOrderStatus.SHIPPED]: [
         ProductOrderStatus.OUT_FOR_DELIVERY,
         ProductOrderStatus.DELIVERED,
         ProductOrderStatus.REJECTED,
+        ProductOrderStatus.REFUNDED,
       ],
-      [ProductOrderStatus.DELIVERED]: [ProductOrderStatus.REJECTED],
+      [ProductOrderStatus.DELIVERED]: [ProductOrderStatus.REJECTED, ProductOrderStatus.REFUNDED],
       [ProductOrderStatus.REJECTED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY],
-      [ProductOrderStatus.CANCELLED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY],
-      [ProductOrderStatus.RETURNED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY],
+      [ProductOrderStatus.CANCELLED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY, ProductOrderStatus.REFUNDED],
+      [ProductOrderStatus.RETURNED]: [ProductOrderStatus.PENDING, ProductOrderStatus.OUT_FOR_DELIVERY, ProductOrderStatus.REFUNDED],
       [ProductOrderStatus.REFUNDED]: [],
     };
 
@@ -236,10 +254,10 @@ export class ProductOrderService {
       updateData.rejectedAt = new Date();
       updateData.refundStatus = isPaid ? 'pending' : null;
       updateData.refundMessage = extra?.refundMessage || (isPaid
-        ? 'Order rejected. Your money will be refunded within 2 business days.'
+        ? 'Order rejected. Your refund will be credited within 4 to 5 working days.'
         : 'Order rejected before payment confirmation.');
       updateData.deliveryNotes = isPaid
-        ? 'Rejected by admin. Refund will be processed within 2 business days.'
+        ? 'Rejected by admin. Refund will be credited within 4 to 5 working days.'
         : 'Rejected by admin.';
       updateData.rejectionReason = extra?.rejectionReason || order.rejectionReason || 'Rejected by admin';
     }
@@ -247,13 +265,13 @@ export class ProductOrderService {
       const isPaid = order.paymentStatus === 'paid';
       updateData.refundStatus = isPaid ? 'pending' : null;
       updateData.refundMessage = extra?.refundMessage || (isPaid
-        ? 'Order cancelled. Refund will be processed within 24 hours.'
+        ? 'Order cancelled. Your refund will be credited within 4 to 5 working days.'
         : 'Order cancelled successfully.');
       updateData.deliveryNotes = 'Order cancelled.';
     }
     if (status === ProductOrderStatus.RETURNED) {
       updateData.refundStatus = order.paymentStatus === 'paid' ? 'pending' : order.refundStatus;
-      updateData.refundMessage = extra?.refundMessage || 'Return accepted. Refund will be processed within 24 hours after pickup verification.';
+      updateData.refundMessage = extra?.refundMessage || 'Return accepted. Your refund will be credited within 4 to 5 working days after pickup verification.';
       updateData.deliveryNotes = 'Return accepted by admin.';
     }
     if (status === ProductOrderStatus.REFUNDED) {
@@ -328,6 +346,22 @@ export class ProductOrderService {
     }
 
     await this.productOrderRepository.update(id, updateData);
+    if (normalizedStatus === ProductOrderStatus.REFUNDED) {
+      try {
+        const notification = await this.notificationService.create({
+          title: 'Refund completed',
+          message: `Your refund for order ${this.mapOrder(order).orderCode} has been completed successfully.`,
+          targetRole: order.userRole,
+          targetUserIds: [order.userId],
+          actionUrl: '/profile/orders',
+        }, 'system-refund');
+        await this.notificationService.send(notification.id);
+      } catch (error) {
+        // Do not undo a confirmed refund if a device has no push token or the
+        // external notification provider is temporarily unavailable.
+        console.warn(`Refund notification could not be sent for order ${order.id}`, error);
+      }
+    }
     return {
       message: normalizedStatus === ProductOrderStatus.REJECTED
         ? 'Order rejected. Refund message sent to customer.'

@@ -34,7 +34,7 @@ import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
   [ProductOrderStatus.PENDING]: 'Pending',
   [ProductOrderStatus.APPROVED]: 'Approved',
-  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Out for Delivery',
+  [ProductOrderStatus.OUT_FOR_DELIVERY]: 'Shipped',
   [ProductOrderStatus.SHIPPED]: 'Shipped',
   [ProductOrderStatus.DELIVERED]: 'Delivered',
   [ProductOrderStatus.REJECTED]: 'Rejected',
@@ -42,6 +42,12 @@ const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
   [ProductOrderStatus.RETURNED]: 'Returned',
   [ProductOrderStatus.REFUNDED]: 'Refunded',
 };
+
+function getPublicOrderCode(id: string) {
+  let hash = 0;
+  for (const character of String(id)) hash = ((hash * 31) + character.charCodeAt(0)) | 0;
+  return `SRV${String(Math.abs(hash) % 100000).padStart(5, '0')}`;
+}
 
 @Injectable()
 export class MobileService {
@@ -1171,7 +1177,9 @@ export class MobileService {
         description: p.description ?? '',
         imageUrl: this.normalizeUploadUrl(p.image) ?? p.image ?? null,
         pointsRequired: p.points ?? 0,
-        mrp: p.mrp ?? 0,
+        // Older gift products used price only; expose it as MRP until an explicit
+        // MRP has been saved so every gift card shows the correct value.
+        mrp: p.mrp ?? p.price ?? 0,
         stock: p.stock ?? 0,
         badge: p.badge ?? '',
         targetRole: p.subCategory ?? 'all',
@@ -2298,6 +2306,7 @@ export class MobileService {
       const giftImage = this.normalizeUploadUrl(o.giftImage) ?? giftProductImageById.get(o.giftProductId) ?? o.giftImage ?? null;
       return ({
       id: o.id,
+      orderCode: getPublicOrderCode(o.id),
       type: 'gift' as const,
       status: o.status,
       title: o.giftName,
@@ -2334,9 +2343,11 @@ export class MobileService {
         this.isWithinHours(o.deliveredAt, 24);
       const canRefund =
         o.paymentStatus === 'paid' &&
-        !['refunded', 'rejected'].includes(status);
+        !['refunded', 'rejected'].includes(status) &&
+        !['requested', 'completed'].includes(String(o.refundStatus ?? '').toLowerCase());
       return ({
       id: o.id,
+      orderCode: getPublicOrderCode(o.id),
       type: 'product' as const,
       status: o.status,
       statusLabel: PRODUCT_ORDER_STATUS_LABELS[o.status],
@@ -2366,6 +2377,10 @@ export class MobileService {
       refundMessage: o.refundMessage ?? null,
       rejectionReason: o.rejectionReason ?? null,
       deliveryNotes: o.deliveryNotes ?? null,
+      cancelReason: o.cancelReason ?? null,
+      returnReason: o.returnReason ?? null,
+      refundReason: o.refundReason ?? null,
+      customerActionAt: o.customerActionAt?.toISOString() ?? null,
       canCancel,
       canReturn,
       canRefund,

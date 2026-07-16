@@ -34,6 +34,8 @@ const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
 
 @Injectable()
 export class CartService {
+  private paymentSchemaReady?: Promise<void>;
+
   constructor(
     @InjectRepository(ProductCartItem)
     private cartRepo: Repository<ProductCartItem>,
@@ -167,6 +169,10 @@ export class CartService {
       ALTER TABLE "product_orders"
       ADD COLUMN IF NOT EXISTS "deliveryNotes" text
     `);
+    for (const column of ['cancelReason', 'returnReason', 'refundReason']) {
+      await this.orderRepo.query(`ALTER TABLE "product_orders" ADD COLUMN IF NOT EXISTS "${column}" text`);
+    }
+    await this.orderRepo.query(`ALTER TABLE "product_orders" ADD COLUMN IF NOT EXISTS "customerActionAt" timestamptz`);
     await this.orderRepo.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS "IDX_product_orders_razorpay_order"
       ON "product_orders" ("razorpayOrderId")
@@ -177,6 +183,16 @@ export class CartService {
       ON "product_orders" ("razorpayPaymentId")
       WHERE "razorpayPaymentId" IS NOT NULL
     `);
+  }
+
+  private ensurePaymentSchema() {
+    if (!this.paymentSchemaReady) {
+      this.paymentSchemaReady = this.ensurePaymentColumns().catch((error) => {
+        this.paymentSchemaReady = undefined;
+        throw error;
+      });
+    }
+    return this.paymentSchemaReady;
   }
 
   private estimateDeliveryDate(from = new Date()) {
@@ -886,11 +902,10 @@ export class CartService {
     action: 'cancel' | 'return' | 'refund',
     reason?: string,
   ) {
+    // Existing installations can predate the returned/refunded enum values.
+    // Initialise the compatible schema once before an action writes either value.
+    await this.ensurePaymentSchema();
     const normalizedRole = this.normalizeRole(role);
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(orderId)) {
-      throw new NotFoundException('Product order not found');
-    }
     const order = await this.orderRepo.findOne({
       where: { id: orderId, userId, userRole: normalizedRole },
     });
@@ -912,9 +927,11 @@ export class CartService {
         status: ProductOrderStatus.CANCELLED,
         refundStatus: order.paymentStatus === 'paid' ? 'pending' : null,
         refundMessage: order.paymentStatus === 'paid'
-          ? 'Cancellation requested. Refund will be processed within 24 hours.'
+          ? 'Cancellation requested. Your refund will be credited within 4 to 5 working days.'
           : 'Order cancelled successfully.',
-        deliveryNotes: note ? `Cancellation requested: ${note}` : 'Cancellation requested by customer.',
+        deliveryNotes: note ? `Cancelled by user: ${note}` : 'Cancelled by user.',
+        cancelReason: note || 'No reason provided',
+        customerActionAt: new Date(),
       });
       return { message: 'Order cancellation requested successfully' };
     }
@@ -926,8 +943,10 @@ export class CartService {
       await this.orderRepo.update(order.id, {
         status: ProductOrderStatus.RETURNED,
         refundStatus: order.paymentStatus === 'paid' ? 'pending' : order.refundStatus,
-        refundMessage: 'Return requested. Refund will be processed after admin verification.',
-        deliveryNotes: note ? `Return requested: ${note}` : 'Return requested by customer.',
+        refundMessage: 'Return requested. After verification, your refund will be credited within 4 to 5 working days.',
+        deliveryNotes: note ? `Return requested by user: ${note}` : 'Return requested by user.',
+        returnReason: note || 'No reason provided',
+        customerActionAt: new Date(),
       });
       return { message: 'Return requested successfully' };
     }
@@ -939,10 +958,13 @@ export class CartService {
       throw new BadRequestException('Refund is not available for this order status');
     }
     await this.orderRepo.update(order.id, {
-      status: ProductOrderStatus.REFUNDED,
+      // A customer request only initiates the refund. The status becomes
+      // REFUNDED later, when the admin confirms that payment was completed.
       refundStatus: 'requested',
-      refundMessage: 'Refund requested. Admin will verify and process it within 24 hours.',
-      deliveryNotes: note ? `Refund requested: ${note}` : 'Refund requested by customer.',
+      refundMessage: 'Your refund is in process. Please wait 4 to 5 working days for the amount to be credited.',
+      deliveryNotes: note ? `Refund requested by user: ${note}` : 'Refund requested by user.',
+      refundReason: note || 'No reason provided',
+      customerActionAt: new Date(),
     });
     return { message: 'Refund requested successfully' };
   }

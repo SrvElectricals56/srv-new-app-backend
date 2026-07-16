@@ -131,7 +131,7 @@ export class NotificationService {
         title: notification.title,
         body: notification.message,
         data: { notificationId: notification.id, actionUrl: notification.actionUrl ?? null },
-        channelId: 'default',
+        channelId: 'srv_alerts_v2',
         priority: 'high',
       }));
       if (!messages.length) continue;
