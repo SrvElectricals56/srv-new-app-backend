@@ -8,6 +8,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TransactionType, TransactionSource, UserRole } from '../../common/enums';
+import { NotificationService } from '../notification/notification.service';
 
 const ADMIN_PRODUCT_ORDER_STATUSES = [
   ProductOrderStatus.PENDING,
@@ -46,6 +47,7 @@ export class ProductOrderService {
     @InjectRepository(CounterBoy)
     private counterBoyRepository: Repository<CounterBoy>,
     private dataSource: DataSource,
+    private notificationService: NotificationService,
   ) {}
 
   private estimateDeliveryDate(from = new Date()) {
@@ -344,6 +346,22 @@ export class ProductOrderService {
     }
 
     await this.productOrderRepository.update(id, updateData);
+    if (normalizedStatus === ProductOrderStatus.REFUNDED) {
+      try {
+        const notification = await this.notificationService.create({
+          title: 'Refund completed',
+          message: `Your refund for order ${this.mapOrder(order).orderCode} has been completed successfully.`,
+          targetRole: order.userRole,
+          targetUserIds: [order.userId],
+          actionUrl: '/profile/orders',
+        }, 'system-refund');
+        await this.notificationService.send(notification.id);
+      } catch (error) {
+        // Do not undo a confirmed refund if a device has no push token or the
+        // external notification provider is temporarily unavailable.
+        console.warn(`Refund notification could not be sent for order ${order.id}`, error);
+      }
+    }
     return {
       message: normalizedStatus === ProductOrderStatus.REJECTED
         ? 'Order rejected. Refund message sent to customer.'

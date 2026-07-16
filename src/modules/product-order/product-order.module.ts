@@ -8,9 +8,10 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Product } from '../../database/entities/product.entity';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ProductOrder, PointsConfig, Wallet, AppUser, CounterBoy, Product])],
+  imports: [TypeOrmModule.forFeature([ProductOrder, PointsConfig, Wallet, AppUser, CounterBoy, Product]), NotificationModule],
   controllers: [ProductOrderController],
   providers: [ProductOrderService],
   exports: [ProductOrderService],
