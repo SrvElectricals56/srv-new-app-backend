@@ -21,6 +21,27 @@ export class GiftService {
     private redemptionService: RedemptionService,
   ) {}
 
+  private async getGiftCode(product: Product): Promise<string> {
+    if (/^SRV\d{5}$/.test(product.sku ?? '')) return product.sku!;
+
+    const code = await this.generateGiftCode();
+    await this.productRepository.update(product.id, { sku: code });
+    product.sku = code;
+    return code;
+  }
+
+  private async generateGiftCode(): Promise<string> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const code = `SRV${Math.floor(10000 + Math.random() * 90000)}`;
+      const existing = await this.productRepository.findOne({ where: { sku: code } });
+      if (!existing) {
+        return code;
+      }
+    }
+
+    throw new BadRequestException('Unable to generate a unique gift ID. Please try again.');
+  }
+
   // ─── Gift Products ────────────────────────────────────────────────────────
 
   async getProducts(page: number = 1, limit: number = 20, type?: string) {
@@ -38,15 +59,18 @@ export class GiftService {
 
     const [data, total] = await qb.getManyAndCount();
 
-    const mapped = data.map((p) => ({
+    const mapped = await Promise.all(data.map(async (p) => ({
       id: p.id,
+      displayId: await this.getGiftCode(p),
       name: p.name,
       image: p.image ?? '',
       pointsRequired: p.points ?? 0,
+      price: Number(p.price ?? 0),
+      mrp: Number(p.mrp ?? p.price ?? 0),
       stock: p.stock ?? 0,
       status: p.isActive ? 'active' : 'inactive',
       type: p.subCategory ?? 'electrician',
-    }));
+    })));
 
     return { data: mapped, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -57,6 +81,7 @@ export class GiftService {
       createGiftProductDto.points ??
       0;
 
+    const giftCode = await this.generateGiftCode();
     const giftProduct = this.productRepository.create({
       name: createGiftProductDto.name,
       sub: createGiftProductDto.sub ?? createGiftProductDto.name,
@@ -70,7 +95,7 @@ export class GiftService {
         : (createGiftProductDto.isActive ?? true),
       price: createGiftProductDto.price ?? 0,
       mrp: createGiftProductDto.mrp,
-      sku: createGiftProductDto.sku,
+      sku: giftCode,
       weight: createGiftProductDto.weight,
       description: createGiftProductDto.description,
       badge: createGiftProductDto.badge,
@@ -79,9 +104,12 @@ export class GiftService {
     const saved = await this.productRepository.save(giftProduct);
     return {
       id: saved.id,
+      displayId: saved.sku,
       name: saved.name,
       image: saved.image ?? '',
       pointsRequired: saved.points ?? 0,
+      price: Number(saved.price ?? 0),
+      mrp: Number(saved.mrp ?? saved.price ?? 0),
       stock: saved.stock ?? 0,
       status: saved.isActive ? 'active' : 'inactive',
       type: saved.subCategory ?? 'electrician',
@@ -100,6 +128,8 @@ export class GiftService {
     const updateData: Partial<Product> = {};
     if (updateGiftProductDto.name !== undefined) updateData.name = updateGiftProductDto.name;
     if (updateGiftProductDto.image !== undefined) updateData.image = updateGiftProductDto.image;
+    if (updateGiftProductDto.price !== undefined) updateData.price = updateGiftProductDto.price;
+    if (updateGiftProductDto.mrp !== undefined) updateData.mrp = updateGiftProductDto.mrp;
     if (updateGiftProductDto.stock !== undefined) updateData.stock = updateGiftProductDto.stock;
     if ((updateGiftProductDto as any).pointsRequired !== undefined)
       updateData.points = (updateGiftProductDto as any).pointsRequired;
@@ -114,9 +144,12 @@ export class GiftService {
     const updated = await this.productRepository.findOne({ where: { id } });
     return {
       id: updated!.id,
+      displayId: updated!.sku,
       name: updated!.name,
       image: updated!.image ?? '',
       pointsRequired: updated!.points ?? 0,
+      price: Number(updated!.price ?? 0),
+      mrp: Number(updated!.mrp ?? updated!.price ?? 0),
       stock: updated!.stock ?? 0,
       status: updated!.isActive ? 'active' : 'inactive',
       type: updated!.subCategory ?? 'electrician',
