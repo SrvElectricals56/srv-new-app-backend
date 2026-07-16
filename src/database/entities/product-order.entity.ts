@@ -115,6 +115,18 @@ export class ProductOrder {
   @Column({ type: 'text', nullable: true })
   deliveryNotes: string;
 
+  @Column({ type: 'text', nullable: true })
+  cancelReason: string;
+
+  @Column({ type: 'text', nullable: true })
+  returnReason: string;
+
+  @Column({ type: 'text', nullable: true })
+  refundReason: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  customerActionAt: Date;
+
   @CreateDateColumn({ type: 'timestamptz' })
   orderedAt: Date;
 
