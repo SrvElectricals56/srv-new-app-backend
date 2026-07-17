@@ -362,9 +362,17 @@ export class MobileService {
   }
 
   private getNumericQrCandidates(qrCandidates: string[]) {
+    const maxBigInt = BigInt('9223372036854775807');
     return qrCandidates
       .map((candidate) => candidate.trim())
-      .filter((candidate) => /^\d+$/.test(candidate));
+      .filter((candidate) => /^\d+$/.test(candidate))
+      .filter((candidate) => {
+        try {
+          return BigInt(candidate) <= maxBigInt;
+        } catch {
+          return false;
+        }
+      });
   }
 
   private async findQrForScan(
@@ -379,18 +387,23 @@ export class MobileService {
       .innerJoinAndSelect('qr.product', 'product')
       .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates });
 
-    if (numericCandidates.length) {
-      exactQuery.orWhere('qr."legacyId" IN (:...legacyIds)', {
-        legacyIds: numericCandidates,
-      });
-    }
-
     if (lock) {
       exactQuery.setLock('pessimistic_write');
     }
 
     const exactMatch = await exactQuery.getOne();
     if (exactMatch) return exactMatch;
+
+    if (numericCandidates.length) {
+      const legacyIdQuery = manager
+        .getRepository(QrCode)
+        .createQueryBuilder('qr')
+        .innerJoinAndSelect('qr.product', 'product')
+        .where('qr."legacyId" IN (:...legacyIds)', { legacyIds: numericCandidates });
+      if (lock) legacyIdQuery.setLock('pessimistic_write');
+      const legacyIdMatch = await legacyIdQuery.getOne();
+      if (legacyIdMatch) return legacyIdMatch;
+    }
 
     const normalizedCandidates = qrCandidates.map((candidate) => candidate.toLowerCase());
     const normalizedQuery = manager
