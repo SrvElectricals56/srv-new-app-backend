@@ -5,6 +5,8 @@ ORIGIN="${ORIGIN:-http://127.0.0.1}"
 CREDENTIAL_FILE="${CREDENTIAL_FILE:-/opt/srv/secrets/staging-admin.txt}"
 MIGRATION_ENV="${MIGRATION_ENV:-/opt/srv/secrets/migration.env}"
 CA_FILE="${CA_FILE:-/opt/srv/secrets/managed-postgres-ca.crt}"
+SMOKE_DATABASE="${SMOKE_DATABASE:-srv_staging}"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-srv-staging}"
 
 test -r "${CREDENTIAL_FILE}"
 test -r "${MIGRATION_ENV}"
@@ -29,7 +31,7 @@ export PGHOST="$(read_env_value DB_HOST)"
 export PGPORT="$(read_env_value DB_PORT)"
 export PGUSER="$(read_env_value DB_USERNAME)"
 export PGPASSWORD="$(read_env_value DB_PASSWORD)"
-export PGDATABASE='srv_staging'
+export PGDATABASE="${SMOKE_DATABASE}"
 export PGSSLMODE='verify-full'
 export PGSSLROOTCERT="${CA_FILE}"
 
@@ -79,7 +81,7 @@ test -n "${qr_code}"
 mobile_token="$(sudo docker exec \
   --env TEST_SUB="${test_user_id}" \
   --env TEST_PHONE="${test_phone}" \
-  srv-staging-backend-1 \
+  "${COMPOSE_PROJECT_NAME}-backend-1" \
   node -e 'const jwt=require("jsonwebtoken"); process.stdout.write(jwt.sign({sub:process.env.TEST_SUB,phone:process.env.TEST_PHONE,role:"electrician",tokenVersion:0},process.env.JWT_SECRET,{expiresIn:"5m"}))')"
 
 QR_CODE="${qr_code}" python3 -c \
