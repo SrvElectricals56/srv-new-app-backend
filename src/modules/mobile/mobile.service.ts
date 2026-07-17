@@ -372,28 +372,35 @@ export class MobileService {
     qrCandidates: string[],
     lock = false,
   ) {
-    const normalizedCandidates = qrCandidates.map((candidate) => candidate.toLowerCase());
     const numericCandidates = this.getNumericQrCandidates(qrCandidates);
-    const query = manager
+    const exactQuery = manager
       .getRepository(QrCode)
       .createQueryBuilder('qr')
       .innerJoinAndSelect('qr.product', 'product')
-      .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates })
-      .orWhere('LOWER(qr.code) IN (:...normalizedQrCodes)', {
-        normalizedQrCodes: normalizedCandidates,
-      });
+      .where('qr.code IN (:...qrCodes)', { qrCodes: qrCandidates });
 
     if (numericCandidates.length) {
-      query.orWhere('qr."legacyId"::text IN (:...legacyIds)', {
+      exactQuery.orWhere('qr."legacyId" IN (:...legacyIds)', {
         legacyIds: numericCandidates,
       });
     }
 
     if (lock) {
-      query.setLock('pessimistic_write');
+      exactQuery.setLock('pessimistic_write');
     }
 
-    return query.getOne();
+    const exactMatch = await exactQuery.getOne();
+    if (exactMatch) return exactMatch;
+
+    const normalizedCandidates = qrCandidates.map((candidate) => candidate.toLowerCase());
+    const normalizedQuery = manager
+      .getRepository(QrCode)
+      .createQueryBuilder('qr')
+      .innerJoinAndSelect('qr.product', 'product')
+      .where('LOWER(qr.code) IN (:...normalizedQrCodes)', { normalizedQrCodes: normalizedCandidates });
+
+    if (lock) normalizedQuery.setLock('pessimistic_write');
+    return normalizedQuery.getOne();
   }
 
   private normalizePhone(phone: string): string {
