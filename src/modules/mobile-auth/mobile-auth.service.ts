@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -11,6 +12,7 @@ import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
+import axios from 'axios';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
@@ -28,6 +30,10 @@ const otpStore = new Map<
   { otp: string; expiresAt: number; failedAttempts: number; verifiedAt?: number }
 >();
 const SIGNUP_OTP_VERIFIED = 'VERIFIED';
+const OTP_TTL_MS = 2 * 60 * 1000;
+const COMBIRDS_SMS_ENDPOINT = 'https://smsapi.edumarcsms.com/api/v1/sendsms';
+const APPROVED_OTP_MESSAGE =
+  'Dear {{name}} user, your OTP for login is: {{otp}}. This code is valid for 2 minutes. OTP is confidential. Do not share it with anyone. - EDUMARC';
 
 @Injectable()
 export class MobileAuthService {
@@ -65,6 +71,53 @@ export class MobileAuthService {
 
   private exposeTestOtp(): boolean {
     return this.getFixedOtp() !== null;
+  }
+
+  private shouldDeliverSms(): boolean {
+    const nodeEnv = this.configService.get<string>('NODE_ENV')?.trim().toLowerCase();
+    const appEnv = this.configService.get<string>('APP_ENV')?.trim().toLowerCase();
+    return nodeEnv === 'production' || appEnv === 'production';
+  }
+
+  private async sendOtpSms(phone: string, otp: string, recipientName?: string | null) {
+    if (!this.shouldDeliverSms()) return;
+
+    const apiKey = this.configService.get<string>('SMS_API_KEY')?.trim();
+    const senderId =
+      this.configService.get<string>('SMS_SENDER_ID')?.trim() ||
+      this.configService.get<string>('SENDER_ID')?.trim();
+    const templateId =
+      this.configService.get<string>('SMS_TEMPLATE_ID')?.trim() ||
+      this.configService.get<string>('TEMPLATE_ID')?.trim();
+    const endpoint = this.configService.get<string>('SMS_API_URL')?.trim() || COMBIRDS_SMS_ENDPOINT;
+
+    if (!apiKey || !senderId || !templateId) {
+      throw new ServiceUnavailableException('SMS delivery is not configured. Please contact support.');
+    }
+
+    const name = String(recipientName ?? 'SRV').trim().replace(/[^A-Za-z .'-]/g, '').slice(0, 40) || 'SRV';
+    const message = APPROVED_OTP_MESSAGE.replace('{{name}}', name).replace('{{otp}}', otp);
+
+    try {
+      await axios.post(
+        endpoint,
+        {
+          number: [`91${this.normalizePhone(phone)}`],
+          message,
+          senderId,
+          templateId,
+        },
+        {
+          headers: { 'Content-Type': 'application/json', apikey: apiKey },
+          timeout: 15_000,
+        },
+      );
+    } catch (error: any) {
+      const providerMessage = error?.response?.data?.message || error?.response?.data?.error;
+      throw new ServiceUnavailableException(
+        providerMessage ? `SMS delivery failed: ${String(providerMessage).slice(0, 160)}` : 'SMS delivery failed. Please try again.',
+      );
+    }
   }
 
   private async generateTokens(payload: { sub: string; phone: string; role: string }) {
@@ -389,9 +442,10 @@ export class MobileAuthService {
 
     const otp = this.generateOtp();
     const key = this.buildLoginOtpKey(phone, role);
+    await this.sendOtpSms(phone, otp, (user as any).name);
     otpStore.set(key, {
       otp,
-      expiresAt: Date.now() + 5 * 60 * 1000,
+      expiresAt: Date.now() + OTP_TTL_MS,
       failedAttempts: 0,
     });
 
@@ -427,9 +481,10 @@ export class MobileAuthService {
     }
 
     const otp = this.generateOtp();
+    await this.sendOtpSms(phone, otp, (user as any).name);
     otpStore.set(this.buildPasswordResetOtpKey(phone, role), {
       otp,
-      expiresAt: Date.now() + 5 * 60 * 1000,
+      expiresAt: Date.now() + OTP_TTL_MS,
       failedAttempts: 0,
     });
 
@@ -462,9 +517,10 @@ export class MobileAuthService {
 
     const otp = this.generateOtp();
     const key = this.buildSignupOtpKey(phone, role);
+    await this.sendOtpSms(phone, otp, 'SRV');
     otpStore.set(key, {
       otp,
-      expiresAt: Date.now() + 10 * 60 * 1000,
+      expiresAt: Date.now() + OTP_TTL_MS,
       failedAttempts: 0,
     });
 
