@@ -167,6 +167,7 @@ SELECT
   CASE u.kyc_status::text
     WHEN '2' THEN 'verified'
     WHEN '1' THEN 'pending'
+    WHEN '0' THEN 'rejected'
     ELSE 'not_submitted'
   END::dealers_kycstatus_enum,
   NULL,
@@ -222,6 +223,7 @@ SELECT
   CASE u.kyc_status::text
     WHEN '2' THEN 'verified'
     WHEN '1' THEN 'pending'
+    WHEN '0' THEN 'rejected'
     ELSE 'not_submitted'
   END::electricians_kycstatus_enum,
   NULL,

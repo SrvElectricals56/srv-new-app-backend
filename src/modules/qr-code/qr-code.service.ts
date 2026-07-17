@@ -39,79 +39,6 @@ export class QrCodeService {
     private adminRepository: Repository<Admin>,
   ) {}
 
-  private async ensureDownloadHistoryTable() {
-    await this.qrDownloadHistoryRepository.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
-    await this.qrDownloadHistoryRepository.query(`
-      CREATE TABLE IF NOT EXISTS "qr_download_history" (
-        "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-        "adminId" text,
-        "adminEmail" text,
-        "adminName" text,
-        "adminRole" text NOT NULL DEFAULT 'staff',
-        "productId" text,
-        "productName" text NOT NULL,
-        "batchId" text,
-        "batchNo" integer,
-        "quantity" integer NOT NULL DEFAULT 1,
-        "downloadType" text NOT NULL DEFAULT 'qr',
-        "downloadedAt" timestamptz NOT NULL DEFAULT now(),
-        "createdAt" timestamptz NOT NULL DEFAULT now(),
-        "updatedAt" timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-    await this.qrDownloadHistoryRepository.query(`
-      ALTER TABLE "qr_download_history"
-        ADD COLUMN IF NOT EXISTS "adminId" text,
-        ADD COLUMN IF NOT EXISTS "adminEmail" text,
-        ADD COLUMN IF NOT EXISTS "adminName" text,
-        ADD COLUMN IF NOT EXISTS "adminRole" text,
-        ADD COLUMN IF NOT EXISTS "productId" text,
-        ADD COLUMN IF NOT EXISTS "productName" text,
-        ADD COLUMN IF NOT EXISTS "batchId" text,
-        ADD COLUMN IF NOT EXISTS "batchNo" integer,
-        ADD COLUMN IF NOT EXISTS "quantity" integer,
-        ADD COLUMN IF NOT EXISTS "downloadType" text,
-        ADD COLUMN IF NOT EXISTS "downloadedAt" timestamptz,
-        ADD COLUMN IF NOT EXISTS "createdAt" timestamptz,
-        ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz
-    `);
-    await this.qrDownloadHistoryRepository.query(`
-      UPDATE "qr_download_history"
-      SET
-        "adminRole" = COALESCE(NULLIF("adminRole", ''), 'staff'),
-        "productName" = COALESCE(NULLIF("productName", ''), 'Unknown Product'),
-        "quantity" = GREATEST(COALESCE("quantity", 1), 1),
-        "downloadType" = COALESCE(NULLIF("downloadType", ''), 'qr'),
-        "downloadedAt" = COALESCE("downloadedAt", now()),
-        "createdAt" = COALESCE("createdAt", now()),
-        "updatedAt" = COALESCE("updatedAt", now())
-    `);
-    await this.qrDownloadHistoryRepository.query(`
-      ALTER TABLE "qr_download_history"
-        ALTER COLUMN "adminRole" SET DEFAULT 'staff',
-        ALTER COLUMN "adminRole" SET NOT NULL,
-        ALTER COLUMN "productName" SET NOT NULL,
-        ALTER COLUMN "quantity" SET DEFAULT 1,
-        ALTER COLUMN "quantity" SET NOT NULL,
-        ALTER COLUMN "downloadType" SET DEFAULT 'qr',
-        ALTER COLUMN "downloadType" SET NOT NULL,
-        ALTER COLUMN "downloadedAt" SET DEFAULT now(),
-        ALTER COLUMN "downloadedAt" SET NOT NULL,
-        ALTER COLUMN "createdAt" SET DEFAULT now(),
-        ALTER COLUMN "createdAt" SET NOT NULL,
-        ALTER COLUMN "updatedAt" SET DEFAULT now(),
-        ALTER COLUMN "updatedAt" SET NOT NULL
-    `);
-    await this.qrDownloadHistoryRepository.query(`
-      CREATE INDEX IF NOT EXISTS "IDX_qr_download_history_downloadedAt"
-      ON "qr_download_history" ("downloadedAt" DESC)
-    `);
-    await this.qrDownloadHistoryRepository.query(`
-      CREATE INDEX IF NOT EXISTS "IDX_qr_download_history_admin"
-      ON "qr_download_history" ("adminEmail", "adminName")
-    `);
-  }
-
   async recordDownloadHistory(
     admin: { id: string; email?: string; name?: string; role?: string },
     body: {
@@ -123,8 +50,6 @@ export class QrCodeService {
       downloadType?: string;
     },
   ) {
-    await this.ensureDownloadHistoryTable();
-
     const quantity = Math.max(1, Math.floor(Number(body.quantity ?? 1)));
     if (!Number.isFinite(quantity)) {
       throw new BadRequestException('quantity must be a valid number');
@@ -175,8 +100,6 @@ export class QrCodeService {
     fromDate?: string,
     toDate?: string,
   ) {
-    await this.ensureDownloadHistoryTable();
-
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
     const offset = (safePage - 1) * safeLimit;
@@ -537,7 +460,18 @@ export class QrCodeService {
       .skip(skip)
       .take(safeLimit);
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+    const hasFilters = Boolean(productId || isScanned !== undefined || trimmedSearch || batchId);
+    let data: QrCode[];
+    let total: number;
+    if (hasFilters) {
+      [data, total] = await queryBuilder.getManyAndCount();
+    } else {
+      data = await queryBuilder.getMany();
+      const rows = await this.qrCodeRepository.query(`
+        SELECT COALESCE(SUM("qty"), 0)::bigint AS total FROM "qr_code_batches"
+      `);
+      total = Number(rows?.[0]?.total ?? 0);
+    }
     const firstScanMap = await this.getFirstScanMap(data.map((qr) => qr.id));
 
     const scannedUserIds = data

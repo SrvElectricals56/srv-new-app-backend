@@ -6,7 +6,10 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { Scan } from '../../database/entities/scan.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
-import { UserRole, RedemptionStatus, UserStatus } from '../../common/enums';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { CounterBoy } from '../../database/entities/counterboy.entity';
+import { SupportTicket } from '../../database/entities/support-ticket.entity';
+import { UserRole, RedemptionStatus, UserStatus, KYCStatus } from '../../common/enums';
 
 @Injectable()
 export class AnalyticsService {
@@ -21,6 +24,12 @@ export class AnalyticsService {
     private redemptionRepository: Repository<Redemption>,
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CounterBoy)
+    private counterBoyRepository: Repository<CounterBoy>,
+    @InjectRepository(SupportTicket)
+    private supportTicketRepository: Repository<SupportTicket>,
   ) {}
 
   async getDashboard() {
@@ -43,6 +52,13 @@ export class AnalyticsService {
       totalPointsAwarded,
       pendingRedemptions,
       totalRedemptions,
+      totalAppUsers,
+      totalCounterboys,
+      totalEnquiries,
+      electricianKyc,
+      dealerKyc,
+      appUserKyc,
+      counterboyKyc,
     ] = await Promise.all([
       this.electricianRepository.count(),
       this.dealerRepository.count(),
@@ -62,22 +78,66 @@ export class AnalyticsService {
         where: { status: RedemptionStatus.PENDING },
       }),
       this.redemptionRepository.count(),
+      this.appUserRepository.count(),
+      this.counterBoyRepository.count(),
+      this.supportTicketRepository.count(),
+      this.getKycCounts(this.electricianRepository),
+      this.getKycCounts(this.dealerRepository),
+      this.getKycCounts(this.appUserRepository),
+      this.getKycCounts(this.counterBoyRepository),
     ]);
 
     const growthRate = totalScansYesterday > 0 
       ? ((totalScansToday - totalScansYesterday) / totalScansYesterday) * 100 
       : 0;
 
+    const kyc = [electricianKyc, dealerKyc, appUserKyc, counterboyKyc].reduce(
+      (sum, row) => ({
+        total: sum.total + row.total,
+        verified: sum.verified + row.verified,
+        pending: sum.pending + row.pending,
+        rejected: sum.rejected + row.rejected,
+        notSubmitted: sum.notSubmitted + row.notSubmitted,
+      }),
+      { total: 0, verified: 0, pending: 0, rejected: 0, notSubmitted: 0 },
+    );
+
     return {
       totalElectricians,
       totalDealers,
+      totalUsers: totalElectricians + totalDealers + totalAppUsers + totalCounterboys,
       activeUsers: activeElectricians + activeDealers,
+      totalKyc: kyc.total,
+      kycVerified: kyc.verified,
+      kycPending: kyc.pending,
+      kycRejected: kyc.rejected,
+      kycNotSubmitted: kyc.notSubmitted,
+      totalEnquiries,
       totalScansToday,
       totalPointsAwarded: parseInt(totalPointsAwarded?.total || '0'),
       pendingRedemptions,
       totalRedemptions,
       growthRate: Math.round(growthRate * 100) / 100,
     };
+  }
+
+  private async getKycCounts<T extends { kycStatus: KYCStatus }>(repository: Repository<T>) {
+    const rows = await repository
+      .createQueryBuilder('account')
+      .select('account.kycStatus', 'status')
+      .addSelect('COUNT(*)::int', 'count')
+      .groupBy('account.kycStatus')
+      .getRawMany<{ status: KYCStatus; count: number | string }>();
+    const counts = { total: 0, verified: 0, pending: 0, rejected: 0, notSubmitted: 0 };
+    for (const row of rows) {
+      const count = Number(row.count);
+      counts.total += count;
+      if (row.status === KYCStatus.VERIFIED) counts.verified += count;
+      else if (row.status === KYCStatus.PENDING) counts.pending += count;
+      else if (row.status === KYCStatus.REJECTED) counts.rejected += count;
+      else counts.notSubmitted += count;
+    }
+    return counts;
   }
 
   async getScans() {
