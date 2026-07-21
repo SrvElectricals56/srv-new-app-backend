@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, Brackets, SelectQueryBuilder } from 'typeorm';
 import { Scan } from '../../database/entities/scan.entity';
 import { UserRole } from '../../common/enums';
 
@@ -29,7 +29,7 @@ export class ScanService {
     if (productId) queryBuilder.andWhere('scan.productId = :productId', { productId });
     if (role) queryBuilder.andWhere('scan.role = :role', { role });
     if (mode) queryBuilder.andWhere('scan.mode = :mode', { mode });
-    if (search) queryBuilder.andWhere('(scan.userName ILIKE :search OR scan.productName ILIKE :search)', { search: `%${search}%` });
+    this.applySearchFilter(queryBuilder, search);
     if (dateFrom && dateTo) queryBuilder.andWhere('scan.scannedAt BETWEEN :dateFrom AND :dateTo', { dateFrom: new Date(dateFrom), dateTo: new Date(dateTo) });
 
     queryBuilder.orderBy('scan.scannedAt', 'DESC').skip(skip).take(limit);
@@ -41,7 +41,7 @@ export class ScanService {
       if (userId) qb.andWhere('scan.userId = :userId', { userId });
       if (productId) qb.andWhere('scan.productId = :productId', { productId });
       if (role) qb.andWhere('scan.role = :role', { role });
-      if (search) qb.andWhere('(scan.userName ILIKE :search OR scan.productName ILIKE :search)', { search: `%${search}%` });
+      this.applySearchFilter(qb, search);
       if (dateFrom && dateTo) qb.andWhere('scan.scannedAt BETWEEN :dateFrom AND :dateTo', { dateFrom: new Date(dateFrom), dateTo: new Date(dateTo) });
       return qb;
     };
@@ -55,7 +55,7 @@ export class ScanService {
     if (userId) modeQb.andWhere('scan.userId = :userId', { userId });
     if (productId) modeQb.andWhere('scan.productId = :productId', { productId });
     if (role) modeQb.andWhere('scan.role = :role', { role });
-    if (search) modeQb.andWhere('(scan.userName ILIKE :search OR scan.productName ILIKE :search)', { search: `%${search}%` });
+    this.applySearchFilter(modeQb, search);
     if (dateFrom && dateTo) modeQb.andWhere('scan.scannedAt BETWEEN :dateFrom AND :dateTo', { dateFrom: new Date(dateFrom), dateTo: new Date(dateTo) });
     const modeCounts = await modeQb
       .select('scan.mode', 'mode')
@@ -120,5 +120,31 @@ export class ScanService {
       dealerScans,
       growthRate: yesterdayScans > 0 ? ((todayScans - yesterdayScans) / yesterdayScans) * 100 : 0,
     };
+  }
+
+  /**
+   * Scan records retain a stable user UUID but not a copied phone/code. Search
+   * the linked role table as well so the admin can reliably find an
+   * electrician by phone number, electrician code, or full UUID.
+   */
+  private applySearchFilter(queryBuilder: SelectQueryBuilder<Scan>, search?: string) {
+    if (!search?.trim()) return;
+
+    const searchPattern = `%${search.trim()}%`;
+    queryBuilder.andWhere(new Brackets((qb) => {
+      qb.where('scan.userName ILIKE :searchPattern', { searchPattern })
+        .orWhere('scan.productName ILIKE :searchPattern', { searchPattern })
+        .orWhere('scan.userId ILIKE :searchPattern', { searchPattern })
+        .orWhere(`EXISTS (
+          SELECT 1 FROM electricians electrician
+          WHERE electrician.id = scan.userId
+            AND (electrician.phone ILIKE :searchPattern OR electrician."electricianCode" ILIKE :searchPattern)
+        )`, { searchPattern })
+        .orWhere(`EXISTS (
+          SELECT 1 FROM dealers dealer
+          WHERE dealer.id = scan.userId
+            AND (dealer.phone ILIKE :searchPattern OR dealer."dealerCode" ILIKE :searchPattern)
+        )`, { searchPattern });
+    }));
   }
 }
