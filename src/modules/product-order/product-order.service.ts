@@ -69,13 +69,6 @@ export class ProductOrderService {
       .replace(/[\s-]+/g, '_');
   }
 
-  private async ensureAdminStatusEnum() {
-    await this.productOrderRepository.query(`
-      ALTER TYPE "public"."product_orders_status_enum"
-      ADD VALUE IF NOT EXISTS 'out_for_delivery'
-    `);
-  }
-
   getAvailableStatuses() {
     return {
       data: ADMIN_PRODUCT_ORDER_STATUSES.map((status) => ({
@@ -172,8 +165,6 @@ export class ProductOrderService {
         `Invalid status: ${status}. Valid: ${ADMIN_PRODUCT_ORDER_STATUSES.join(', ')}`,
       );
     }
-    await this.ensureAdminStatusEnum();
-
     const transitions: Record<string, string[]> = {
       [ProductOrderStatus.PENDING]: [
         ProductOrderStatus.OUT_FOR_DELIVERY,
