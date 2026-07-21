@@ -2422,40 +2422,6 @@ export class MobileService {
       throw new BadRequestException('Rating must be an integer between 1 and 5');
     }
 
-    await this.dataSource.query(`
-      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-      CREATE TABLE IF NOT EXISTS "app_ratings" (
-        "id" text PRIMARY KEY DEFAULT uuid_generate_v4()::text,
-        "userId" text NOT NULL,
-        "userRole" text NOT NULL,
-        "rating" numeric(2,1) NOT NULL,
-        "review" text,
-        "createdAt" timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-      ALTER TABLE "app_ratings" DROP CONSTRAINT IF EXISTS "app_ratings_userRole_check";
-      ALTER TABLE "app_ratings"
-        ADD COLUMN IF NOT EXISTS "id" text DEFAULT uuid_generate_v4()::text,
-        ADD COLUMN IF NOT EXISTS "userId" text,
-        ADD COLUMN IF NOT EXISTS "userRole" text,
-        ADD COLUMN IF NOT EXISTS "rating" numeric(2,1),
-        ADD COLUMN IF NOT EXISTS "review" text,
-        ADD COLUMN IF NOT EXISTS "createdAt" timestamp(3) DEFAULT CURRENT_TIMESTAMP,
-        ADD COLUMN IF NOT EXISTS "updatedAt" timestamp(3) DEFAULT CURRENT_TIMESTAMP;
-      UPDATE "app_ratings" SET "id" = uuid_generate_v4()::text WHERE "id" IS NULL;
-      DELETE FROM "app_ratings" a
-      USING (
-        SELECT ctid, ROW_NUMBER() OVER (
-          PARTITION BY "userId"
-          ORDER BY "updatedAt" DESC NULLS LAST, "createdAt" DESC NULLS LAST, "id" DESC
-        ) AS rn
-        FROM "app_ratings"
-        WHERE "userId" IS NOT NULL
-      ) ranked
-      WHERE a.ctid = ranked.ctid AND ranked.rn > 1;
-      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_app_ratings_userId" ON "app_ratings" ("userId");
-    `);
-
     const normalizedRequestRole = this.normalizeRole(role ?? UserRole.USER);
     const existingUser = await this.getUserByRole(userId, normalizedRequestRole)
       ?? await this.getUserByRole(userId, UserRole.DEALER)
