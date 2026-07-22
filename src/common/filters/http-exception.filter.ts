@@ -69,7 +69,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const column = err.column || 'field';
         message = `Required field missing: ${column}`;
       } else {
-        this.logger.error(`DB Error ${err.code}: ${err.message}`);
+        this.logger.error(
+          `DB Error ${err.code ?? 'UNKNOWN'} on ${request.method} ${request.url}: ${err.message}`,
+        );
         message = 'Database error occurred';
       }
     } else if (exception instanceof Error) {

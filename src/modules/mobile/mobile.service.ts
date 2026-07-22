@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -1168,23 +1169,16 @@ export class MobileService {
     const qb = this.productRepository
       .createQueryBuilder('p')
       .where('p.category = :cat', { cat: 'gift' })
-      .andWhere('p.isActive = :active', { active: true })
-      .andWhere('p.stock > 0');
+      .andWhere('p.isActive = :active', { active: true });
 
     if (role) {
       // 'user' role in app = 'customer' in admin panel — treat as aliases
       // 'counterboy' shares gifts with 'electrician' — both earn by scanning
       const normalizedRole = role === 'user' ? 'customer' : role;
-      const electricianAlias = role === 'counterboy' ? 'electrician' : null;
-      qb.andWhere(
-        `(p.subCategory IS NULL OR p.subCategory = :role OR p.subCategory = :alias OR p.subCategory = :all${electricianAlias ? ' OR p.subCategory = :elecAlias' : ''})`,
-        {
-          role: normalizedRole,
-          alias: role,
-          all: 'all',
-          ...(electricianAlias ? { elecAlias: electricianAlias } : {}),
-        },
-      );
+      qb.andWhere('(LOWER(p.subCategory) = :role OR LOWER(p.subCategory) = :all)', {
+        role: normalizedRole.toLowerCase(),
+        all: 'all',
+      });
     }
 
     qb.orderBy('p.createdAt', 'DESC');
@@ -1770,11 +1764,19 @@ export class MobileService {
         where: { id: data.schemeId, category: 'gift', isActive: true },
       });
       if (!product) throw new NotFoundException('Reward scheme not found');
+
+      const normalizedRole = this.normalizeRole(role);
+      const productRole = String(product.subCategory ?? '').trim().toLowerCase();
+      const expectedProductRole = normalizedRole === UserRole.USER
+        ? 'customer'
+        : String(normalizedRole).toLowerCase();
+      if (!productRole || (productRole !== 'all' && productRole !== expectedProductRole)) {
+        throw new ForbiddenException('This reward is not available for your role');
+      }
       if (Number(product.stock ?? 0) <= 0) {
         throw new BadRequestException('Reward scheme is out of stock');
       }
 
-      const normalizedRole = this.normalizeRole(role);
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
 

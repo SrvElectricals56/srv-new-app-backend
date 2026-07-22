@@ -73,6 +73,13 @@ export class CrossRolePhoneService {
     return this.pickKeeper(matches);
   }
 
+  async assertLoginRole(phone: string, targetRole: RegisteredMobileRole): Promise<void> {
+    const primary = await this.findPrimaryRegistrationByPhone(phone);
+    if (primary && primary.role !== targetRole) {
+      throw new ConflictException(this.buildLoginRoleMismatchMessage(primary.role));
+    }
+  }
+
   pickKeeper(matches: PhoneRegistrationMatch[]): PhoneRegistrationMatch {
     return [...matches].sort((a, b) => {
       const priorityDiff = ROLE_PRIORITY[b.role] - ROLE_PRIORITY[a.role];

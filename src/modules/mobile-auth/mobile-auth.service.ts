@@ -419,6 +419,7 @@ export class MobileAuthService {
   async sendOtp(dto: MobileLoginDto) {
     const { role } = dto;
     const phone = this.normalizePhone(dto.phone);
+    await this.crossRolePhoneService.assertLoginRole(phone, role);
     const user = await this.findUserByPhone(phone, role);
 
     if (!user) {
@@ -459,6 +460,7 @@ export class MobileAuthService {
   async sendPasswordResetOtp(dto: MobileLoginDto) {
     const { role } = dto;
     const phone = this.normalizePhone(dto.phone);
+    await this.crossRolePhoneService.assertLoginRole(phone, role);
     const user = await this.findUserByPhone(phone, role);
 
     if (!user) {
@@ -497,6 +499,7 @@ export class MobileAuthService {
 
   async verifyOtp(dto: VerifyOtpDto) {
     const { phone, role, otp } = dto;
+    await this.crossRolePhoneService.assertLoginRole(phone, role);
     const { key, normalizedPhone } = this.verifyStoredOtp(phone, role, otp);
     otpStore.delete(key);
 
@@ -804,6 +807,7 @@ export class MobileAuthService {
   // ── Password Login ─────────────────────────────────────────────────────────
 
   async passwordLogin(phone: string, role: MobileUserRole, password: string) {
+    await this.crossRolePhoneService.assertLoginRole(phone, role);
     const user = await this.findUserByPhone(phone, role);
 
     if (!user) {
@@ -842,6 +846,7 @@ export class MobileAuthService {
   }
 
   async resetPasswordWithOtp(phone: string, role: MobileUserRole, otp: string, newPassword: string) {
+    await this.crossRolePhoneService.assertLoginRole(phone, role);
     const trimmedPassword = newPassword?.trim();
     if (!trimmedPassword) {
       throw new BadRequestException('New password is required');
@@ -866,6 +871,7 @@ export class MobileAuthService {
   }
 
   async verifyPasswordResetOtp(phone: string, role: MobileUserRole, otp: string) {
+    await this.crossRolePhoneService.assertLoginRole(phone, role);
     const resetKey = this.buildPasswordResetOtpKey(phone, role);
     const { stored } = this.verifyStoredOtp(phone, role, otp, resetKey);
     stored.verifiedAt = Date.now();

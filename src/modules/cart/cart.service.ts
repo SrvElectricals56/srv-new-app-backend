@@ -34,7 +34,6 @@ const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
 
 @Injectable()
 export class CartService {
-  private paymentSchemaReady?: Promise<void>;
 
   constructor(
     @InjectRepository(ProductCartItem)
@@ -108,91 +107,6 @@ export class CartService {
       default:
         return manager.getRepository(AppUser);
     }
-  }
-
-  private async ensurePaymentColumns() {
-    for (const value of ['out_for_delivery', 'cancelled', 'returned', 'refunded']) {
-      await this.orderRepo.query(`
-        ALTER TYPE "public"."product_orders_status_enum"
-        ADD VALUE IF NOT EXISTS '${value}'
-      `);
-    }
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paymentMethod" varchar NOT NULL DEFAULT 'cod'
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paymentStatus" varchar NOT NULL DEFAULT 'pending'
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "razorpayOrderId" varchar
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "razorpayPaymentId" varchar
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paidAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "paymentFailureReason" text
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "estimatedDeliveryAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "dispatchedAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "rejectedAt" timestamptz
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "refundStatus" varchar
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "refundMessage" text
-    `);
-    await this.orderRepo.query(`
-      ALTER TABLE "product_orders"
-      ADD COLUMN IF NOT EXISTS "deliveryNotes" text
-    `);
-    for (const column of ['cancelReason', 'returnReason', 'refundReason']) {
-      await this.orderRepo.query(`ALTER TABLE "product_orders" ADD COLUMN IF NOT EXISTS "${column}" text`);
-    }
-    await this.orderRepo.query(`ALTER TABLE "product_orders" ADD COLUMN IF NOT EXISTS "customerActionAt" timestamptz`);
-    await this.orderRepo.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_product_orders_razorpay_order"
-      ON "product_orders" ("razorpayOrderId")
-      WHERE "razorpayOrderId" IS NOT NULL
-    `);
-    await this.orderRepo.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_product_orders_razorpay_payment"
-      ON "product_orders" ("razorpayPaymentId")
-      WHERE "razorpayPaymentId" IS NOT NULL
-    `);
-  }
-
-  private ensurePaymentSchema() {
-    if (!this.paymentSchemaReady) {
-      this.paymentSchemaReady = this.ensurePaymentColumns().catch((error) => {
-        this.paymentSchemaReady = undefined;
-        throw error;
-      });
-    }
-    return this.paymentSchemaReady;
   }
 
   private estimateDeliveryDate(from = new Date()) {
@@ -492,16 +406,18 @@ export class CartService {
         throw new BadRequestException('Product price is not valid for points payment');
       }
 
-      const balanceBefore = Number((user as any).walletBalance ?? 0);
+      const isDealerRole = normalizedRole === UserRole.DEALER;
+      const balanceBefore = isDealerRole
+        ? Number((user as any).bonusPoints ?? 0)
+        : Number((user as any).walletBalance ?? 0);
       if (balanceBefore < pointsRequired) {
         throw new BadRequestException(`Insufficient points. You have ${balanceBefore} points but need ${pointsRequired}.`);
       }
 
       const balanceAfter = balanceBefore - pointsRequired;
-      const updateData: any = { walletBalance: balanceAfter };
-      if (normalizedRole !== UserRole.DEALER) {
-        updateData.totalPoints = balanceAfter;
-      }
+      const updateData: any = isDealerRole
+        ? { bonusPoints: balanceAfter }
+        : { walletBalance: balanceAfter, totalPoints: balanceAfter };
       await userRepository.update(userId, updateData);
 
       if (this.hasTrackedStock(product)) {
@@ -902,9 +818,6 @@ export class CartService {
     action: 'cancel' | 'return' | 'refund',
     reason?: string,
   ) {
-    // Existing installations can predate the returned/refunded enum values.
-    // Initialise the compatible schema once before an action writes either value.
-    await this.ensurePaymentSchema();
     const normalizedRole = this.normalizeRole(role);
     const order = await this.orderRepo.findOne({
       where: { id: orderId, userId, userRole: normalizedRole },
