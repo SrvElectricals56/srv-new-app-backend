@@ -142,9 +142,31 @@ async function bootstrap() {
     return res.status(200).json({ name: 'SRV Electricals API', status: 'ok' });
   });
 
+  // Liveness intentionally avoids external dependencies. Docker and the
+  // host watchdog use this endpoint to detect a wedged Node.js event loop.
+  expressApp.get('/live', (_req: any, res: any) => {
+    return res.status(200).json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+
   expressApp.get('/health', async (_req: any, res: any) => {
     try {
-      await dataSource.query('SELECT 1');
+      const timeoutMs = parseInt(
+        configService.get<string>('HEALTH_CHECK_TIMEOUT_MS') || '3000',
+        10,
+      );
+      await Promise.race([
+        dataSource.query('SELECT 1'),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error(`Database health check timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
       return res.status(200).json({
         status: 'ok',
         database: 'connected',

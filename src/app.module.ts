@@ -137,6 +137,31 @@ function getDatabaseHost(configService: ConfigService) {
                 : {}),
             }
           : false,
+        // Bound every stage of PostgreSQL access so a transient managed-DB
+        // network issue cannot consume the whole pool and wedge the API.
+        extra: {
+          max: parseInt(configService.get<string>('DB_POOL_MAX', '20')),
+          min: parseInt(configService.get<string>('DB_POOL_MIN', '2')),
+          connectionTimeoutMillis: parseInt(
+            configService.get<string>('DB_CONNECTION_TIMEOUT_MS', '5000'),
+          ),
+          idleTimeoutMillis: parseInt(
+            configService.get<string>('DB_IDLE_TIMEOUT_MS', '30000'),
+          ),
+          query_timeout: parseInt(
+            configService.get<string>('DB_QUERY_TIMEOUT_MS', '30000'),
+          ),
+          statement_timeout: parseInt(
+            configService.get<string>('DB_STATEMENT_TIMEOUT_MS', '30000'),
+          ),
+          idle_in_transaction_session_timeout: parseInt(
+            configService.get<string>(
+              'DB_IDLE_TRANSACTION_TIMEOUT_MS',
+              '30000',
+            ),
+          ),
+          keepAlive: true,
+        },
       }),
       inject: [ConfigService],
     }),

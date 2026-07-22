@@ -1,0 +1,12 @@
+[Unit]
+Description=SRV production backend liveness watchdog
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/srv-backend-watchdog
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run SRV production backend liveness watchdog every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+Unit=srv-backend-watchdog.service
+
+[Install]
+WantedBy=timers.target
