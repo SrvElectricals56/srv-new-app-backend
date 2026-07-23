@@ -43,6 +43,52 @@ export class ElectricianService {
     return bcrypt.hash(trimmed, salt);
   }
 
+  private parsePoints(value: unknown): number {
+    const points = Number(value);
+    if (!Number.isFinite(points) || points < 0) {
+      throw new BadRequestException('Points must be a non-negative number');
+    }
+    return points;
+  }
+
+  private synchronizePoints(
+    data: Record<string, any>,
+    current?: Pick<Electrician, 'totalPoints' | 'walletBalance'>,
+  ) {
+    const totalProvided = data.totalPoints !== undefined;
+    const walletProvided = data.walletBalance !== undefined;
+    if (!totalProvided && !walletProvided) return;
+
+    const incomingTotal = totalProvided ? this.parsePoints(data.totalPoints) : undefined;
+    const incomingWallet = walletProvided ? this.parsePoints(data.walletBalance) : undefined;
+    let points: number | undefined;
+
+    if (!current) {
+      if (incomingTotal !== undefined && incomingWallet !== undefined && incomingTotal !== incomingWallet) {
+        if (incomingTotal === 0) points = incomingWallet;
+        else if (incomingWallet === 0) points = incomingTotal;
+        else throw new BadRequestException('Total points and wallet balance must match');
+      } else {
+        points = incomingTotal ?? incomingWallet ?? 0;
+      }
+    } else if (incomingTotal !== undefined && incomingWallet !== undefined) {
+      const totalChanged = incomingTotal !== Number(current.totalPoints);
+      const walletChanged = incomingWallet !== Number(current.walletBalance);
+
+      if (!totalChanged && !walletChanged) return;
+      if (totalChanged && !walletChanged) points = incomingTotal;
+      else if (walletChanged && !totalChanged) points = incomingWallet;
+      else if (incomingTotal === incomingWallet) points = incomingTotal;
+      else throw new BadRequestException('Total points and wallet balance must match');
+    } else {
+      points = incomingTotal ?? incomingWallet;
+    }
+
+    data.totalPoints = points;
+    data.walletBalance = points;
+    data.tier = this.tierService.calculateElectricianTier(points ?? 0);
+  }
+
   private serialize(electrician: Electrician) {
     const {
       passwordHash,
@@ -170,9 +216,13 @@ export class ElectricianService {
       throw new ConflictException('Electrician with this code already exists');
     }
 
-    // Set initial tier based on points (if provided)
-    const points = Number(data.totalPoints ?? 0);
-    data.tier = this.tierService.calculateElectricianTier(points);
+    // Points and wallet represent the same spendable balance throughout the app.
+    this.synchronizePoints(data);
+    if (data.totalPoints === undefined) {
+      data.totalPoints = 0;
+      data.walletBalance = 0;
+      data.tier = this.tierService.calculateElectricianTier(0);
+    }
 
     const electrician = this.electricianRepository.create(data);
     const saved = (await this.electricianRepository.save(electrician as any)) as unknown as Electrician;
@@ -350,18 +400,9 @@ export class ElectricianService {
       }
     }
 
-    // Auto-recalculate tier when totalPoints changes — ignore any manually passed tier
-    if (data.totalPoints !== undefined) {
-      const points = Number(data.totalPoints);
-      data.tier = this.tierService.calculateElectricianTier(points);
-      if (data.walletBalance === undefined) {
-        data.walletBalance = points;
-      }
-    } else if (data.walletBalance !== undefined) {
-      // walletBalance changed but totalPoints not — sync totalPoints too
-      data.totalPoints = Number(data.walletBalance);
-      data.tier = this.tierService.calculateElectricianTier(data.totalPoints);
-    }
+    // Keep ranking points and spendable wallet points synchronized even when
+    // admin clients submit both fields but only one was actually edited.
+    this.synchronizePoints(data, electrician);
 
     if (passwordHash) {
       data.passwordHash = passwordHash;
