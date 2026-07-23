@@ -2323,68 +2323,18 @@ export class MobileService {
 
   async getMyOrders(userId: string, role?: string) {
     const normalizedRole = role ? this.normalizeRole(role) : null;
-    const [giftOrders, productOrders] = await Promise.all([
-      this.giftOrderRepository.find({
-        where: { userId },
-        order: { orderedAt: 'DESC' },
-      }),
-      this.productOrderRepository
-        .createQueryBuilder('order')
-        .where('order.userId = :userId', { userId })
-        .andWhere(normalizedRole ? 'order.userRole = :userRole' : '1=1', {
-          userRole: normalizedRole,
-        })
-        .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus IN (:...visiblePaymentStatuses))', {
-          razorpay: 'razorpay',
-          visiblePaymentStatuses: ['paid', 'failed'],
-        })
-        .orderBy('order.orderedAt', 'DESC')
-        .getMany(),
-    ]);
-
-    const giftProductIds = [...new Set(giftOrders.map((order) => order.giftProductId).filter(Boolean))];
-    const giftProducts = giftProductIds.length
-      ? await this.productRepository
-          .createQueryBuilder('product')
-          .where('product.id IN (:...ids)', { ids: giftProductIds })
-          .getMany()
-      : [];
-    const giftProductImageById = new Map(
-      giftProducts.map((product) => [
-        product.id,
-        this.normalizeUploadUrl(product.image) ?? product.image ?? null,
-      ]),
-    );
-
-    const giftMapped = giftOrders.map(o => {
-      const giftImage = this.normalizeUploadUrl(o.giftImage) ?? giftProductImageById.get(o.giftProductId) ?? o.giftImage ?? null;
-      return ({
-      id: o.id,
-      orderCode: getPublicOrderCode(o.id),
-      type: 'gift' as const,
-      status: o.status,
-      title: o.giftName,
-      productName: o.giftName,
-      productImage: giftImage,
-      imageUrl: giftImage,
-      quantity: 1,
-      price: o.pointsUsed,
-      total: o.pointsUsed,
-      userId: o.userId,
-      userName: o.userName,
-      points: o.pointsUsed,
-      orderedAt: o.orderedAt?.toISOString() ?? null,
-      deliveredAt: o.deliveredAt?.toISOString() ?? null,
-      dispatchedAt: o.dispatchedAt?.toISOString() ?? null,
-      shippingAddress: o.shippingAddress ?? null,
-      trackingNumber: o.trackingNumber ?? null,
-      courierName: o.courierName ?? null,
-      paymentStatus: 'paid',
-      deliveryNotes: o.deliveryNotes ?? null,
-      rejectionReason: o.rejectionReason ?? null,
-      createdAt: o.orderedAt.toISOString(),
-    });
-    });
+    const productOrders = await this.productOrderRepository
+      .createQueryBuilder('order')
+      .where('order.userId = :userId', { userId })
+      .andWhere(normalizedRole ? 'order.userRole = :userRole' : '1=1', {
+        userRole: normalizedRole,
+      })
+      .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus IN (:...visiblePaymentStatuses))', {
+        razorpay: 'razorpay',
+        visiblePaymentStatuses: ['paid'],
+      })
+      .orderBy('order.orderedAt', 'DESC')
+      .getMany();
 
     const productMapped = productOrders.map(o => {
       const estimatedDeliveryAt = o.estimatedDeliveryAt ?? this.estimateDeliveryDate(o.paidAt ?? o.orderedAt ?? new Date());
@@ -2442,7 +2392,7 @@ export class MobileService {
     });
     });
 
-    return [...giftMapped, ...productMapped].sort(
+    return productMapped.sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }

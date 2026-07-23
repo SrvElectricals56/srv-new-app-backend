@@ -778,7 +778,7 @@ export class CartService {
       .andWhere('order.userRole = :userRole', { userRole: normalizedRole })
       .andWhere('(order.paymentMethod <> :razorpay OR order.paymentStatus IN (:...visiblePaymentStatuses))', {
         razorpay: 'razorpay',
-        visiblePaymentStatuses: ['paid', 'failed'],
+        visiblePaymentStatuses: ['paid'],
       })
       .orderBy('order.orderedAt', 'DESC')
       .getMany();
