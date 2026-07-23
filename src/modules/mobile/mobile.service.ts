@@ -2185,6 +2185,38 @@ export class MobileService {
 
   // ── Support ────────────────────────────────────────────────────────────────
 
+  async requestAccountDeletion(data: {
+    name?: string; phone?: string; email?: string; reason?: string;
+  }) {
+    const name = String(data.name ?? '').trim().slice(0, 120);
+    const phone = String(data.phone ?? '').replace(/\D/g, '').slice(-10);
+    const email = String(data.email ?? '').trim().toLowerCase().slice(0, 254);
+    const reason = String(data.reason ?? '').trim().slice(0, 1000);
+    if (!/^\d{10}$/.test(phone) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException('Enter a valid 10-digit mobile number or email address.');
+    }
+
+    const ticket = this.supportTicketRepository.create({
+      userId: undefined,
+      userName: name || 'Account deletion requester',
+      userRole: undefined,
+      subject: 'Public account deletion request',
+      message: [
+        `Phone: ${phone || 'not provided'}`,
+        `Email: ${email || 'not provided'}`,
+        `Reason: ${reason || 'not provided'}`,
+      ].join('\n'),
+      status: SupportTicketStatus.OPEN,
+      priority: SupportTicketPriority.HIGH,
+    });
+    await this.supportTicketRepository.save(ticket);
+    return {
+      success: true,
+      message: 'Your account deletion request has been received. SRV Support will verify your identity and confirm completion.',
+      requestId: ticket.id,
+    };
+  }
+
   async createSupportTicket(userId: string, role: string, data: {
     subject: string; comment: string; photoUrl?: string; photoUrls?: string[];
   }) {

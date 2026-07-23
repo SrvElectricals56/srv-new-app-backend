@@ -16,6 +16,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { MobileService } from './mobile.service';
 import { MobileAuthService } from '../mobile-auth/mobile-auth.service';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Mobile App')
 @Controller('mobile')
@@ -350,6 +351,16 @@ export class MobileController {
   }
 
   // ── Support ────────────────────────────────────────────────────────────────
+
+  @Post('account-deletion-request')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Request app account deletion from the public privacy page' })
+  requestAccountDeletion(
+    @Body() body: { name?: string; phone?: string; email?: string; reason?: string },
+  ) {
+    return this.mobileService.requestAccountDeletion(body);
+  }
 
   @Post('support')
   @UseGuards(MobileJwtGuard)
