@@ -12,21 +12,24 @@ async function run(): Promise<void> {
   try {
     await runner.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
 
-    const [{ hasLegacySchema }] = await runner.query(`
+    const [{ hasLegacySchema, hasMigrationTable }] = await runner.query(`
       SELECT (
         to_regclass('public.admins') IS NOT NULL
         AND to_regclass('public.products') IS NOT NULL
-      ) AS "hasLegacySchema"
+      ) AS "hasLegacySchema",
+      (to_regclass('public.migrations') IS NOT NULL) AS "hasMigrationTable"
     `);
 
-    await runner.query(`
-      CREATE TABLE IF NOT EXISTS "migrations" (
-        "id" SERIAL NOT NULL,
-        "timestamp" bigint NOT NULL,
-        "name" character varying NOT NULL,
-        CONSTRAINT "PK_8c82d7f526340ab734260ea46be" PRIMARY KEY ("id")
-      )
-    `);
+    if (!hasMigrationTable) {
+      await runner.query(`
+        CREATE TABLE "migrations" (
+          "id" SERIAL NOT NULL,
+          "timestamp" bigint NOT NULL,
+          "name" character varying NOT NULL,
+          CONSTRAINT "PK_8c82d7f526340ab734260ea46be" PRIMARY KEY ("id")
+        )
+      `);
+    }
 
     if (hasLegacySchema) {
       await runner.query(`
