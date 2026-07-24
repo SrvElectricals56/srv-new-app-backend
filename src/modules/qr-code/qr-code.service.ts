@@ -404,6 +404,7 @@ export class QrCodeService {
     isScanned?: boolean,
     search?: string,
     batchId?: string,
+    includeDetails: boolean = true,
   ) {
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(500, Math.max(1, Number(limit) || 20));
@@ -472,7 +473,9 @@ export class QrCodeService {
       `);
       total = Number(rows?.[0]?.total ?? 0);
     }
-    const firstScanMap = await this.getFirstScanMap(data.map((qr) => qr.id));
+    const firstScanMap = includeDetails
+      ? await this.getFirstScanMap(data.map((qr) => qr.id))
+      : new Map<string, any>();
 
     const scannedUserIds = data
       .filter((qr) => qr.lastScannedBy)
@@ -480,7 +483,7 @@ export class QrCodeService {
     const uniqueIds = [...new Set(scannedUserIds)];
 
     const userMap = new Map<string, { phone: string; code: string }>();
-    if (uniqueIds.length) {
+    if (includeDetails && uniqueIds.length) {
       const users = await this.lookupScannerSummaries(uniqueIds);
       for (const u of users) {
         userMap.set(u.id, { phone: u.phone, code: u.code });
@@ -492,7 +495,7 @@ export class QrCodeService {
       .map((qr) => qr.createdBy);
     const uniqueAdminIds = [...new Set(adminIds)];
     const adminNameMap = new Map<string, string>();
-    if (uniqueAdminIds.length) {
+    if (includeDetails && uniqueAdminIds.length) {
       const admins = await this.lookupAdminNames(uniqueAdminIds);
       for (const a of admins) adminNameMap.set(a.id, a.name);
     }

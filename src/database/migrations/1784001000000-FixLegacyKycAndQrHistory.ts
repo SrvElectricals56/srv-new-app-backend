@@ -84,7 +84,7 @@ export class FixLegacyKycAndQrHistory1784001000000 implements MigrationInterface
             SELECT 1 FROM "legacy_entity_map" map
             WHERE map."sourceTable" = 'tbl_users'
               AND map."targetTable" = $1
-              AND map."targetId" = target.id
+              AND map."targetId"::text = target.id::text
           )
       `, [table]);
     }

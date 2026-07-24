@@ -624,7 +624,7 @@ export class MobileAuthService {
         dealerId = dealer.id;
         dealerCode = dealer.dealerCode;
       } else {
-        fallbackDealerName = 'SRV Dealer';
+        fallbackDealerName = 'SRV Sub Dealer';
         fallbackDealerPhone = normalizedDealerPhone;
       }
     }
@@ -665,9 +665,9 @@ export class MobileAuthService {
       await this.electricianRepository.query(
         `INSERT INTO "sub_dealers"
           ("phone", "name", "district", "pincode", "electricianCount")
-         VALUES ($1, 'SRV Dealer', $2, $3, 1)
+         VALUES ($1, 'SRV Sub Dealer', $2, $3, 1)
          ON CONFLICT ("phone") DO UPDATE SET
-          "name" = 'SRV Dealer',
+          "name" = 'SRV Sub Dealer',
           "district" = COALESCE(EXCLUDED."district", "sub_dealers"."district"),
           "pincode" = COALESCE(EXCLUDED."pincode", "sub_dealers"."pincode"),
           "electricianCount" = "sub_dealers"."electricianCount" + 1,

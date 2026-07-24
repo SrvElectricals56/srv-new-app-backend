@@ -105,6 +105,7 @@ export class QrCodeController {
     @Query('status') status?: string,
     @Query('search') search?: string,
     @Query('batchId') batchId?: string,
+    @Query('includeDetails') includeDetails?: string,
   ) {
     // Support both isScanned=true/false and status=active/used
     let scannedFilter: boolean | undefined;
@@ -123,6 +124,7 @@ export class QrCodeController {
       scannedFilter,
       search,
       batchId,
+      includeDetails !== 'false',
     );
   }
 

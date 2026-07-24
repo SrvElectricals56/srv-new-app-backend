@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # Keep the image major version aligned with the existing postgres_data
+    # volume. PostgreSQL data directories cannot be opened by a different major.
+    image: postgres:15-alpine
     container_name: srv_admin_postgres
     restart: unless-stopped
     environment:

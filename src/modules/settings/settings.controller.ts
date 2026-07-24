@@ -52,6 +52,17 @@ export class SettingsController {
     return this.settingsService.findOne(key);
   }
 
+  @Put('bulk')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Update multiple settings in one transaction' })
+  @ApiResponse({ status: 200, description: 'Settings updated successfully' })
+  updateMany(
+    @Body('settings') settings: Record<string, string>,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.settingsService.updateMany(settings, adminId);
+  }
+
   @Put(':key')
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
   @ApiOperation({ summary: 'Update setting' })

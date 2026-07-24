@@ -227,6 +227,28 @@ export class ElectricianService {
     const electrician = this.electricianRepository.create(data);
     const saved = (await this.electricianRepository.save(electrician as any)) as unknown as Electrician;
 
+    // Admin-created electricians follow the same fallback tracking path as
+    // mobile signups when the supplied dealer is not registered.
+    if (!data.dealerId && data.fallbackDealerPhone) {
+      await this.electricianRepository.query(
+        `INSERT INTO "sub_dealers"
+          ("phone", "name", "district", "pincode", "electricianCount")
+         VALUES ($1, $2, $3, $4, 1)
+         ON CONFLICT ("phone") DO UPDATE SET
+          "name" = COALESCE(NULLIF(EXCLUDED."name", ''), "sub_dealers"."name"),
+          "district" = COALESCE(EXCLUDED."district", "sub_dealers"."district"),
+          "pincode" = COALESCE(EXCLUDED."pincode", "sub_dealers"."pincode"),
+          "electricianCount" = "sub_dealers"."electricianCount" + 1,
+          "lastSeenAt" = now()`,
+        [
+          data.fallbackDealerPhone,
+          data.fallbackDealerName || 'SRV Sub Dealer',
+          data.district || null,
+          data.pincode || null,
+        ],
+      );
+    }
+
     // If linked to a dealer, sync dealer's tier
     if (saved.dealerId) {
       await this.tierService.syncDealerTier(saved.dealerId);

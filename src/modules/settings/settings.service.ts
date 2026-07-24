@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -327,6 +327,52 @@ export class SettingsService {
     }
 
     return this.findOne(key);
+  }
+
+  async updateMany(settings: Record<string, string>, adminId: string) {
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      throw new BadRequestException('settings must be an object');
+    }
+
+    const entries = Object.entries(settings);
+    if (!entries.length) {
+      throw new BadRequestException('At least one setting is required');
+    }
+    if (entries.length > 250) {
+      throw new BadRequestException('A maximum of 250 settings can be updated at once');
+    }
+
+    const invalidKey = entries.find(([key]) => !/^[A-Za-z0-9._-]{1,100}$/.test(key));
+    if (invalidKey) {
+      throw new BadRequestException(`Invalid setting key "${invalidKey[0]}"`);
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(Settings);
+      for (const [key, rawValue] of entries) {
+        const value = String(rawValue ?? '');
+        const existing = await repository.findOne({ where: { key } });
+        if (existing) {
+          existing.value = value;
+          existing.updatedBy = adminId;
+          existing.updatedAt = new Date();
+          await repository.save(existing);
+        } else {
+          await repository.save(repository.create({
+            id: randomUUID(),
+            key,
+            value,
+            updatedBy: adminId,
+            updatedAt: new Date(),
+          }));
+        }
+      }
+    });
+
+    return {
+      message: 'App settings saved successfully',
+      updated: entries.length,
+    };
   }
 
   async configurePoints(pointsConfigDto: PointsConfigDto, adminId: string) {

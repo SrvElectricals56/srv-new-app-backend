@@ -25,4 +25,4 @@ RUN mkdir -p uploads && chown node:node uploads
 USER node
 
 EXPOSE 3001
-CMD ["node", "dist/main.js"]
+CMD ["sh", "-c", "node dist/database/run-safe-migrations.js && exec node dist/main.js"]

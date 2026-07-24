@@ -81,7 +81,7 @@ export class DealerService {
                 'phone'::text AS "identifierType",
                 sd."phone" AS "identifier",
                 sd."phone", NULL::text AS "dealerCode",
-                COALESCE(NULLIF(sd."name", ''), 'SRV Dealer') AS "name",
+                 COALESCE(NULLIF(sd."name", ''), 'SRV Sub Dealer') AS "name",
                 sd."district", sd."pincode",
                 COUNT(DISTINCT e."id")::int AS "electricianCount",
                 sd."firstSeenAt", sd."lastSeenAt"
@@ -130,7 +130,11 @@ export class DealerService {
       [term, safeLimit, (safePage - 1) * safeLimit],
     );
     const total = Number(rows[0]?.total ?? 0);
-    const data = rows.map(({ total: _total, ...row }) => row);
+    const data = rows.map(({ total: _total, ...row }) => ({
+      ...row,
+      effectiveRole: 'dealer',
+      roleLabel: 'SRV Sub Dealer',
+    }));
     return { data, total, page: safePage, limit: safeLimit };
   }
 
