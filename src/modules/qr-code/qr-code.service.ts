@@ -39,6 +39,50 @@ export class QrCodeService {
     private adminRepository: Repository<Admin>,
   ) {}
 
+  private parseQrSearchDate(value: string): { start: Date; end: Date } | null {
+    const monthNames = [
+      'jan', 'feb', 'mar', 'apr', 'may', 'jun',
+      'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    ];
+    let year: number;
+    let month: number;
+    let day: number;
+    let match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (match) {
+      year = Number(match[1]);
+      month = Number(match[2]);
+      day = Number(match[3]);
+    } else {
+      match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (match) {
+        day = Number(match[1]);
+        month = Number(match[2]);
+        year = Number(match[3]);
+      } else {
+        match = value.match(/^(\d{2})\s+([A-Za-z]{3})\s+(\d{4})$/);
+        if (!match) return null;
+        day = Number(match[1]);
+        month = monthNames.indexOf(match[2].toLowerCase()) + 1;
+        year = Number(match[3]);
+      }
+    }
+
+    const validationDate = new Date(Date.UTC(year, month - 1, day));
+    if (
+      month < 1 ||
+      validationDate.getUTCFullYear() !== year ||
+      validationDate.getUTCMonth() !== month - 1 ||
+      validationDate.getUTCDate() !== day
+    ) {
+      return null;
+    }
+
+    // India has a fixed UTC+05:30 offset, so IST midnight is 18:30 UTC.
+    const start = new Date(Date.UTC(year, month - 1, day) - 330 * 60 * 1000);
+    return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+  }
+
   async recordDownloadHistory(
     admin: { id: string; email?: string; name?: string; role?: string },
     body: {
@@ -351,6 +395,7 @@ export class QrCodeService {
           b."productName" ILIKE $1
           OR b."batchId" ILIKE $1
           OR CAST(b."batchNo" AS text) ILIKE $1
+          OR p."sku" ILIKE $1
         )`
       : '';
     const params = trimmedSearch ? [`%${trimmedSearch}%`] : [];
@@ -365,12 +410,14 @@ export class QrCodeService {
           b."batchNo",
           b."productId",
           b."productName",
+          p."sku" AS "productSku",
           b."generatedDate",
           b."points",
           b."qty",
           b."usedQty",
           b."activeQty"
         FROM "qr_code_batches" b
+        LEFT JOIN "products" p ON p."id"::text = b."productId"::text
         ${whereSql}
         ORDER BY b."batchNo" DESC NULLS LAST, b."generatedDate" DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
@@ -380,8 +427,13 @@ export class QrCodeService {
 
     const countRows = await this.qrCodeRepository.query(
       `
-        SELECT COUNT(*)::int AS total
+        SELECT
+          COUNT(*)::int AS total,
+          COALESCE(SUM(b."qty"), 0)::bigint AS "totalQty",
+          COALESCE(SUM(b."usedQty"), 0)::bigint AS "usedQty",
+          COALESCE(SUM(b."activeQty"), 0)::bigint AS "activeQty"
         FROM "qr_code_batches" b
+        LEFT JOIN "products" p ON p."id"::text = b."productId"::text
         ${whereSql}
       `,
       params,
@@ -394,6 +446,11 @@ export class QrCodeService {
       page: safePage,
       limit: safeLimit,
       totalPages: Math.ceil(total / safeLimit),
+      summary: {
+        totalQty: Number(countRows?.[0]?.totalQty ?? 0),
+        usedQty: Number(countRows?.[0]?.usedQty ?? 0),
+        activeQty: Number(countRows?.[0]?.activeQty ?? 0),
+      },
     };
   }
 
@@ -424,27 +481,28 @@ export class QrCodeService {
 
     if (trimmedSearch) {
       const normalizedCode = trimmedSearch.replace(/\.png$/i, '');
-      const numericSearch = /^\d+$/.test(trimmedSearch);
-      if (numericSearch) {
-        queryBuilder.andWhere(
-          `(
-            LOWER(qrCode.code) = LOWER(:exactCode)
-            OR qrCode.batchId = :exactCode
-            OR qrCode.batchNo = CAST(:numericExact AS integer)
-            OR "qrCode"."legacyId" = CAST(:numericExact AS bigint)
-          )`,
-          { exactCode: normalizedCode, numericExact: normalizedCode },
-        );
-      } else {
-        queryBuilder.andWhere(
-          `(
-            LOWER(qrCode.code) = LOWER(:exactCode)
-            OR qrCode.productName ILIKE :search
-            OR qrCode.batchId = :exactCode
-          )`,
-          { exactCode: normalizedCode, search: `%${trimmedSearch}%` },
-        );
-      }
+      const dateRange = this.parseQrSearchDate(normalizedCode);
+      const dateCondition = dateRange
+        ? 'OR ("qrCode"."createdAt" >= :dateStart AND "qrCode"."createdAt" < :dateEnd)'
+        : '';
+      queryBuilder.andWhere(
+        `(
+          LOWER(qrCode.code) = LOWER(:exactCode)
+          OR qrCode.code ILIKE :search
+          OR qrCode.productName ILIKE :search
+          OR product.name ILIKE :search
+          OR product.sku ILIKE :search
+          OR qrCode.batchId ILIKE :search
+          OR CAST(qrCode.batchNo AS text) ILIKE :search
+          OR CAST("qrCode"."legacyId" AS text) ILIKE :search
+          ${dateCondition}
+        )`,
+        {
+          exactCode: normalizedCode,
+          search: `%${normalizedCode}%`,
+          ...(dateRange ? { dateStart: dateRange.start, dateEnd: dateRange.end } : {}),
+        },
+      );
     }
 
     if (batchId) {
@@ -560,10 +618,13 @@ export class QrCodeService {
   }
 
   async findFirstScan(id: string) {
-    let qrCode = await this.qrCodeRepository.findOne({ where: { id } });
-    if (!qrCode) {
-      qrCode = await this.qrCodeRepository.findOne({ where: { code: id } });
-    }
+    const qrCode = await this.qrCodeRepository
+      .createQueryBuilder('qrCode')
+      .leftJoinAndSelect('qrCode.product', 'product')
+      .where('"qrCode"."id"::text = :candidate', { candidate: id })
+      .orWhere('LOWER("qrCode"."code") = LOWER(:candidate)', { candidate: id })
+      .orWhere('"qrCode"."legacyId"::text = :candidate', { candidate: id })
+      .getOne();
     if (!qrCode) {
       throw new NotFoundException(`QR code "${id}" not found`);
     }
@@ -573,6 +634,17 @@ export class QrCodeService {
     return {
       qrCodeId: qrCode.id,
       code: qrCode.code,
+      productId: qrCode.productId,
+      productName: qrCode.productName ?? qrCode.product?.name ?? null,
+      productSku: qrCode.product?.sku ?? null,
+      batchId: qrCode.batchId,
+      batchNo: qrCode.batchNo,
+      points: Number(qrCode.rewardPoints ?? qrCode.product?.points ?? 0),
+      status: qrCode.isScanned ? 'used' : qrCode.isActive ? 'active' : 'inactive',
+      isScanned: qrCode.isScanned,
+      scanCount: qrCode.scanCount,
+      generatedAt: qrCode.createdAt,
+      lastScannedAt: qrCode.lastScannedAt,
       firstScan: firstScan
         ? {
             ...firstScan,

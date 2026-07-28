@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Patch,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -29,7 +30,7 @@ export class SupportController {
   getTickets(
     @Query('page') page = '1',
     @Query('limit') limit = '20',
-    @Query('status') status?: SupportTicketStatus,
+    @Query('status') status?: SupportTicketStatus | 'pending' | 'in-progress',
     @Query('priority') priority?: SupportTicketPriority,
   ) {
     return this.supportService.getTickets(parseInt(page), parseInt(limit), status, priority);
@@ -62,9 +63,32 @@ export class SupportController {
   @ApiResponse({ status: 200, description: 'Status updated successfully' })
   updateStatus(
     @Param('id') id: string,
-    @Body('status') status: SupportTicketStatus,
+    @Body('status') status: SupportTicketStatus | 'pending' | 'in-progress',
     @CurrentUser('id') adminId: string,
   ) {
     return this.supportService.updateStatus(id, status, adminId);
+  }
+
+  @Patch('tickets/:id/replies/:replyId')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Edit an admin reply on a support ticket' })
+  updateReply(
+    @Param('id') id: string,
+    @Param('replyId') replyId: string,
+    @Body('message') message: string,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.supportService.updateReply(id, replyId, message, adminId);
+  }
+
+  @Delete('tickets/:id/replies/:replyId')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Delete an admin reply from a support ticket' })
+  deleteReply(
+    @Param('id') id: string,
+    @Param('replyId') replyId: string,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.supportService.deleteReply(id, replyId, adminId);
   }
 }

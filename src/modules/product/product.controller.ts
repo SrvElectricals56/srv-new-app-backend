@@ -42,6 +42,8 @@ export class ProductController {
     @Query('search') search?: string,
     @Query('category') category?: string,
     @Query('isActive') isActive?: string,
+    @Query('stockStatus') stockStatus?: 'in_stock' | 'low' | 'out',
+    @Query('badge') badge?: string,
   ) {
     return this.productService.findAll(
       parseInt(page),
@@ -49,6 +51,8 @@ export class ProductController {
       search,
       category,
       isActive !== undefined ? isActive === 'true' : undefined,
+      stockStatus,
+      badge,
     );
   }
 

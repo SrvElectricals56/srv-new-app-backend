@@ -58,7 +58,7 @@ export class SupportTicket {
   response: string;
 
   @Column({ type: 'json', nullable: true })
-  replies: { id?: string; sender: string; senderName: string; message: string; timestamp: Date | string }[];
+  replies: { id?: string; sender: string; senderName: string; message: string; timestamp: Date | string; editedAt?: Date | string }[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

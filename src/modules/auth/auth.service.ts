@@ -91,10 +91,14 @@ export class AuthService {
       });
 
       const admin = await this.adminRepository.findOne({
-        where: { id: payload.sub, refreshToken },
+        where: { id: payload.sub },
       });
 
-      if (!admin) {
+      if (
+        !admin ||
+        !admin.isActive ||
+        (admin.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)
+      ) {
         throw new UnauthorizedException('Invalid refresh token');
       }
 

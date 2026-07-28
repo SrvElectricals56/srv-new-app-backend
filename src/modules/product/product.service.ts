@@ -34,6 +34,8 @@ export class ProductService {
     search?: string,
     category?: string,
     isActive?: boolean,
+    stockStatus?: 'in_stock' | 'low' | 'out',
+    badge?: string,
   ) {
     const skip = (page - 1) * limit;
     const queryBuilder = this.productRepository.createQueryBuilder('product');
@@ -54,6 +56,18 @@ export class ProductService {
 
     if (isActive !== undefined) {
       queryBuilder.andWhere('product.isActive = :isActive', { isActive });
+    }
+
+    if (stockStatus === 'in_stock') {
+      queryBuilder.andWhere('product.stock > 0');
+    } else if (stockStatus === 'low') {
+      queryBuilder.andWhere('product.stock > 0 AND product.stock < 500');
+    } else if (stockStatus === 'out') {
+      queryBuilder.andWhere('product.stock = 0');
+    }
+
+    if (badge) {
+      queryBuilder.andWhere('product.badge = :badge', { badge });
     }
 
     queryBuilder

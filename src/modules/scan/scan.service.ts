@@ -34,6 +34,15 @@ export class ScanService {
 
     queryBuilder.orderBy('scan.scannedAt', 'DESC').skip(skip).take(limit);
     const [data, total] = await queryBuilder.getManyAndCount();
+    const userSummaries = await this.lookupUserSummaries(
+      data.map((scan) => scan.userId).filter(Boolean),
+    );
+    const userSummaryMap = new Map<string, { phone?: string; code?: string }>(
+      userSummaries.map((user: any) => [
+        String(user.id),
+        { phone: user.phone, code: user.code },
+      ]),
+    );
 
     // Helper to build a base query with the same filters (for aggregates)
     const baseQb = () => {
@@ -68,6 +77,8 @@ export class ScanService {
     return {
       data: data.map(s => ({
         ...s,
+        userPhone: userSummaryMap.get(String(s.userId))?.phone ?? null,
+        userCode: userSummaryMap.get(String(s.userId))?.code ?? null,
         scannedAt: s.scannedAt instanceof Date ? s.scannedAt.toISOString() : s.scannedAt,
       })),
       total,
@@ -146,5 +157,31 @@ export class ScanService {
             AND (dealer.phone ILIKE :searchPattern OR dealer."dealerCode" ILIKE :searchPattern)
         )`, { searchPattern });
     }));
+  }
+
+  private lookupUserSummaries(userIds: string[]) {
+    const ids = [...new Set(userIds)];
+    if (!ids.length) return Promise.resolve([]);
+
+    return this.scanRepository.query(
+      `
+        SELECT e."id"::text AS "id", e."phone", e."electricianCode" AS "code"
+        FROM "electricians" e
+        WHERE e."id"::text = ANY($1::text[])
+        UNION ALL
+        SELECT d."id"::text AS "id", d."phone", d."dealerCode" AS "code"
+        FROM "dealers" d
+        WHERE d."id"::text = ANY($1::text[])
+        UNION ALL
+        SELECT u."id"::text AS "id", u."phone", u."userCode" AS "code"
+        FROM "app_users" u
+        WHERE u."id"::text = ANY($1::text[])
+        UNION ALL
+        SELECT cb."id"::text AS "id", cb."phone", cb."counterboyCode" AS "code"
+        FROM "counterboys" cb
+        WHERE cb."id"::text = ANY($1::text[])
+      `,
+      [ids],
+    );
   }
 }
