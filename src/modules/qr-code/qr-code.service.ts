@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { GenerateQrCodeDto } from './dto/generate-qr-code.dto';
 import { QrCode } from '../../database/entities/qr-code.entity';
@@ -482,27 +482,79 @@ export class QrCodeService {
     if (trimmedSearch) {
       const normalizedCode = trimmedSearch.replace(/\.png$/i, '');
       const dateRange = this.parseQrSearchDate(normalizedCode);
-      const dateCondition = dateRange
-        ? 'OR ("qrCode"."createdAt" >= :dateStart AND "qrCode"."createdAt" < :dateEnd)'
-        : '';
-      queryBuilder.andWhere(
-        `(
-          LOWER(qrCode.code) = LOWER(:exactCode)
-          OR qrCode.code ILIKE :search
-          OR qrCode.productName ILIKE :search
-          OR product.name ILIKE :search
-          OR product.sku ILIKE :search
-          OR qrCode.batchId ILIKE :search
-          OR CAST(qrCode.batchNo AS text) ILIKE :search
-          OR CAST("qrCode"."legacyId" AS text) ILIKE :search
-          ${dateCondition}
-        )`,
-        {
-          exactCode: normalizedCode,
-          search: `%${normalizedCode}%`,
-          ...(dateRange ? { dateStart: dateRange.start, dateEnd: dateRange.end } : {}),
-        },
-      );
+
+      // qr_codes contains millions of rows in production. A single OR with
+      // wildcard predicates made PostgreSQL abandon the exact-code index and
+      // scan the whole table. Resolve the small lookup dimensions first, then
+      // constrain the main query using indexed IDs/columns.
+      const exactQr = await this.qrCodeRepository
+        .createQueryBuilder('exactQr')
+        .select(['exactQr.id'])
+        .where('LOWER(exactQr.code) = LOWER(:exactCode)', { exactCode: normalizedCode })
+        .getOne();
+
+      if (exactQr) {
+        queryBuilder.andWhere('qrCode.id = :exactQrId', { exactQrId: exactQr.id });
+      } else if (dateRange) {
+        queryBuilder.andWhere(
+          '"qrCode"."createdAt" >= :dateStart AND "qrCode"."createdAt" < :dateEnd',
+          { dateStart: dateRange.start, dateEnd: dateRange.end },
+        );
+      } else {
+        const wildcard = `%${normalizedCode}%`;
+        const [matchingProducts, matchingBatches] = await Promise.all([
+          this.productRepository
+            .createQueryBuilder('searchProduct')
+            .select(['searchProduct.id'])
+            .where('searchProduct.name ILIKE :wildcard OR searchProduct.sku ILIKE :wildcard', { wildcard })
+            .limit(1000)
+            .getMany(),
+          this.qrCodeRepository.query(
+            `
+              SELECT b."batchId"
+              FROM "qr_code_batches" b
+              LEFT JOIN "products" p ON p."id"::text = b."productId"::text
+              WHERE b."productName" ILIKE $1
+                 OR b."batchId" ILIKE $1
+                 OR CAST(b."batchNo" AS text) ILIKE $1
+                 OR p."sku" ILIKE $1
+              LIMIT 2000
+            `,
+            [wildcard],
+          ),
+        ]);
+        const productIds = matchingProducts.map((item) => item.id);
+        const batchIds = matchingBatches
+          .map((item: { batchId?: string }) => item.batchId)
+          .filter((value: string | undefined): value is string => Boolean(value));
+        const numericSearch = /^\d+$/.test(normalizedCode) ? normalizedCode : null;
+
+        queryBuilder.andWhere(new Brackets((searchQuery) => {
+          let hasCondition = false;
+          if (productIds.length) {
+            searchQuery.where('qrCode.productId IN (:...searchProductIds)', {
+              searchProductIds: productIds,
+            });
+            hasCondition = true;
+          }
+          if (batchIds.length) {
+            const method = hasCondition ? 'orWhere' : 'where';
+            searchQuery[method]('qrCode.batchId IN (:...searchBatchIds)', {
+              searchBatchIds: batchIds,
+            });
+            hasCondition = true;
+          }
+          if (numericSearch) {
+            const method = hasCondition ? 'orWhere' : 'where';
+            searchQuery[method](
+              '(CAST("qrCode"."legacyId" AS text) = :numericSearch OR CAST(qrCode.batchNo AS text) = :numericSearch)',
+              { numericSearch },
+            );
+            hasCondition = true;
+          }
+          if (!hasCondition) searchQuery.where('1 = 0');
+        }));
+      }
     }
 
     if (batchId) {
