@@ -207,10 +207,11 @@ export class DealerService {
            RETURNING "id"`,
           [phone],
         );
+        const unlinkedRows = Array.isArray(unlinked?.[0]) ? unlinked[0] : unlinked;
         await manager.query('DELETE FROM "sub_dealers" WHERE "id"::text = $1', [id]);
         return {
           message: 'Sub dealer deleted successfully',
-          unlinkedElectricians: unlinked.length,
+          unlinkedElectricians: unlinkedRows.length,
         };
       }
 
@@ -236,9 +237,10 @@ export class DealerService {
          RETURNING "id"`,
         [dealerCode],
       );
+      const unlinkedRows = Array.isArray(unlinked?.[0]) ? unlinked[0] : unlinked;
       return {
         message: 'Sub dealer deleted successfully',
-        unlinkedElectricians: unlinked.length,
+        unlinkedElectricians: unlinkedRows.length,
       };
     });
   }
