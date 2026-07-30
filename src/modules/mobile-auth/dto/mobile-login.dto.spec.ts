@@ -27,6 +27,15 @@ describe('mobile auth DTO validation', () => {
     expect(errors.some((error) => error.property === 'phone')).toBe(true);
   });
 
+  it('rejects ten-digit numbers that are not valid Indian mobile numbers', async () => {
+    const dto = plainToInstance(MobileLoginDto, {
+      phone: '1234567890',
+      role: 'user',
+    });
+
+    expect((await validate(dto)).some((error) => error.property === 'phone')).toBe(true);
+  });
+
   it('rejects malformed OTP and password login requests', async () => {
     const otpDto = plainToInstance(VerifyOtpDto, {
       phone: '9876543210',
@@ -57,6 +66,7 @@ describe('mobile auth DTO validation', () => {
       pincode: '110001',
       gstNumber: '07ABCDE1234F1Z5',
       password: 'StrongPassword123',
+      signupVerificationToken: 'verified-signup-proof',
     });
 
     await expect(validate(dto)).resolves.toHaveLength(0);

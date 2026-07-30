@@ -15,7 +15,7 @@ export type MobileUserRole = 'electrician' | 'dealer' | 'user' | 'counterboy';
 export class MobileLoginDto {
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\d{10}$/, { message: 'phone must contain exactly 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
 
   @IsString()
@@ -27,7 +27,7 @@ export class MobileLoginDto {
 export class VerifyOtpDto {
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\d{10}$/, { message: 'phone must contain exactly 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
 
   @IsString()
@@ -73,8 +73,12 @@ class BaseRegistrationDto {
   name: string;
 
   @IsString()
-  @Matches(/^\d{10}$/, { message: 'phone must contain exactly 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
+
+  @IsString()
+  @IsNotEmpty()
+  signupVerificationToken: string;
 
   @IsOptional()
   @IsEmail()
@@ -178,8 +182,12 @@ export class MobileRefreshDto {
 
 export class GoogleCustomerAuthDto {
   @IsString()
-  @IsNotEmpty()
-  idToken: string;
+  @IsOptional()
+  idToken?: string;
+
+  @IsString()
+  @IsOptional()
+  accessToken?: string;
 }
 
 export class RegisterUserDto {
@@ -189,8 +197,12 @@ export class RegisterUserDto {
 
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\d{10}$/, { message: 'phone must contain exactly 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
+
+  @IsString()
+  @IsNotEmpty()
+  signupVerificationToken: string;
 
   @IsString()
   @IsOptional()
@@ -228,8 +240,12 @@ export class RegisterCounterBoyDto {
 
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\d{10}$/, { message: 'phone must contain exactly 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
+
+  @IsString()
+  @IsNotEmpty()
+  signupVerificationToken: string;
 
   @IsString()
   @IsOptional()

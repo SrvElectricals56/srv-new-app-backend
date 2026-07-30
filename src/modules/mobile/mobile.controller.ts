@@ -387,9 +387,9 @@ export class MobileController {
   replyToTicket(
     @Request() req: any,
     @Param('id') id: string,
-    @Body() body: { message: string },
+    @Body() body: { message?: string; photoUrls?: string[] },
   ) {
-    return this.mobileService.replyToTicket(req.user.id, id, body.message);
+    return this.mobileService.replyToTicket(req.user.id, id, body.message ?? '', body.photoUrls);
   }
 
   @Delete('support/tickets/:id/replies/:replyId')

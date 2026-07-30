@@ -1574,17 +1574,19 @@ export class MobileService {
   }
 
   async saveBankAccount(userId: string, role: string, data: {
-    accountHolderName: string; upiId: string; bankName?: string | null; accountNumber?: string | null; ifsc?: string | null;
+    accountHolderName: string; upiId: string; upiQrCodeImage: string; bankName?: string | null; accountNumber?: string | null; ifsc?: string | null;
   }) {
     const accountHolderName = data.accountHolderName?.trim();
     const upiId = data.upiId?.trim();
-    if (!accountHolderName || !upiId) {
-      throw new BadRequestException('Account holder name and UPI ID are required');
+    const upiQrCodeImage = data.upiQrCodeImage?.trim();
+    if (!accountHolderName || !upiId || !upiQrCodeImage) {
+      throw new BadRequestException('Account holder name, UPI ID and UPI QR code image are required');
     }
 
     const updateData: any = {
       accountHolderName,
       upiId,
+      upiQrCodeImage,
       bankName: data.bankName?.trim() || null,
       bankAccount: data.accountNumber?.trim() || null,
       ifsc: data.ifsc?.trim().toUpperCase() || null,
@@ -1606,7 +1608,7 @@ export class MobileService {
     if (normalizedRole === UserRole.DEALER) {
       const dealer = await this.dealerRepository.findOne({ where: { id: userId } });
       if (!dealer) throw new NotFoundException('Dealer not found');
-      if (!dealer.bankLinked || !dealer.accountHolderName || !dealer.upiId) {
+      if (!dealer.bankLinked || !dealer.accountHolderName || !dealer.upiId || !dealer.upiQrCodeImage) {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
 
@@ -1628,6 +1630,7 @@ export class MobileService {
             'dealer.status',
             'dealer.bonusPoints',
             'dealer.upiId',
+            'dealer.upiQrCodeImage',
             'dealer.bankAccount',
             'dealer.ifsc',
             'dealer.bankName',
@@ -1655,6 +1658,7 @@ export class MobileService {
             amount,
             status: 'pending' as any,
             upiId: dealer.upiId,
+            upiQrCodeImage: dealer.upiQrCodeImage,
             bankAccount: dealer.bankAccount,
             ifsc: dealer.ifsc,
             accountHolderName: dealer.accountHolderName,
@@ -1697,7 +1701,8 @@ export class MobileService {
       if (
         !(user as any).bankLinked ||
         !(user as any).accountHolderName ||
-        !(user as any).upiId
+        !(user as any).upiId ||
+        !(user as any).upiQrCodeImage
       ) {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
@@ -1718,6 +1723,7 @@ export class MobileService {
           amount,
           status: 'pending' as any,
           upiId: (user as any).upiId,
+          upiQrCodeImage: (user as any).upiQrCodeImage,
           bankAccount: (user as any).bankAccount,
           ifsc: (user as any).ifsc,
           accountHolderName: (user as any).accountHolderName,
@@ -1782,11 +1788,11 @@ export class MobileService {
 
       const pointsRequired = Number(product.points ?? 0);
 
-      // Dealers spend from bonusPoints; all other roles spend from walletBalance
+      // Gift purchases use the user's reward wallet for every role. Dealer
+      // bonusPoints are a separate cash-withdrawal balance and must not block
+      // dealers from spending reward points shown in the Gift Store.
       const isDealerRole = normalizedRole === UserRole.DEALER;
-      const currentBalance = isDealerRole
-        ? Number((user as any).bonusPoints ?? 0)
-        : Number((user as any).walletBalance ?? 0);
+      const currentBalance = Number((user as any).walletBalance ?? (user as any).totalPoints ?? 0);
 
       if (currentBalance < pointsRequired) {
         throw new BadRequestException('Insufficient points for this redemption');
@@ -1804,6 +1810,7 @@ export class MobileService {
           amount: product.mrp ?? 0,
           status: 'pending' as any,
           upiId: (user as any).upiId,
+          upiQrCodeImage: (user as any).upiQrCodeImage,
           bankAccount: (user as any).bankAccount,
           ifsc: (user as any).ifsc,
           accountHolderName: (user as any).accountHolderName,
@@ -1816,7 +1823,7 @@ export class MobileService {
       // Update the correct balance field depending on role
       if (isDealerRole) {
         await manager.getRepository(Dealer).update(userId, {
-          bonusPoints: newBalance,
+          walletBalance: newBalance,
         });
       } else {
         await this.updateUserByRole(
@@ -2248,18 +2255,24 @@ export class MobileService {
     return { data: tickets };
   }
 
-  async replyToTicket(userId: string, ticketId: string, message: string) {
+  async replyToTicket(userId: string, ticketId: string, message: string, photoUrls?: string[]) {
     const ticket = await this.supportTicketRepository.findOne({ where: { id: ticketId, userId } });
     if (!ticket) throw new NotFoundException('Ticket not found');
     if (ticket.status === SupportTicketStatus.CLOSED || ticket.status === SupportTicketStatus.RESOLVED) {
       throw new BadRequestException('This ticket is already closed');
     }
 
+    const cleanMessage = String(message ?? '').trim();
+    const cleanPhotoUrls = [...new Set((photoUrls ?? []).filter(Boolean))].slice(0, 5);
+    if (!cleanMessage && !cleanPhotoUrls.length) {
+      throw new BadRequestException('A message or photo is required');
+    }
     const newReply = {
       id: `reply_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       sender: 'user',
       senderName: ticket.userName || 'User',
-      message,
+      message: cleanMessage || 'Photo attachment',
+      photoUrls: cleanPhotoUrls,
       timestamp: new Date(),
     };
     const existingReplies = ticket.replies || [];

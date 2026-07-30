@@ -64,7 +64,7 @@ export class MobileAuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Signup or login customer with Google' })
   googleCustomerAuth(@Body() body: GoogleCustomerAuthDto) {
-    return this.mobileAuthService.googleCustomerAuth(body.idToken);
+    return this.mobileAuthService.googleCustomerAuth(body);
   }
 
   @Post('password-reset/send-otp')

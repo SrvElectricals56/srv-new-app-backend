@@ -186,6 +186,63 @@ export class DealerService {
     };
   }
 
+  async removeSubDealer(id: string) {
+    return this.dealerRepository.manager.transaction(async (manager) => {
+      const phoneRows = await manager.query(
+        'SELECT "phone" FROM "sub_dealers" WHERE "id"::text = $1 FOR UPDATE',
+        [id],
+      );
+
+      if (phoneRows.length) {
+        const phone = phoneRows[0].phone;
+        const unlinked = await manager.query(
+          `UPDATE "electricians"
+           SET "fallbackDealerName" = NULL,
+               "fallbackDealerPhone" = NULL,
+               "fallbackDealerCode" = NULL,
+               "updatedAt" = now()
+           WHERE "dealerId" IS NULL
+             AND RIGHT(regexp_replace(COALESCE("fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+               = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10)
+           RETURNING "id"`,
+          [phone],
+        );
+        await manager.query('DELETE FROM "sub_dealers" WHERE "id"::text = $1', [id]);
+        return {
+          message: 'Sub dealer deleted successfully',
+          unlinkedElectricians: unlinked.length,
+        };
+      }
+
+      const legacyRows = await manager.query(
+        `SELECT "fallbackDealerCode" AS "dealerCode"
+         FROM "electricians"
+         WHERE "dealerId" IS NULL
+           AND NULLIF(btrim("fallbackDealerCode"), '') IS NOT NULL
+           AND ('legacy-code-' || md5("fallbackDealerCode")) = $1
+         LIMIT 1`,
+        [id],
+      );
+      const dealerCode = legacyRows[0]?.dealerCode;
+      if (!dealerCode) throw new NotFoundException('Sub dealer not found');
+
+      const unlinked = await manager.query(
+        `UPDATE "electricians"
+         SET "fallbackDealerName" = NULL,
+             "fallbackDealerPhone" = NULL,
+             "fallbackDealerCode" = NULL,
+             "updatedAt" = now()
+         WHERE "dealerId" IS NULL AND "fallbackDealerCode" = $1
+         RETURNING "id"`,
+        [dealerCode],
+      );
+      return {
+        message: 'Sub dealer deleted successfully',
+        unlinkedElectricians: unlinked.length,
+      };
+    });
+  }
+
   async create(createDealerDto: CreateDealerDto) {
     await this.crossRolePhoneService.assertPhoneAvailableForRole(createDealerDto.phone, 'dealer');
 

@@ -44,6 +44,9 @@ export class Redemption {
   @Column({ nullable: true })
   upiId: string;
 
+  @Column({ type: 'text', nullable: true })
+  upiQrCodeImage: string;
+
   @Column({ nullable: true })
   bankAccount: string;
 

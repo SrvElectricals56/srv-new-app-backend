@@ -793,7 +793,8 @@ export class CartService {
         this.isWithinHours(order.deliveredAt, 24);
       const canRefund =
         order.paymentStatus === 'paid' &&
-        !['refunded', 'rejected'].includes(status);
+        ['cancelled', 'returned'].includes(status) &&
+        !order.refundStatus;
 
       return {
         ...order,
@@ -867,8 +868,8 @@ export class CartService {
     if (order.paymentStatus !== 'paid') {
       throw new BadRequestException('Refund can be requested only for paid orders');
     }
-    if (['refunded', 'rejected'].includes(status)) {
-      throw new BadRequestException('Refund is not available for this order status');
+    if (!['cancelled', 'returned'].includes(status) || order.refundStatus) {
+      throw new BadRequestException('Refund is available only for a paid cancelled or returned order');
     }
     await this.orderRepo.update(order.id, {
       // A customer request only initiates the refund. The status becomes

@@ -110,6 +110,13 @@ export class DealerController {
     return this.dealerService.getSubDealerElectricians(id);
   }
 
+  @Delete('sub-dealers/:id')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete an unregistered sub dealer and unlink associated electricians' })
+  removeSubDealer(@Param('id') id: string) {
+    return this.dealerService.removeSubDealer(id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get dealer by ID' })
   @ApiResponse({ status: 200, description: 'Dealer details' })

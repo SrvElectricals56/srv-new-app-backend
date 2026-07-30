@@ -341,14 +341,25 @@ export class ElectricianService {
       });
     }
 
+    // When the admin selects App Installed, date shortcuts describe the app
+    // installation date. Otherwise they continue to describe registration.
+    // Compare calendar dates in IST so Today does not drift to the previous or
+    // following day when the browser and server use different time zones.
+    const filteredDateColumn = appInstalled === true
+      ? 'electrician.firstAppLoginAt'
+      : 'electrician.joinedDate';
     if (dateFrom) {
-      queryBuilder.andWhere('electrician.joinedDate >= :dateFrom', { dateFrom: new Date(dateFrom) });
+      queryBuilder.andWhere(
+        `(${filteredDateColumn} AT TIME ZONE 'Asia/Kolkata')::date >= CAST(:dateFrom AS date)`,
+        { dateFrom },
+      );
     }
 
     if (dateTo) {
-      const to = new Date(dateTo);
-      to.setHours(23, 59, 59, 999);
-      queryBuilder.andWhere('electrician.joinedDate <= :dateTo', { dateTo: to });
+      queryBuilder.andWhere(
+        `(${filteredDateColumn} AT TIME ZONE 'Asia/Kolkata')::date <= CAST(:dateTo AS date)`,
+        { dateTo },
+      );
     }
 
     queryBuilder

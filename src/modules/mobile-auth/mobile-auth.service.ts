@@ -187,6 +187,8 @@ export class MobileAuthService {
     return [
       ...(this.configService.get<string>('GOOGLE_CLIENT_IDS') ?? '').split(','),
       this.configService.get<string>('GOOGLE_WEB_CLIENT_ID') ?? '',
+      this.configService.get<string>('GOOGLE_ANDROID_CLIENT_ID') ?? '',
+      this.configService.get<string>('GOOGLE_IOS_CLIENT_ID') ?? '',
     ].map((value) => value.trim()).filter(Boolean);
   }
 
@@ -212,6 +214,39 @@ export class MobileAuthService {
       name: String(payload.name ?? payload.given_name ?? email.split('@')[0] ?? 'Customer').trim(),
       picture: typeof payload.picture === 'string' ? payload.picture : null,
       sub: String(payload.sub ?? '').trim(),
+    };
+  }
+
+  private async verifyGoogleAccessToken(accessToken: string) {
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const [tokenResponse, userResponse] = await Promise.all([
+      fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`),
+      fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers }),
+    ]);
+    const [tokenPayload, userPayload] = await Promise.all([
+      tokenResponse.json().catch(() => null),
+      userResponse.json().catch(() => null),
+    ]);
+    if (!tokenResponse.ok || !userResponse.ok || !tokenPayload || !userPayload) {
+      throw new UnauthorizedException('Invalid Google sign-in token.');
+    }
+
+    const allowedClientIds = this.getGoogleClientIds();
+    const audience = String(tokenPayload.audience ?? tokenPayload.aud ?? tokenPayload.issued_to ?? '');
+    if (allowedClientIds.length > 0 && !allowedClientIds.includes(audience)) {
+      throw new UnauthorizedException('Google sign-in is not configured for this app.');
+    }
+    if (userPayload.email_verified !== true && userPayload.email_verified !== 'true') {
+      throw new UnauthorizedException('Google email is not verified.');
+    }
+
+    const email = this.normalizeEmail(userPayload.email);
+    if (!email) throw new UnauthorizedException('Google account email is required.');
+    return {
+      email,
+      name: String(userPayload.name ?? userPayload.given_name ?? email.split('@')[0] ?? 'Customer').trim(),
+      picture: typeof userPayload.picture === 'string' ? userPayload.picture : null,
+      sub: String(userPayload.sub ?? '').trim(),
     };
   }
 
@@ -398,8 +433,20 @@ export class MobileAuthService {
     return `signup:${phone}:${role}`;
   }
 
-  private ensureSignupOtpVerified(phone: string, role: MobileUserRole): string {
+  private ensureSignupOtpVerified(phone: string, role: MobileUserRole, verificationToken?: string): string {
     const key = this.buildSignupOtpKey(phone, role);
+    if (verificationToken) {
+      try {
+        const proof = this.jwtService.verify(verificationToken, {
+          secret: this.configService.get<string>('JWT_SECRET'),
+        }) as { purpose?: string; phone?: string; role?: string };
+        if (proof.purpose === 'signup_otp' && proof.phone === phone && proof.role === role) {
+          return key;
+        }
+      } catch {
+        // Fall through to the legacy in-memory proof for a clear error below.
+      }
+    }
     const stored = otpStore.get(key);
 
     if (!stored || stored.otp !== SIGNUP_OTP_VERIFIED) {
@@ -430,8 +477,8 @@ export class MobileAuthService {
         );
       }
 
-      const roleLabel = role === 'electrician' ? 'Electrician not registered. Please contact your dealer.'
-        : role === 'dealer' ? 'Dealer not registered. Please contact SRV admin.'
+      const roleLabel = role === 'electrician' ? 'Electrician not registered. Please create your account first.'
+        : role === 'dealer' ? 'Dealer not registered. Please create your account first.'
         : role === 'user' ? 'User not registered. Please sign up first.'
         : 'Counter boy not registered. Please contact your dealer.';
       throw new NotFoundException(roleLabel);
@@ -471,8 +518,8 @@ export class MobileAuthService {
         );
       }
 
-      const roleLabel = role === 'electrician' ? 'Electrician not registered. Please contact your dealer.'
-        : role === 'dealer' ? 'Dealer not registered. Please contact SRV admin.'
+      const roleLabel = role === 'electrician' ? 'Electrician not registered. Please create your account first.'
+        : role === 'dealer' ? 'Dealer not registered. Please create your account first.'
         : role === 'user' ? 'User not registered. Please sign up first.'
         : 'Counter boy not registered. Please contact your dealer.';
       throw new NotFoundException(roleLabel);
@@ -562,7 +609,14 @@ export class MobileAuthService {
       failedAttempts: 0,
     });
 
-    return { success: true, message: 'OTP verified successfully' };
+    const signupVerificationToken = await this.jwtService.signAsync(
+      { purpose: 'signup_otp', phone, role },
+      {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: '15m',
+      },
+    );
+    return { success: true, message: 'OTP verified successfully', signupVerificationToken };
   }
 
   // ── Signup Registration ────────────────────────────────────────────────────
@@ -570,9 +624,9 @@ export class MobileAuthService {
   async registerDealer(data: {
     name: string; phone: string; email?: string; town: string;
     district: string; state: string; address: string; pincode?: string;
-    gstNumber?: string; password?: string;
+    gstNumber?: string; password?: string; signupVerificationToken: string;
   }) {
-    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer');
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'dealer');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
@@ -609,8 +663,9 @@ export class MobileAuthService {
     name: string; phone: string; email?: string; city: string;
     district: string; state: string; address?: string; pincode?: string;
     dealerPhone: string; password?: string; subCategory?: string; electricianCode?: string;
+    signupVerificationToken: string;
   }) {
-    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician');
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'electrician');
 
     const normalizedDealerPhone = this.normalizePhone(data.dealerPhone);
@@ -619,8 +674,25 @@ export class MobileAuthService {
     let fallbackDealerName: string | undefined;
     let fallbackDealerPhone: string | undefined;
     if (data.dealerPhone) {
-      const dealer = await this.findUserByPhone(data.dealerPhone, 'dealer');
-      if (dealer) {
+      if (!normalizedDealerPhone || normalizedDealerPhone === this.normalizePhone(data.phone)) {
+        throw new BadRequestException('Enter a dealer phone number different from your electrician phone.');
+      }
+
+      const registration = await this.crossRolePhoneService.findPrimaryRegistrationByPhone(normalizedDealerPhone);
+      if (registration && registration.role !== 'dealer') {
+        const roleLabel = registration.role === 'electrician'
+          ? 'electrician'
+          : registration.role === 'counterboy'
+            ? 'counter boy'
+            : 'customer';
+        throw new BadRequestException(
+          `This phone number belongs to a registered ${roleLabel}, not a dealer. Enter a valid dealer phone number.`,
+        );
+      }
+
+      if (registration?.role === 'dealer') {
+        const dealer = await this.dealerRepository.findOne({ where: { id: registration.id } });
+        if (!dealer) throw new BadRequestException('Dealer account could not be verified.');
         dealerId = dealer.id;
         dealerCode = dealer.dealerCode;
       } else {
@@ -689,9 +761,9 @@ export class MobileAuthService {
   async registerUser(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    password?: string;
+    password?: string; signupVerificationToken: string;
   }) {
-    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user');
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'user');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
@@ -722,9 +794,13 @@ export class MobileAuthService {
     return { ...tokens, user: this.formatUserProfile(saved, 'user') };
   }
 
-  async googleCustomerAuth(idToken: string) {
-    if (!idToken?.trim()) throw new BadRequestException('Google token is required.');
-    const googleUser = await this.verifyGoogleIdToken(idToken.trim());
+  async googleCustomerAuth(credential: { idToken?: string; accessToken?: string }) {
+    const idToken = credential.idToken?.trim();
+    const accessToken = credential.accessToken?.trim();
+    if (!idToken && !accessToken) throw new BadRequestException('Google token is required.');
+    const googleUser = idToken
+      ? await this.verifyGoogleIdToken(idToken)
+      : await this.verifyGoogleAccessToken(accessToken!);
 
     let user = await this.appUserRepository
       .createQueryBuilder('user')
@@ -767,9 +843,9 @@ export class MobileAuthService {
   async registerCounterBoy(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    password?: string;
+    password?: string; signupVerificationToken: string;
   }) {
-    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy');
+    const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'counterboy');
 
     const stateCode = data.state?.substring(0, 2).toUpperCase() ?? 'XX';
@@ -940,7 +1016,7 @@ export class MobileAuthService {
 
   async updateProfile(userId: string, role: string, data: any) {
     const commonFields = ['name', 'email', 'city', 'state', 'district', 'pincode', 'address',
-      'upiId', 'bankAccount', 'ifsc', 'bankName', 'accountHolderName', 'bankLinked',
+      'upiId', 'upiQrCodeImage', 'bankAccount', 'ifsc', 'bankName', 'accountHolderName', 'bankLinked',
       'aadharFrontImage', 'panDocument', 'gstDocument'];
 
     const updateData: any = {};
@@ -1108,6 +1184,7 @@ export class MobileAuthService {
           kycStatus: user.kycStatus,
           bankLinked: user.bankLinked,
           upiId: user.upiId,
+          upiQrCodeImage: user.upiQrCodeImage ?? null,
           bankAccount: user.bankAccount,
           ifsc: user.ifsc,
           bankName: user.bankName,
@@ -1152,6 +1229,7 @@ export class MobileAuthService {
           kycStatus: user.kycStatus,
           bankLinked: user.bankLinked,
           upiId: user.upiId,
+          upiQrCodeImage: user.upiQrCodeImage ?? null,
           bankAccount: user.bankAccount,
           ifsc: user.ifsc,
           bankName: user.bankName,
@@ -1188,6 +1266,7 @@ export class MobileAuthService {
           kycStatus: user.kycStatus,
           bankLinked: user.bankLinked,
           upiId: user.upiId,
+          upiQrCodeImage: user.upiQrCodeImage ?? null,
           bankAccount: user.bankAccount,
           ifsc: user.ifsc,
           bankName: user.bankName,
@@ -1226,6 +1305,7 @@ export class MobileAuthService {
           kycRejectionReason: user.kycRejectionReason ?? null,
           bankLinked: user.bankLinked ?? false,
           upiId: user.upiId ?? null,
+          upiQrCodeImage: user.upiQrCodeImage ?? null,
           bankAccount: user.bankAccount ?? null,
           ifsc: user.ifsc ?? null,
           bankName: user.bankName ?? null,

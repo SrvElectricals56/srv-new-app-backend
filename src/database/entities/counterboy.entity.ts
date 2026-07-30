@@ -113,6 +113,9 @@ export class CounterBoy {
   @Column({ nullable: true })
   upiId: string;
 
+  @Column({ type: 'text', nullable: true })
+  upiQrCodeImage: string;
+
   @Column({ nullable: true })
   bankAccount: string;
 
