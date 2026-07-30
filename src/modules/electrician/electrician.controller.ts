@@ -16,7 +16,7 @@ import { UpdateElectricianDto } from './dto/update-electrician.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { UserStatus, MemberTier, AdminRole } from '../../common/enums';
+import { UserStatus, MemberTier, AdminRole, KYCStatus } from '../../common/enums';
 
 @ApiTags('Electrician Management')
 @ApiBearerAuth('JWT-auth')
@@ -51,6 +51,7 @@ export class ElectricianController {
     @Query('welcomeBonus') welcomeBonus?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('kycStatus') kycStatus?: KYCStatus,
   ) {
     return this.electricianService.findAll(
       parseInt(page), parseInt(limit),
@@ -58,7 +59,7 @@ export class ElectricianController {
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       welcomeBonus === 'true' ? true : undefined,
-      dateFrom, dateTo,
+      dateFrom, dateTo, kycStatus,
     );
   }
 

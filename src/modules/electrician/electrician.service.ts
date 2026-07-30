@@ -11,7 +11,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { ProductCartItem } from '../../database/entities/product-cart-item.entity';
 import { ProductOrder } from '../../database/entities/product-order.entity';
 import { AppActivityEvent, AppActivityEventType } from '../../database/entities/app-activity-event.entity';
-import { UserStatus, MemberTier, UserRole, ElectricianSubCategory } from '../../common/enums';
+import { UserStatus, MemberTier, UserRole, ElectricianSubCategory, KYCStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 
@@ -272,6 +272,7 @@ export class ElectricianService {
     welcomeBonus?: boolean,
     dateFrom?: string,
     dateTo?: string,
+    kycStatus?: KYCStatus,
   ) {
     const skip = (page - 1) * limit;
     const queryBuilder = this.electricianRepository
@@ -292,6 +293,10 @@ export class ElectricianService {
 
     if (status) {
       queryBuilder.andWhere('electrician.status = :status', { status });
+    }
+
+    if (kycStatus) {
+      queryBuilder.andWhere('electrician.kycStatus = :kycStatus', { kycStatus });
     }
 
     if (tier) {
