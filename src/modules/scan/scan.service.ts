@@ -143,17 +143,17 @@ export class ScanService {
 
     const searchPattern = `%${search.trim()}%`;
     queryBuilder.andWhere(new Brackets((qb) => {
-      qb.where('scan.userName ILIKE :searchPattern', { searchPattern })
-        .orWhere('scan.productName ILIKE :searchPattern', { searchPattern })
-        .orWhere('scan.userId ILIKE :searchPattern', { searchPattern })
+      qb.where('scan."userName" ILIKE :searchPattern', { searchPattern })
+        .orWhere('scan."productName" ILIKE :searchPattern', { searchPattern })
+        .orWhere('CAST(scan."userId" AS text) ILIKE :searchPattern', { searchPattern })
         .orWhere(`EXISTS (
           SELECT 1 FROM electricians electrician
-          WHERE electrician.id = scan.userId
+          WHERE electrician.id::text = scan."userId"::text
             AND (electrician.phone ILIKE :searchPattern OR electrician."electricianCode" ILIKE :searchPattern)
         )`, { searchPattern })
         .orWhere(`EXISTS (
           SELECT 1 FROM dealers dealer
-          WHERE dealer.id = scan.userId
+          WHERE dealer.id::text = scan."userId"::text
             AND (dealer.phone ILIKE :searchPattern OR dealer."dealerCode" ILIKE :searchPattern)
         )`, { searchPattern });
     }));
