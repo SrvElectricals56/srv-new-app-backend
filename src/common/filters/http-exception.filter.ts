@@ -78,6 +78,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
       this.logger.error(`Unhandled error: ${exception.message}`, exception.stack);
     }
 
+    if (
+      request.method === 'POST' &&
+      String(request.url ?? '').split('?')[0].endsWith('/mobile/auth/signup/electrician') &&
+      status >= HttpStatus.BAD_REQUEST
+    ) {
+      // Log only the rejection reason. Never log signup bodies because they can
+      // contain passwords, OTP proof tokens, phone numbers, and personal data.
+      this.logger.warn(`Electrician signup rejected (${status}): ${message}`);
+    }
+
     response.status(status).json({
       ...responseBody,
       statusCode: status,
