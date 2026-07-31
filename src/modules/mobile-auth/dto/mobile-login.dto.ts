@@ -76,9 +76,13 @@ class BaseRegistrationDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
 
+  // Older released app builds do not forward the token returned by
+  // verify-signup-otp. The service still requires the server-side VERIFIED
+  // OTP proof, so making this field optional does not bypass OTP verification.
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  signupVerificationToken: string;
+  signupVerificationToken?: string;
 
   @IsOptional()
   @IsEmail()
@@ -202,9 +206,10 @@ export class RegisterUserDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
 
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  signupVerificationToken: string;
+  signupVerificationToken?: string;
 
   @IsString()
   @IsOptional()
@@ -245,9 +250,10 @@ export class RegisterCounterBoyDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit Indian mobile number' })
   phone: string;
 
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  signupVerificationToken: string;
+  signupVerificationToken?: string;
 
   @IsString()
   @IsOptional()

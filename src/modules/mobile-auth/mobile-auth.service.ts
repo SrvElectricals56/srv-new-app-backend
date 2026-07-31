@@ -623,7 +623,7 @@ export class MobileAuthService {
   async registerDealer(data: {
     name: string; phone: string; email?: string; town: string;
     district: string; state: string; address: string; pincode?: string;
-    gstNumber?: string; password?: string; signupVerificationToken: string;
+    gstNumber?: string; password?: string; signupVerificationToken?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'dealer');
@@ -662,7 +662,7 @@ export class MobileAuthService {
     name: string; phone: string; email?: string; city: string;
     district: string; state: string; address?: string; pincode?: string;
     dealerPhone: string; password?: string; subCategory?: string;
-    signupVerificationToken: string;
+    signupVerificationToken?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician', data.signupVerificationToken);
 
@@ -807,7 +807,7 @@ export class MobileAuthService {
   async registerUser(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    password?: string; signupVerificationToken: string;
+    password?: string; signupVerificationToken?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'user');
@@ -889,7 +889,7 @@ export class MobileAuthService {
   async registerCounterBoy(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    password?: string; signupVerificationToken: string;
+    password?: string; signupVerificationToken?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'counterboy');

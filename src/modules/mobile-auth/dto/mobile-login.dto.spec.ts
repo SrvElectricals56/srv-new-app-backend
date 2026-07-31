@@ -4,6 +4,7 @@ import {
   MobileLoginDto,
   PasswordLoginDto,
   RegisterDealerDto,
+  RegisterElectricianDto,
   VerifyOtpDto,
 } from './mobile-login.dto';
 
@@ -67,6 +68,19 @@ describe('mobile auth DTO validation', () => {
       gstNumber: '07ABCDE1234F1Z5',
       password: 'StrongPassword123',
       signupVerificationToken: 'verified-signup-proof',
+    });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
+  });
+
+  it('accepts a legacy electrician request without a forwarded verification token', async () => {
+    const dto = plainToInstance(RegisterElectricianDto, {
+      name: 'Test Electrician',
+      phone: '9876543210',
+      city: 'Delhi',
+      district: 'New Delhi',
+      state: 'Delhi',
+      dealerPhone: '9123456789',
     });
 
     await expect(validate(dto)).resolves.toHaveLength(0);

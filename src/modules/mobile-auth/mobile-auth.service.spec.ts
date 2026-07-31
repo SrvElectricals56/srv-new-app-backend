@@ -55,6 +55,7 @@ function createService(options: {
       role: 'electrician',
     })),
     sign: jest.fn(() => 'signed-token'),
+    signAsync: jest.fn(async () => 'signed-signup-token'),
   };
   const configService = {
     get: jest.fn(() => 'test-secret'),
@@ -125,6 +126,22 @@ describe('MobileAuthService electrician signup', () => {
     expect(result.user.id).toBe(existingElectrician.id);
     expect(context.dataSource.transaction).not.toHaveBeenCalled();
     expect(context.crossRolePhoneService.assertPhoneAvailableForRole).not.toHaveBeenCalled();
+  });
+
+  it('allows a released app to finish signup from the server-side verified OTP proof', async () => {
+    const context = createService();
+    jest.spyOn(context.service as any, 'generateOtp').mockReturnValue('4321');
+
+    await context.service.sendSignupOtp(signupData.phone, 'electrician');
+    await context.service.verifySignupOtp(signupData.phone, 'electrician', '4321');
+    const result = await context.service.registerElectrician({
+      ...signupData,
+      signupVerificationToken: undefined,
+    });
+
+    expect(context.jwtService.signAsync).toHaveBeenCalledTimes(1);
+    expect(context.dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(result.user.phone).toBe(signupData.phone);
   });
 
   it('does not issue login tokens when the transactional sub-dealer update fails', async () => {
