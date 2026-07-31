@@ -155,6 +155,8 @@ export class RegisterElectricianDto extends BaseRegistrationDto {
   @MaxLength(80)
   subCategory?: string;
 
+  // Accepted for backward compatibility with released app builds. The signup
+  // service deliberately ignores these client-controlled assignment fields.
   @IsOptional()
   @IsString()
   @MaxLength(80)

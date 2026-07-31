@@ -4,11 +4,12 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
@@ -37,6 +38,8 @@ const APPROVED_OTP_MESSAGE =
 
 @Injectable()
 export class MobileAuthService {
+  private readonly logger = new Logger(MobileAuthService.name);
+
   constructor(
     @InjectRepository(Electrician)
     private electricianRepository: Repository<Electrician>,
@@ -48,6 +51,7 @@ export class MobileAuthService {
     private counterboyRepository: Repository<CounterBoy>,
     @InjectRepository(Scan)
     private scanRepository: Repository<Scan>,
+    private readonly dataSource: DataSource,
     private readonly tierService: TierService,
     private readonly crossRolePhoneService: CrossRolePhoneService,
     private jwtService: JwtService,
@@ -263,23 +267,18 @@ export class MobileAuthService {
     return `reset:${this.normalizePhone(phone)}:${role}`;
   }
 
-  private normalizeElectricianCode(code?: string | null): string | null {
-    const trimmed = code?.trim();
-    if (!trimmed || trimmed.includes('###')) {
-      return null;
-    }
-
-    return trimmed.toUpperCase();
-  }
-
   private buildFallbackElectricianCode(phone?: string | null): string {
-    const phoneSuffix = String(phone ?? '').replace(/\D/g, '').slice(-4) || '0000';
-    return `ELC-${phoneSuffix}-${Date.now().toString().slice(-6)}`;
+    const normalizedPhone = this.normalizePhone(phone);
+    return `ELC-${normalizedPhone || '0000000000'}`;
   }
 
-  private async generateNextElectricianCodeForDealer(dealerId: string, dealerCode: string): Promise<string> {
+  private async generateNextElectricianCodeForDealer(
+    dealerId: string,
+    dealerCode: string,
+    electricianRepository: Repository<Electrician> = this.electricianRepository,
+  ): Promise<string> {
     const prefix = `${dealerCode.trim().toUpperCase()}-`;
-    const linkedElectricians = await this.electricianRepository.find({
+    const linkedElectricians = await electricianRepository.find({
       where: { dealerId },
       select: ['electricianCode'],
     });
@@ -662,10 +661,30 @@ export class MobileAuthService {
   async registerElectrician(data: {
     name: string; phone: string; email?: string; city: string;
     district: string; state: string; address?: string; pincode?: string;
-    dealerPhone: string; password?: string; subCategory?: string; electricianCode?: string;
+    dealerPhone: string; password?: string; subCategory?: string;
     signupVerificationToken: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician', data.signupVerificationToken);
+
+    // Treat a verified replay as success. This recovers accounts created by older
+    // releases that could save the electrician before a later signup step failed.
+    const existingElectrician = await this.electricianRepository.findOne({
+      where: { phone: this.normalizePhone(data.phone) },
+    });
+    if (existingElectrician) {
+      otpStore.delete(signupOtpKey);
+      const existingWithDealer = await this.hydrateElectricianDealer(existingElectrician);
+      const tokens = await this.generateTokens({
+        sub: existingElectrician.id,
+        phone: existingElectrician.phone,
+        role: 'electrician',
+      });
+      return {
+        ...tokens,
+        user: this.formatUserProfile(existingWithDealer ?? existingElectrician, 'electrician'),
+      };
+    }
+
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'electrician');
 
     const normalizedDealerPhone = this.normalizePhone(data.dealerPhone);
@@ -701,55 +720,82 @@ export class MobileAuthService {
       }
     }
 
-    const manualCode = this.normalizeElectricianCode(data.electricianCode);
-    const electricianCode = manualCode
-      ?? (dealerId && dealerCode
-        ? await this.generateNextElectricianCodeForDealer(dealerId, dealerCode)
-        : this.buildFallbackElectricianCode(data.phone));
-    const existingCode = await this.electricianRepository.findOne({ where: { electricianCode } });
-    if (existingCode) throw new ConflictException('Electrician code already exists.');
-
     const passwordHash = await this.hashPassword(data.password);
 
-    const electrician = this.electricianRepository.create({
-      name: data.name,
-      phone: data.phone,
-      email: data.email,
-      city: data.city,
-      district: data.district,
-      state: data.state,
-      address: data.address,
-      pincode: data.pincode,
-      dealerId,
-      fallbackDealerName,
-      fallbackDealerPhone,
-      electricianCode,
-      subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
-      status: UserStatus.ACTIVE,
-    });
-    (electrician as any).passwordHash = passwordHash;
-    // Signup = app is installed by definition
-    (electrician as any).appInstalled = true;
-    (electrician as any).firstAppLoginAt = new Date();
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const electricianRepository = manager.getRepository(Electrician);
 
-    const saved = await this.electricianRepository.save(electrician) as Electrician;
-    if (fallbackDealerPhone) {
-      await this.electricianRepository.query(
-        `INSERT INTO "sub_dealers"
-          ("phone", "name", "district", "pincode", "electricianCount")
-         VALUES ($1, 'SRV Sub Dealer', $2, $3, 1)
-         ON CONFLICT ("phone") DO UPDATE SET
-          "name" = 'SRV Sub Dealer',
-          "district" = COALESCE(EXCLUDED."district", "sub_dealers"."district"),
-          "pincode" = COALESCE(EXCLUDED."pincode", "sub_dealers"."pincode"),
-          "electricianCount" = "sub_dealers"."electricianCount" + 1,
-          "lastSeenAt" = now()`,
-        [fallbackDealerPhone, data.district || null, data.pincode || null],
-      );
-    }
+      // Serialize registrations for the same dealer so two simultaneous signups
+      // cannot receive the same sequential electrician code.
+      if (dealerId && dealerCode) {
+        const lockedDealer = await manager
+          .getRepository(Dealer)
+          .createQueryBuilder('dealer')
+          .setLock('pessimistic_write')
+          .where('dealer.id = :dealerId', { dealerId })
+          .getOne();
+        if (!lockedDealer) throw new BadRequestException('Dealer account could not be verified.');
+      }
+
+      const electricianCode = dealerId && dealerCode
+        ? await this.generateNextElectricianCodeForDealer(
+          dealerId,
+          dealerCode,
+          electricianRepository,
+        )
+        : this.buildFallbackElectricianCode(data.phone);
+
+      const electrician = electricianRepository.create({
+        name: data.name,
+        phone: this.normalizePhone(data.phone),
+        email: data.email,
+        city: data.city,
+        district: data.district,
+        state: data.state,
+        address: data.address,
+        pincode: data.pincode,
+        dealerId,
+        fallbackDealerName,
+        fallbackDealerPhone,
+        electricianCode,
+        subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
+        status: UserStatus.ACTIVE,
+      });
+      (electrician as any).passwordHash = passwordHash;
+      // Signup = app is installed by definition
+      (electrician as any).appInstalled = true;
+      (electrician as any).firstAppLoginAt = new Date();
+
+      const savedElectrician = await electricianRepository.save(electrician) as Electrician;
+      if (fallbackDealerPhone) {
+        await manager.query(
+          `INSERT INTO "sub_dealers"
+            ("phone", "name", "district", "pincode", "electricianCount")
+           VALUES ($1, 'SRV Sub Dealer', $2, $3, 1)
+           ON CONFLICT ("phone") DO UPDATE SET
+            "name" = 'SRV Sub Dealer',
+            "district" = COALESCE(EXCLUDED."district", "sub_dealers"."district"),
+            "pincode" = COALESCE(EXCLUDED."pincode", "sub_dealers"."pincode"),
+            "electricianCount" = "sub_dealers"."electricianCount" + 1,
+            "lastSeenAt" = now()`,
+          [fallbackDealerPhone, data.district || null, data.pincode || null],
+        );
+      }
+
+      return savedElectrician;
+    });
+
     otpStore.delete(signupOtpKey);
     if (dealerId) {
-      await this.tierService.syncDealerTier(dealerId);
+      try {
+        await this.tierService.syncDealerTier(dealerId);
+      } catch (error: any) {
+        // Tier recalculation is maintenance work and must not turn a successfully
+        // committed account into an apparent signup failure.
+        this.logger.warn(
+          `Electrician ${saved.id} was created, but dealer tier sync failed: ${error?.message ?? error}`,
+        );
+      }
     }
     const savedWithDealer = await this.hydrateElectricianDealer(saved);
 
