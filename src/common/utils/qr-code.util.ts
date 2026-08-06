@@ -1,11 +1,16 @@
 const MAX_QR_INPUT_LENGTH = 2048;
 const MAX_QR_CODE_LENGTH = 255;
-const QR_QUERY_KEYS = ['qrCode', 'qr_code', 'qrcode', 'qr', 'qrId', 'qr_id', 'code', 'id'] as const;
+const QR_QUERY_KEYS = [
+  'qrCode', 'qr_code', 'qrcode', 'qr', 'qrId', 'qr_id', 'code', 'id',
+  'redeemCode', 'redeem_code', 'serial', 'token', 'value', 'data',
+] as const;
 
 function cleanCandidate(value: unknown): string | null {
   if (typeof value !== 'string') return null;
 
-  let candidate = value.trim();
+  let candidate = value
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim();
   if (!candidate || candidate.length > MAX_QR_CODE_LENGTH) return null;
 
   if (
@@ -15,7 +20,11 @@ function cleanCandidate(value: unknown): string | null {
     candidate = candidate.slice(1, -1).trim();
   }
 
-  candidate = candidate.replace(/\.png$/i, '').trim();
+  candidate = candidate
+    .replace(/[?#].*$/, '')
+    .replace(/\.(?:png|jpe?g|webp)$/i, '')
+    .replace(/\/+$/, '')
+    .trim();
   return candidate && candidate.length <= MAX_QR_CODE_LENGTH ? candidate : null;
 }
 
@@ -35,8 +44,11 @@ function extractWrappedCandidate(input: string): string | null {
   if (/^(https?:\/\/|srv-electricals:\/\/)/i.test(input)) {
     try {
       const url = new URL(input);
+      const normalizedParams = new Map(
+        Array.from(url.searchParams.entries()).map(([key, value]) => [key.toLowerCase(), value]),
+      );
       for (const key of QR_QUERY_KEYS) {
-        const candidate = cleanCandidate(url.searchParams.get(key));
+        const candidate = cleanCandidate(normalizedParams.get(key.toLowerCase()));
         if (candidate) return candidate;
       }
 

@@ -12,8 +12,10 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nes
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { stat, unlink } from 'fs/promises';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
+const sharp: any = require('sharp');
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
 const UPLOAD_DIR = join(process.cwd(), 'uploads');
@@ -36,6 +38,39 @@ const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
 @Controller('upload')
 export class UploadController {
   constructor(private configService: ConfigService) {}
+
+  private async optimizeImage(
+    file: Express.Multer.File,
+    maxWidth: number,
+    maxHeight: number,
+  ) {
+    const baseName = file.filename.slice(0, -extname(file.filename).length);
+    const optimizedFilename = `${baseName}-optimized.webp`;
+    const optimizedPath = join(file.destination, optimizedFilename);
+
+    try {
+      await sharp(file.path, { animated: true })
+        .rotate()
+        .resize({
+          width: maxWidth,
+          height: maxHeight,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp({ quality: 80, effort: 4, smartSubsample: true })
+        .toFile(optimizedPath);
+      const optimizedStat = await stat(optimizedPath);
+      await unlink(file.path);
+      return {
+        filename: optimizedFilename,
+        size: optimizedStat.size,
+      };
+    } catch {
+      // Keep the original upload if the optimizer cannot read an unusual but
+      // otherwise valid image. Uploading must remain reliable for admins.
+      return { filename: file.filename, size: file.size };
+    }
+  }
 
   private getBaseUrl() {
     const appUrl = this.configService.get<string>('APP_URL');
@@ -80,10 +115,11 @@ export class UploadController {
       limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  uploadImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+  async uploadImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
-    const imageUrl = this.buildFileUrl(req, `banners/${file.filename}`);
-    return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
+    const optimized = await this.optimizeImage(file, 1200, 800);
+    const imageUrl = this.buildFileUrl(req, `banners/${optimized.filename}`);
+    return { url: imageUrl, filename: optimized.filename, originalName: file.originalname, size: optimized.size };
   }
 
   @Post('product-image')
@@ -114,10 +150,11 @@ export class UploadController {
       limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  uploadProductImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+  async uploadProductImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
-    const imageUrl = this.buildFileUrl(req, `products/${file.filename}`);
-    return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
+    const optimized = await this.optimizeImage(file, 1200, 1200);
+    const imageUrl = this.buildFileUrl(req, `products/${optimized.filename}`);
+    return { url: imageUrl, filename: optimized.filename, originalName: file.originalname, size: optimized.size };
   }
 
   @Post('catalog-pdf')

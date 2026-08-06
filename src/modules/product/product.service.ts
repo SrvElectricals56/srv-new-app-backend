@@ -117,8 +117,13 @@ export class ProductService {
 
   async remove(id: string) {
     const product = await this.findOne(id);
-    await this.productRepository.remove(product);
-    return { message: 'Product deleted successfully' };
+    await this.productRepository.update(product.id, {
+      isActive: false,
+      stock: 0,
+    });
+    return {
+      message: 'Product archived successfully. Existing QR codes were preserved.',
+    };
   }
 
   private prepareWriteBody(dto: CreateProductDto | UpdateProductDto): Partial<Product> {

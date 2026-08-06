@@ -75,7 +75,7 @@ export class QrCode {
   @Column({ default: true })
   isActive: boolean;
 
-  @ManyToOne(() => Product, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Product, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'productId' })
   product: Product;
 

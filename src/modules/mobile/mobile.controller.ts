@@ -300,6 +300,24 @@ export class MobileController {
     return this.mobileService.getDealerElectriciansCallList(req.user.id);
   }
 
+  @Get('electricians/:electricianId/wallet-activity')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get wallet and withdrawal activity for an associated electrician' })
+  getDealerElectricianWalletActivity(
+    @Request() req: any,
+    @Param('electricianId') electricianId: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '50',
+  ) {
+    return this.mobileService.getDealerElectricianWalletActivity(
+      req.user.id,
+      electricianId,
+      parseInt(page),
+      parseInt(limit),
+    );
+  }
+
   @Post('electricians')
   @UseGuards(MobileJwtGuard)
   @ApiBearerAuth('JWT-auth')

@@ -44,4 +44,16 @@ describe('extractQrCodeCandidates', () => {
     expect(extractQrCodeCandidates('   ')).toEqual([]);
     expect(extractQrCodeCandidates('x'.repeat(2049))).toEqual([]);
   });
+
+  it('normalizes invisible scanner characters and legacy image extensions', () => {
+    expect(extractQrCodeCandidates('\uFEFF\u200BjMA8391758613990308.jpeg\u200C')).toEqual([
+      'jMA8391758613990308',
+    ]);
+  });
+
+  it('accepts case-insensitive legacy URL parameters', () => {
+    expect(
+      extractQrCodeCandidates('https://srvelectricals.in/scan?REDEEM_CODE=jMA8391758613990308'),
+    ).toEqual(['jMA8391758613990308']);
+  });
 });

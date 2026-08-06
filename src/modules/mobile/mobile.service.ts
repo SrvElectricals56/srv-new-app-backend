@@ -31,6 +31,8 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserRole, UserStatus, ScanMode, TransactionType, TransactionSource, SupportTicketStatus, SupportTicketPriority } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
+import { hasBankTransferDestination } from '../../common/utils/bank-transfer.util';
+import { isQrRedeemable } from '../../common/utils/qr-eligibility.util';
 
 const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
   [ProductOrderStatus.PENDING]: 'Pending',
@@ -220,7 +222,7 @@ export class MobileService {
 
     select.push(
       'user.bankLinked', 'user.accountHolderName', 'user.upiId',
-      'user.bankAccount', 'user.ifsc', 'user.bankName',
+      'user.upiQrCodeImage', 'user.bankAccount', 'user.ifsc', 'user.bankName',
     );
     return this.getUserRepositoryByRole(role, manager)
       .createQueryBuilder('user')
@@ -1086,6 +1088,10 @@ export class MobileService {
       appVersion: map['appVersion'] ?? '1.0.0',
       minAppVersion: map['minAppVersion'] ?? '1.0.0',
       forceUpdate: map['forceUpdate'] === 'true',
+      iosUpdateAvailable: map['iosUpdateAvailable'] === 'true',
+      androidUpdateMessage: map['androidUpdateMessage'] ?? 'A newer version of SRV Electricals is available with important improvements. Please update to continue.',
+      iosUpdateMessage: map['iosUpdateMessage'] ?? 'A newer version of SRV Electricals is available on the App Store. Please update to continue.',
+      iosReviewMaintenanceMessage: map['iosReviewMaintenanceMessage'] ?? 'SRV Electricals for iOS is temporarily under maintenance while the latest version is being prepared. Please try again soon.',
       scanEnabled: map['scanEnabled'] !== 'false',
       giftsEnabled: map['giftsEnabled'] !== 'false',
       referralEnabled: map['referralEnabled'] !== 'false',
@@ -1342,7 +1348,7 @@ export class MobileService {
         await this.throwQrAlreadyRedeemed(qr, existingScan, manager);
       }
 
-      if (!qr.isActive || !qr.product.isActive) {
+      if (!isQrRedeemable(qr)) {
         throw new NotFoundException(
           'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
         );
@@ -1473,7 +1479,7 @@ export class MobileService {
         await this.throwQrAlreadyRedeemed(qr, existingScan, manager);
       }
 
-      if (!qr.isActive || !qr.product.isActive) {
+      if (!isQrRedeemable(qr)) {
         throw new NotFoundException(
           'Oops! This QR code does not belong to SRV Electricals. Please scan a valid QR code',
         );
@@ -1574,13 +1580,14 @@ export class MobileService {
   }
 
   async saveBankAccount(userId: string, role: string, data: {
-    accountHolderName: string; upiId: string; upiQrCodeImage: string; bankName?: string | null; accountNumber?: string | null; ifsc?: string | null;
+    accountHolderName: string; upiId?: string | null; upiQrCodeImage?: string | null; bankName?: string | null; accountNumber?: string | null; ifsc?: string | null;
   }) {
     const accountHolderName = data.accountHolderName?.trim();
-    const upiId = data.upiId?.trim();
-    const upiQrCodeImage = data.upiQrCodeImage?.trim();
-    if (!accountHolderName || !upiId || !upiQrCodeImage) {
-      throw new BadRequestException('Account holder name, UPI ID and UPI QR code image are required');
+    const upiId = data.upiId?.trim() || null;
+    const upiQrCodeImage = data.upiQrCodeImage?.trim() || null;
+    const bankAccount = data.accountNumber?.trim() || null;
+    if (!accountHolderName || (!upiId && !bankAccount)) {
+      throw new BadRequestException('Account holder name and a UPI ID or account number are required');
     }
 
     const updateData: any = {
@@ -1588,7 +1595,7 @@ export class MobileService {
       upiId,
       upiQrCodeImage,
       bankName: data.bankName?.trim() || null,
-      bankAccount: data.accountNumber?.trim() || null,
+      bankAccount,
       ifsc: data.ifsc?.trim().toUpperCase() || null,
       bankLinked: true,
     };
@@ -1608,7 +1615,7 @@ export class MobileService {
     if (normalizedRole === UserRole.DEALER) {
       const dealer = await this.dealerRepository.findOne({ where: { id: userId } });
       if (!dealer) throw new NotFoundException('Dealer not found');
-      if (!dealer.bankLinked || !dealer.accountHolderName || !dealer.upiId || !dealer.upiQrCodeImage) {
+      if (!hasBankTransferDestination(dealer)) {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
 
@@ -1698,12 +1705,7 @@ export class MobileService {
     return this.dataSource.transaction(async (manager) => {
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
-      if (
-        !(user as any).bankLinked ||
-        !(user as any).accountHolderName ||
-        !(user as any).upiId ||
-        !(user as any).upiQrCodeImage
-      ) {
+      if (!hasBankTransferDestination(user as any)) {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
 
@@ -2010,13 +2012,48 @@ export class MobileService {
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new NotFoundException('Dealer not found');
 
-    const totalBonus = Number((dealer as any).bonusPoints ?? 0);
+    const availableBonus = Number((dealer as any).bonusPoints ?? 0);
+    const [commissionResult, withdrawalResult] = await Promise.all([
+      this.walletRepository
+        .createQueryBuilder('wallet')
+        .select('COALESCE(SUM(wallet.amount), 0)', 'total')
+        .where('wallet.userId = :dealerId', { dealerId })
+        .andWhere('wallet.userRole = :role', { role: UserRole.DEALER })
+        .andWhere('wallet.source = :source', { source: TransactionSource.COMMISSION })
+        .andWhere('wallet.type = :type', { type: TransactionType.CREDIT })
+        .getRawOne<{ total: string }>(),
+      this.redemptionRepository
+        .createQueryBuilder('redemption')
+        .select(
+          `COALESCE(SUM(CASE WHEN redemption.status = 'pending' THEN redemption.amount ELSE 0 END), 0)`,
+          'pendingTotal',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE redemption.status = 'pending')`,
+          'pendingCount',
+        )
+        .addSelect(
+          `COALESCE(SUM(CASE WHEN redemption.status <> 'rejected' THEN redemption.amount ELSE 0 END), 0)`,
+          'deductedTotal',
+        )
+        .where('redemption.userId = :dealerId', { dealerId })
+        .andWhere('redemption.role = :role', { role: UserRole.DEALER })
+        .andWhere('redemption.type IN (:...types)', {
+          types: ['dealer_bonus_bank_transfer', 'bonus_withdrawal'],
+        })
+        .getRawOne<{ pendingTotal: string; pendingCount: string; deductedTotal: string }>(),
+    ]);
+
+    const creditedCommission = Number(commissionResult?.total ?? 0);
+    const pendingWithdrawals = Number(withdrawalResult?.pendingTotal ?? 0);
+    const deductedWithdrawals = Number(withdrawalResult?.deductedTotal ?? 0);
 
     return {
-      availableBonus: totalBonus,
-      totalBonus,
-      pendingWithdrawals: 0,
-      bonusPoints: totalBonus,
+      availableBonus,
+      totalBonus: Math.max(availableBonus + deductedWithdrawals, creditedCommission),
+      pendingWithdrawals,
+      pendingWithdrawalCount: Number(withdrawalResult?.pendingCount ?? 0),
+      bonusPoints: availableBonus,
       bonusStatus: (dealer as any).bonusStatus ?? 'pending',
     };
   }
@@ -2148,6 +2185,126 @@ export class MobileService {
         city: e.city,
         status: e.status,
       })),
+    };
+  }
+
+  async getDealerElectricianWalletActivity(
+    dealerId: string,
+    electricianId: string,
+    page: number = 1,
+    limit: number = 50,
+  ) {
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 100) : 50;
+    const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
+    if (!dealer) throw new NotFoundException('Dealer not found');
+
+    const electrician = await this.electricianRepository
+      .createQueryBuilder('electrician')
+      .select([
+        'electrician.id',
+        'electrician.name',
+        'electrician.phone',
+        'electrician.electricianCode',
+        'electrician.walletBalance',
+        'electrician.totalPoints',
+        'electrician.totalScans',
+        'electrician.totalRedemptions',
+        'electrician.status',
+      ])
+      .where('electrician.id = :electricianId', { electricianId })
+      .andWhere(`(
+        electrician.dealerId = :dealerId
+        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
+        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
+      .getOne();
+
+    if (!electrician) {
+      throw new ForbiddenException('This electrician is not associated with your dealer account');
+    }
+
+    const skip = (safePage - 1) * safeLimit;
+    const withdrawalTypes = ['bank_transfer'];
+    const [[transactions, transactionTotal], withdrawals] = await Promise.all([
+      this.walletRepository.findAndCount({
+        where: { userId: electricianId, userRole: UserRole.ELECTRICIAN },
+        order: { createdAt: 'DESC' },
+        skip,
+        take: safeLimit,
+      }),
+      this.redemptionRepository
+        .createQueryBuilder('redemption')
+        .where('redemption.userId = :electricianId', { electricianId })
+        .andWhere('redemption.role = :role', { role: UserRole.ELECTRICIAN })
+        .andWhere('redemption.type IN (:...withdrawalTypes)', { withdrawalTypes })
+        .orderBy('redemption.requestedAt', 'DESC')
+        .getMany(),
+    ]);
+
+    const withdrawalIds = withdrawals.map((withdrawal) => withdrawal.id);
+    const commissionTransactions = withdrawalIds.length
+      ? await this.walletRepository
+          .createQueryBuilder('wallet')
+          .where('wallet.userId = :dealerId', { dealerId })
+          .andWhere('wallet.userRole = :dealerRole', { dealerRole: UserRole.DEALER })
+          .andWhere('wallet.source = :source', { source: TransactionSource.COMMISSION })
+          .andWhere('wallet.referenceType = :referenceType', { referenceType: 'redemption' })
+          .andWhere('wallet.referenceId IN (:...withdrawalIds)', { withdrawalIds })
+          .getMany()
+      : [];
+    const commissionByWithdrawal = new Map(
+      commissionTransactions.map((transaction) => [transaction.referenceId, transaction]),
+    );
+
+    return {
+      electrician: {
+        id: electrician.id,
+        name: electrician.name,
+        phone: electrician.phone,
+        electricianCode: electrician.electricianCode,
+        walletBalance: Number(electrician.walletBalance ?? 0),
+        totalPoints: Number(electrician.totalPoints ?? 0),
+        totalScans: Number(electrician.totalScans ?? 0),
+        totalRedemptions: Number(electrician.totalRedemptions ?? 0),
+        status: electrician.status,
+      },
+      transactions: {
+        data: transactions.map((transaction) => ({
+          id: transaction.id,
+          type: transaction.type,
+          source: transaction.source,
+          amount: Number(transaction.amount),
+          balanceBefore: Number(transaction.balanceBefore),
+          balanceAfter: Number(transaction.balanceAfter),
+          description: transaction.description,
+          referenceId: transaction.referenceId,
+          referenceType: transaction.referenceType,
+          createdAt: transaction.createdAt,
+        })),
+        total: transactionTotal,
+        page: safePage,
+        limit: safeLimit,
+        totalPages: Math.ceil(transactionTotal / safeLimit),
+      },
+      withdrawals: withdrawals.map((withdrawal) => {
+        const commission = commissionByWithdrawal.get(withdrawal.id);
+        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * 0.05);
+        return {
+          id: withdrawal.id,
+          amount: Number(withdrawal.amount ?? withdrawal.points ?? 0),
+          points: Number(withdrawal.points ?? 0),
+          status: withdrawal.status,
+          requestedAt: withdrawal.requestedAt,
+          processedAt: withdrawal.processedAt,
+          dealerBonus: {
+            amount: commission ? Number(commission.amount) : expectedBonus,
+            status: commission ? 'credited' : withdrawal.status === 'approved' ? 'not_credited' : 'pending_approval',
+            creditedAt: commission?.createdAt ?? null,
+          },
+        };
+      }),
     };
   }
 
