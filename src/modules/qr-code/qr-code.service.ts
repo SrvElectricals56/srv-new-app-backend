@@ -558,10 +558,32 @@ export class QrCodeService {
     }
 
     if (batchId) {
-      queryBuilder.andWhere(
-        '(qrCode.batchId = :batchId OR CAST(qrCode.batchNo AS text) = :batchId)',
-        { batchId },
+      // Resolve the legacy numeric alias against the compact batch-summary
+      // table first. Casting batchNo on the 7M+ row QR table disabled both
+      // batch indexes and caused the admin batch-details request to time out.
+      const parsedBatchNo = /^\d+$/.test(batchId) ? Number(batchId) : NaN;
+      const numericBatchNo = Number.isSafeInteger(parsedBatchNo) && parsedBatchNo <= 2_147_483_647
+        ? parsedBatchNo
+        : null;
+      const matchingBatches: Array<{ batchId: string }> = await this.qrCodeRepository.query(
+        `
+          SELECT b."batchId"
+          FROM "qr_code_batches" b
+          WHERE b."batchId" = $1
+             OR ($2::integer IS NOT NULL AND b."batchNo" = $2::integer)
+          ORDER BY CASE WHEN b."batchId" = $1 THEN 0 ELSE 1 END
+          LIMIT 1
+        `,
+        [batchId, numericBatchNo],
       );
+      const resolvedBatchId = matchingBatches[0]?.batchId;
+      if (resolvedBatchId) {
+        queryBuilder.andWhere('qrCode.batchId = :resolvedBatchId', { resolvedBatchId });
+      } else if (numericBatchNo !== null) {
+        queryBuilder.andWhere('qrCode.batchNo = :numericBatchNo', { numericBatchNo });
+      } else {
+        queryBuilder.andWhere('qrCode.batchId = :batchId', { batchId });
+      }
     }
 
     queryBuilder
