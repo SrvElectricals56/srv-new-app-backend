@@ -80,7 +80,10 @@ export class MobileAuthService {
   private shouldDeliverSms(): boolean {
     const nodeEnv = this.configService.get<string>('NODE_ENV')?.trim().toLowerCase();
     const appEnv = this.configService.get<string>('APP_ENV')?.trim().toLowerCase();
-    return nodeEnv === 'production' || appEnv === 'production';
+    // Docker images run with NODE_ENV=production in every deployed environment.
+    // APP_ENV is the authoritative deployment tier when it is configured, so
+    // isolated staging can use its fixed OTP without sending a real SMS.
+    return appEnv ? appEnv === 'production' : nodeEnv === 'production';
   }
 
   private async sendOtpSms(phone: string, otp: string, recipientName?: string | null) {
