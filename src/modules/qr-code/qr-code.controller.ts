@@ -8,7 +8,9 @@ import {
   Patch,
   UseGuards,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { QrCodeService } from './qr-code.service';
 import { GenerateQrCodeDto } from './dto/generate-qr-code.dto';
@@ -92,6 +94,18 @@ export class QrCodeController {
       fromDate,
       toDate,
     );
+  }
+
+  @Get('batches/:batchId/export-excel')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Download every QR code in a batch using the ERP product-wise Excel layout' })
+  @ApiResponse({ status: 200, description: 'Excel workbook with two QR columns, or four for 3x3/4x3 modular boxes' })
+  downloadBatchExcel(
+    @Param('batchId') batchId: string,
+    @CurrentUser() admin: any,
+    @Res() response: Response,
+  ) {
+    return this.qrCodeService.downloadBatchExcel(batchId, admin, response);
   }
 
   @Get()

@@ -17,9 +17,28 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
 import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
+import type { Response } from 'express';
+import * as ExcelJS from 'exceljs';
 
 @Injectable()
 export class QrCodeService {
+  private readonly excelQueryChunkSize = 10_000;
+  private readonly excelMaxDataRowsPerSheet = 1_048_575;
+
+  private getQrExcelColumnCount(product: {
+    productName?: string;
+    category?: string;
+    subCategory?: string;
+  }): 2 | 4 {
+    const productName = String(product.productName ?? '');
+    const productClassification = [product.category, product.subCategory]
+      .filter(Boolean)
+      .join(' ');
+    const isModularBox = /\bmodul(?:e|ar)\s*box\b/i.test(productClassification);
+    const isThreeByThreeOrFourByThree = /(?:^|\D)(?:3\s*[x×]\s*3|4\s*[x×]\s*3)(?:\D|$)/i.test(productName);
+    return isModularBox && isThreeByThreeOrFourByThree ? 4 : 2;
+  }
+
   constructor(
     @InjectRepository(QrCode)
     private qrCodeRepository: Repository<QrCode>,
@@ -222,6 +241,178 @@ export class QrCodeService {
       limit: safeLimit,
       totalPages: Math.ceil(total / safeLimit),
     };
+  }
+
+  async downloadBatchExcel(
+    batchId: string,
+    admin: { id: string; email?: string; name?: string; role?: string },
+    response: Response,
+  ): Promise<void> {
+    const normalizedBatchId = String(batchId ?? '').trim();
+    if (!normalizedBatchId) {
+      throw new BadRequestException('batchId is required');
+    }
+
+    const batchRows = await this.qrCodeRepository.query(
+      `
+        SELECT
+          b."batchId",
+          b."batchNo",
+          b."productId",
+          b."productName",
+          b."points",
+          b."qty",
+          p."category",
+          p."subCategory"
+        FROM "qr_code_batches" b
+        LEFT JOIN "products" p ON p."id"::text = b."productId"::text
+        WHERE b."batchId" = $1
+        LIMIT 1
+      `,
+      [normalizedBatchId],
+    );
+    const batch = batchRows?.[0];
+    if (!batch) {
+      throw new NotFoundException(`QR batch ${normalizedBatchId} not found`);
+    }
+
+    const safeProductName = String(batch.productName ?? 'QR-Codes')
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80) || 'QR-Codes';
+    const batchLabel = batch.batchNo ?? normalizedBatchId;
+    const qrColumnCount = this.getQrExcelColumnCount(batch);
+    const filename = `${safeProductName} - ${batchLabel} - ${Number(batch.qty ?? 0)}.xlsx`;
+
+    response.status(200);
+    response.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+
+    const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+      stream: response,
+      useStyles: true,
+      useSharedStrings: false,
+    });
+
+    const headers = [
+      'ID',
+      'Product Name',
+      'Points',
+      'Status',
+      'Batch No.',
+      ...Array.from({ length: qrColumnCount }, (_, index) => `QR Code ${index + 1}`),
+    ];
+    let sheetNumber = 0;
+    let rowsOnSheet = 0;
+    let worksheet: ExcelJS.Worksheet;
+
+    const startWorksheet = () => {
+      sheetNumber += 1;
+      rowsOnSheet = 0;
+      worksheet = workbook.addWorksheet(
+        sheetNumber === 1 ? 'QR Codes' : `QR Codes ${sheetNumber}`,
+      );
+      worksheet.columns = [
+        { width: 38 },
+        { width: 30 },
+        { width: 12 },
+        { width: 12 },
+        { width: 16 },
+        ...Array.from({ length: qrColumnCount }, () => ({ width: 48 })),
+      ];
+      const headerRow = worksheet.addRow(headers);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1F4E78' },
+      };
+      headerRow.commit();
+    };
+
+    startWorksheet();
+
+    let lastSequence = -1;
+    let lastId = '00000000-0000-0000-0000-000000000000';
+    let pendingQrs: any[] = [];
+    let exportedCount = 0;
+
+    const appendQrRow = (qrs: any[]) => {
+      if (rowsOnSheet >= this.excelMaxDataRowsPerSheet) {
+        worksheet.commit();
+        startWorksheet();
+      }
+      const first = qrs[0];
+      worksheet.addRow([
+        first.legacyId ?? first.id,
+        first.productName ?? batch.productName,
+        Number(first.rewardPoints ?? batch.points ?? 0),
+        first.isScanned ? 'Used' : 'Pending',
+        first.batchNo ?? batch.batchNo ?? '',
+        ...Array.from({ length: qrColumnCount }, (_, index) => qrs[index]?.code ?? ''),
+      ]).commit();
+      rowsOnSheet += 1;
+    };
+
+    while (true) {
+      const qrRows = await this.qrCodeRepository.query(
+        `
+          SELECT
+            q."id",
+            q."legacyId",
+            q."code",
+            q."productName",
+            q."rewardPoints",
+            q."isScanned",
+            q."batchNo",
+            COALESCE(q."sequenceNo", 2147483647) AS "sortSequence"
+          FROM "qr_codes" q
+          WHERE q."batchId" = $1
+            AND (COALESCE(q."sequenceNo", 2147483647), q."id") > ($2, $3)
+          ORDER BY COALESCE(q."sequenceNo", 2147483647), q."id"
+          LIMIT $4
+        `,
+        [normalizedBatchId, lastSequence, lastId, this.excelQueryChunkSize],
+      );
+
+      if (!qrRows.length) break;
+
+      for (const qr of qrRows) {
+        exportedCount += 1;
+        pendingQrs.push(qr);
+        if (pendingQrs.length === qrColumnCount) {
+          appendQrRow(pendingQrs);
+          pendingQrs = [];
+        }
+      }
+
+      const lastQr = qrRows[qrRows.length - 1];
+      lastSequence = Number(lastQr.sortSequence);
+      lastId = String(lastQr.id);
+      if (qrRows.length < this.excelQueryChunkSize) break;
+    }
+
+    if (pendingQrs.length) appendQrRow(pendingQrs);
+    worksheet.commit();
+    await workbook.commit();
+
+    if (exportedCount > 0) {
+      await this.recordDownloadHistory(admin, {
+        productId: batch.productId,
+        productName: batch.productName,
+        batchId: normalizedBatchId,
+        batchNo: batch.batchNo,
+        quantity: exportedCount,
+        downloadType: `batch_excel_${qrColumnCount}_columns`,
+      });
+    }
   }
 
   async generate(generateQrCodeDto: GenerateQrCodeDto, admin?: { id?: string; email?: string; name?: string; role?: string }) {
