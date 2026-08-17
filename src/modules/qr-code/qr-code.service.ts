@@ -558,6 +558,33 @@ export class QrCodeService {
     };
   }
 
+  async regenerate(
+    id: string,
+    admin?: { id?: string; email?: string; name?: string; role?: string },
+  ) {
+    const original = await this.qrCodeRepository.findOne({ where: [{ id }, { code: id }] });
+    if (!original) throw new NotFoundException('QR code not found');
+    if (!original.isScanned) {
+      throw new BadRequestException('Only a used QR code needs regeneration');
+    }
+
+    const generated = await this.generate({
+      productId: original.productId,
+      quantity: 1,
+      rewardPoints: Number(original.rewardPoints ?? 0),
+    }, admin);
+
+    return {
+      ...generated,
+      regeneratedFrom: {
+        id: original.id,
+        code: original.code,
+        batchId: original.batchId,
+      },
+      message: 'Replacement QR code generated successfully. The used QR history was preserved.',
+    };
+  }
+
   async getStats() {
     const rows = await this.qrCodeRepository.query(`
       SELECT

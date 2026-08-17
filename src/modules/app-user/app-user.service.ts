@@ -182,7 +182,7 @@ export class AppUserService {
     ).sort((a, b) => a.localeCompare(b));
   }
 
-  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean) {
+  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean, includeMedia = false) {
     const skip = (page - 1) * limit;
     const where: any[] = [];
 
@@ -195,7 +195,22 @@ export class AppUserService {
       );
     }
 
-    const query = this.appUserRepository.createQueryBuilder('u');
+    const query = this.appUserRepository
+      .createQueryBuilder('u')
+      .select([
+        'u.id', 'u.name', 'u.phone', 'u.userCode', 'u.email', 'u.city', 'u.state',
+        'u.district', 'u.pincode', 'u.address', 'u.tier', 'u.totalPoints',
+        'u.walletBalance', 'u.totalRedemptions', 'u.status', 'u.bankLinked', 'u.upiId',
+        'u.bankAccount', 'u.ifsc', 'u.bankName', 'u.accountHolderName', 'u.kycStatus',
+        'u.language', 'u.darkMode', 'u.pushEnabled', 'u.lastActivityAt', 'u.appInstalled',
+        'u.firstAppLoginAt', 'u.joinedDate', 'u.updatedAt',
+      ]);
+    if (includeMedia) {
+      query.addSelect([
+        'u.profileImage', 'u.upiQrCodeImage', 'u.aadharNumber', 'u.panNumber',
+        'u.aadharFrontImage', 'u.panDocument', 'u.gstDocument', 'u.kycRejectionReason',
+      ]);
+    }
     if (search) {
       query.where(
         'u.name ILIKE :s OR u.phone ILIKE :s OR u.userCode ILIKE :s OR u.email ILIKE :s',

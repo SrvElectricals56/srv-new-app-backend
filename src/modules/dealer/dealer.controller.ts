@@ -48,13 +48,14 @@ export class DealerController {
     @Query('appInstalled') appInstalled?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('includeMedia') includeMedia?: string,
   ) {
     return this.dealerService.findAll(
       parseInt(page), parseInt(limit),
       search, status, tier, state, city,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
-      dateFrom, dateTo,
+      dateFrom, dateTo, includeMedia === 'true',
     );
   }
 
@@ -82,6 +83,12 @@ export class DealerController {
   @ApiResponse({ status: 200, description: 'Dealer stats' })
   getStats() {
     return this.dealerService.getStats();
+  }
+
+  @Get('options')
+  @ApiOperation({ summary: 'Get lightweight dealer options for dropdowns' })
+  getOptions() {
+    return this.dealerService.getOptions();
   }
 
   @Get('top')

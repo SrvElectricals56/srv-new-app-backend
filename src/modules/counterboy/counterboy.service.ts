@@ -148,15 +148,31 @@ export class CounterBoyService {
     return { created, updated, failed, errors: errors.slice(0, 20), total: records.length };
   }
 
-  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean) {
+  async findAll(page = 1, limit = 20, search?: string, status?: string, state?: string, city?: string, appInstalled?: boolean, includeMedia = false) {
     const skip = (page - 1) * limit;
 
     const query = this.counterboyRepository
       .createQueryBuilder('cb')
+      .select([
+        'cb.id', 'cb.name', 'cb.phone', 'cb.counterboyCode', 'cb.email', 'cb.city',
+        'cb.state', 'cb.district', 'cb.pincode', 'cb.address', 'cb.dealerId',
+        'cb.totalScans', 'cb.totalPoints', 'cb.walletBalance', 'cb.totalRedemptions',
+        'cb.tier', 'cb.status', 'cb.kycStatus', 'cb.bankLinked', 'cb.upiId',
+        'cb.bankAccount', 'cb.ifsc', 'cb.bankName', 'cb.accountHolderName',
+        'cb.language', 'cb.darkMode', 'cb.pushEnabled', 'cb.lastActivityAt',
+        'cb.appInstalled', 'cb.firstAppLoginAt', 'cb.joinedDate', 'cb.updatedAt',
+      ])
       .leftJoin(Dealer, 'dealer', 'dealer.id::text = cb."dealerId"::text')
       .addSelect('dealer.name', 'dealer_name')
       .addSelect('dealer.phone', 'dealer_phone')
       .addSelect('dealer.dealerCode', 'dealer_code');
+
+    if (includeMedia) {
+      query.addSelect([
+        'cb.profileImage', 'cb.upiQrCodeImage', 'cb.aadharNumber', 'cb.panNumber',
+        'cb.aadharFrontImage', 'cb.panDocument', 'cb.gstDocument', 'cb.kycRejectionReason',
+      ]);
+    }
 
     if (search) {
       query.where(

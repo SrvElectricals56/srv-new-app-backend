@@ -90,7 +90,7 @@ export class SupportService {
     if (ticket.userId) {
       const notification = this.notificationRepository.create({
         title: 'Reply to your enquiry',
-        message: `Admin replied to "${ticket.subject}": ${cleanedMessage.substring(0, 100)}`,
+        message: cleanedMessage.substring(0, 100),
         targetUserIds: [ticket.userId],
         targetRole: ticket.userRole || undefined,
         status: NotificationStatus.SENT,

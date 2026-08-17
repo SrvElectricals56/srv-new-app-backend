@@ -277,9 +277,30 @@ export class DealerService {
     appInstalled?: boolean,
     dateFrom?: string,
     dateTo?: string,
+    includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
-    const queryBuilder = this.dealerRepository.createQueryBuilder('dealer');
+    const queryBuilder = this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select([
+        'dealer.id', 'dealer.name', 'dealer.phone', 'dealer.dealerCode', 'dealer.email',
+        'dealer.town', 'dealer.district', 'dealer.state', 'dealer.address', 'dealer.pincode',
+        'dealer.gstNumber', 'dealer.contactPerson', 'dealer.salesManName', 'dealer.townCode',
+        'dealer.rtoCode', 'dealer.listCode', 'dealer.tier', 'dealer.electricianCount',
+        'dealer.status', 'dealer.rejectionReason', 'dealer.bankLinked', 'dealer.upiId',
+        'dealer.bankAccount', 'dealer.ifsc', 'dealer.bankName', 'dealer.accountHolderName',
+        'dealer.kycStatus', 'dealer.totalOrders', 'dealer.monthlyTarget', 'dealer.achievedTarget',
+        'dealer.walletBalance', 'dealer.bonusStatus', 'dealer.bonusPoints', 'dealer.lastActivityAt',
+        'dealer.appInstalled', 'dealer.firstAppLoginAt', 'dealer.joinedDate', 'dealer.updatedAt',
+      ]);
+
+    if (includeMedia) {
+      queryBuilder.addSelect([
+        'dealer.profileImage', 'dealer.upiQrCodeImage', 'dealer.aadharNumber', 'dealer.panNumber',
+        'dealer.aadharFrontImage', 'dealer.panDocument', 'dealer.gstDocument',
+        'dealer.kycRejectionReason',
+      ]);
+    }
 
     if (search) {
       queryBuilder.andWhere(
@@ -312,14 +333,21 @@ export class DealerService {
       queryBuilder.andWhere('dealer.appInstalled = :appInstalled', { appInstalled });
     }
 
+    const filteredDateColumn = appInstalled === true
+      ? 'dealer.firstAppLoginAt'
+      : 'dealer.joinedDate';
     if (dateFrom) {
-      queryBuilder.andWhere('dealer.joinedDate >= :dateFrom', { dateFrom: new Date(dateFrom) });
+      queryBuilder.andWhere(
+        `(${filteredDateColumn} AT TIME ZONE 'Asia/Kolkata')::date >= CAST(:dateFrom AS date)`,
+        { dateFrom },
+      );
     }
 
     if (dateTo) {
-      const to = new Date(dateTo);
-      to.setHours(23, 59, 59, 999);
-      queryBuilder.andWhere('dealer.joinedDate <= :dateTo', { dateTo: to });
+      queryBuilder.andWhere(
+        `(${filteredDateColumn} AT TIME ZONE 'Asia/Kolkata')::date <= CAST(:dateTo AS date)`,
+        { dateTo },
+      );
     }
 
     queryBuilder.orderBy('dealer.joinedDate', 'DESC').skip(skip).take(limit);
@@ -352,6 +380,17 @@ export class DealerService {
     }
 
     return this.serialize(dealer);
+  }
+
+  async getOptions() {
+    return this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select('dealer.id', 'id')
+      .addSelect('dealer.name', 'name')
+      .addSelect('dealer.dealerCode', 'dealerCode')
+      .addSelect('dealer.phone', 'phone')
+      .orderBy('dealer.name', 'ASC')
+      .getRawMany();
   }
 
   async update(id: string, updateDealerDto: UpdateDealerDto) {
@@ -956,6 +995,8 @@ export class DealerService {
       .addSelect('COUNT(*) FILTER (WHERE d.status = :active)::int', 'active')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :pending)::int', 'pending')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :inactive)::int', 'inactive')
+      .addSelect('COUNT(*) FILTER (WHERE d.appInstalled = true)::int', 'installed')
+      .addSelect('COUNT(*) FILTER (WHERE d.appInstalled = false)::int', 'notInstalled')
       .setParameters({
         active: UserStatus.ACTIVE,
         pending: UserStatus.PENDING,
@@ -968,6 +1009,8 @@ export class DealerService {
       active: Number(row?.active ?? 0),
       pending: Number(row?.pending ?? 0),
       inactive: Number(row?.inactive ?? 0),
+      installed: Number(row?.installed ?? 0),
+      notInstalled: Number(row?.notInstalled ?? 0),
     };
   }
 }

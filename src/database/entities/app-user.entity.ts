@@ -28,6 +28,9 @@ export class AppUser {
   @Column({ nullable: true })
   email: string;
 
+  @Column({ nullable: true, unique: true })
+  googleSubject: string;
+
   @Column({ nullable: true })
   profileImage: string;
 

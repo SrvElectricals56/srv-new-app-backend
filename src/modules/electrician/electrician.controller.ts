@@ -52,6 +52,7 @@ export class ElectricianController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('kycStatus') kycStatus?: KYCStatus,
+    @Query('includeMedia') includeMedia?: string,
   ) {
     return this.electricianService.findAll(
       parseInt(page), parseInt(limit),
@@ -59,7 +60,7 @@ export class ElectricianController {
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       welcomeBonus === 'true' ? true : undefined,
-      dateFrom, dateTo, kycStatus,
+      dateFrom, dateTo, kycStatus, includeMedia === 'true',
     );
   }
 
@@ -93,6 +94,12 @@ export class ElectricianController {
   @ApiResponse({ status: 200, description: 'Tier counts' })
   getTierCounts() {
     return this.electricianService.getTierCounts();
+  }
+
+  @Get('stats')
+  @ApiOperation({ summary: 'Get electrician installation totals' })
+  getStats() {
+    return this.electricianService.getStats();
   }
 
   @Get('top')

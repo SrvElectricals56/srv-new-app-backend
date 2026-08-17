@@ -17,6 +17,17 @@ describe('isQrRedeemable', () => {
     })).toBe(false);
   });
 
+  it.each([
+    { sku: 'SRV-WELCOME', name: 'Welcome to SRV' },
+    { sku: 'SRV-ADJUST', name: 'Adjust Points' },
+  ])('allows a new QR for hidden system reward product $sku', (product) => {
+    expect(isQrRedeemable({
+      isActive: true,
+      legacyId: null,
+      product: { ...product, isActive: false },
+    })).toBe(true);
+  });
+
   it('does not allow an inactive QR', () => {
     expect(isQrRedeemable({
       isActive: false,

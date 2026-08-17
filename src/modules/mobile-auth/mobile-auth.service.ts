@@ -9,18 +9,19 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
-import { randomInt } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import axios from 'axios';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Scan } from '../../database/entities/scan.entity';
+import { Wallet } from '../../database/entities/wallet.entity';
 import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
-import { ElectricianSubCategory, UserStatus } from '../../common/enums';
+import { ElectricianSubCategory, TransactionSource, TransactionType, UserRole, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
@@ -75,6 +76,117 @@ export class MobileAuthService {
 
   private exposeTestOtp(): boolean {
     return this.getFixedOtp() !== null;
+  }
+
+  private async findReferralOwner(manager: EntityManager, referralCode?: string) {
+    const code = String(referralCode ?? '').trim().toUpperCase();
+    if (!code) return null;
+    const rows = await manager.query(
+      `
+        SELECT id::text, name, phone, 'electrician' AS role, "electricianCode" AS code
+        FROM "electricians" WHERE upper("electricianCode") = $1
+        UNION ALL
+        SELECT id::text, name, phone, 'dealer' AS role, "dealerCode" AS code
+        FROM "dealers" WHERE upper("dealerCode") = $1
+        UNION ALL
+        SELECT id::text, name, phone, 'user' AS role, "userCode" AS code
+        FROM "app_users" WHERE upper("userCode") = $1
+        UNION ALL
+        SELECT id::text, name, phone, 'counterboy' AS role, "counterboyCode" AS code
+        FROM "counterboys" WHERE upper("counterboyCode") = $1
+        LIMIT 1
+      `,
+      [code],
+    );
+    if (!rows[0]) throw new BadRequestException('Referral code is invalid. Check the code and try again.');
+    return rows[0] as { id: string; name: string; phone: string; role: UserRole; code: string };
+  }
+
+  private getReferralTable(role: UserRole): string {
+    if (role === UserRole.ELECTRICIAN) return 'electricians';
+    if (role === UserRole.DEALER) return 'dealers';
+    if (role === UserRole.COUNTERBOY) return 'counterboys';
+    return 'app_users';
+  }
+
+  private async creditReferralMember(
+    manager: EntityManager,
+    member: { id: string; name: string; phone: string; role: UserRole },
+    otherMember: { id: string; name: string; phone: string; role: UserRole },
+    points: number,
+  ) {
+    const table = this.getReferralTable(member.role);
+    const totalPointsSelect = member.role === UserRole.DEALER
+      ? '0 AS "totalPoints"'
+      : 'COALESCE("totalPoints", 0) AS "totalPoints"';
+    const beforeRows = await manager.query(
+      `SELECT COALESCE("walletBalance", 0) AS "walletBalance", ${totalPointsSelect}, status FROM "${table}" WHERE id::text = $1 FOR UPDATE`,
+      [member.id],
+    );
+    const before = beforeRows[0];
+    if (!before) throw new NotFoundException('Referral member not found');
+    const balanceBefore = Number(before.walletBalance ?? 0);
+    const balanceAfter = balanceBefore + points;
+
+    if (member.role === UserRole.DEALER) {
+      await manager.query(
+        `UPDATE "${table}" SET "walletBalance" = $2, "updatedAt" = now() WHERE id::text = $1`,
+        [member.id, balanceAfter],
+      );
+    } else {
+      const tier = this.tierService.calculateElectricianTier(balanceAfter);
+      const activateElectrician = member.role === UserRole.ELECTRICIAN &&
+        before.status !== UserStatus.SUSPENDED && before.status !== UserStatus.PENDING;
+      await manager.query(
+        `UPDATE "${table}"
+         SET "walletBalance" = $2,
+             "totalPoints" = $2,
+             tier = $3,
+             status = CASE WHEN $4::boolean THEN 'active' ELSE status END,
+             "updatedAt" = now()
+         WHERE id::text = $1`,
+        [member.id, balanceAfter, tier, activateElectrician],
+      );
+    }
+
+    await manager.getRepository(Wallet).save(manager.getRepository(Wallet).create({
+      userId: member.id,
+      userRole: member.role,
+      type: TransactionType.CREDIT,
+      source: TransactionSource.TRANSFER,
+      amount: points,
+      balanceBefore,
+      balanceAfter,
+      description: `Referral reward: ${member.name} and ${otherMember.name} received ${points} points`,
+      referenceId: otherMember.id,
+      referenceType: 'referral',
+    }));
+  }
+
+  private async applyReferralReward(
+    manager: EntityManager,
+    referralCode: string | undefined,
+    referee: { id: string; name: string; phone: string; role: UserRole },
+  ) {
+    const referrer = await this.findReferralOwner(manager, referralCode);
+    if (!referrer) return;
+    if (referrer.id === referee.id && referrer.role === referee.role) {
+      throw new BadRequestException('You cannot use your own referral code.');
+    }
+
+    const rewardId = randomUUID();
+    const inserted = await manager.query(
+      `INSERT INTO "referral_rewards"
+        (id, "referrerUserId", "referrerRole", "refereeUserId", "refereeRole", "referralCode", points, "createdAt")
+       VALUES ($1,$2,$3,$4,$5,$6,20,now())
+       ON CONFLICT ("refereeUserId", "refereeRole") DO NOTHING
+       RETURNING id`,
+      [rewardId, referrer.id, referrer.role, referee.id, referee.role, referrer.code],
+    );
+    if (!inserted.length) return;
+
+    await this.creditReferralMember(manager, referrer, referee, 20);
+    await this.creditReferralMember(manager, referee, referrer, 20);
   }
 
   private shouldDeliverSms(): boolean {
@@ -323,6 +435,15 @@ export class MobileAuthService {
     return { ...electrician, dealer };
   }
 
+  private async hydrateDealerElectricianCount(dealer: Dealer | null) {
+    if (!dealer) return null;
+    const electricianCount = await this.electricianRepository.count({ where: { dealerId: dealer.id } });
+    if (dealer.electricianCount !== electricianCount) {
+      await this.dealerRepository.update(dealer.id, { electricianCount });
+    }
+    return { ...dealer, electricianCount };
+  }
+
   /** Find user entity by phone + role */
   private async findUserByPhone(phone: string, role: MobileUserRole): Promise<any> {
     const normalizedPhone = this.normalizePhone(phone);
@@ -356,6 +477,9 @@ export class MobileAuthService {
     }
 
     const user = await query.getOne();
+    if (role === 'dealer') {
+      return this.hydrateDealerElectricianCount(user as Dealer | null);
+    }
     if (role === 'counterboy') {
       return this.hydrateCounterBoyDealer(user as CounterBoy | null);
     }
@@ -626,7 +750,7 @@ export class MobileAuthService {
   async registerDealer(data: {
     name: string; phone: string; email?: string; town: string;
     district: string; state: string; address: string; pincode?: string;
-    gstNumber?: string; password?: string; signupVerificationToken?: string;
+    gstNumber?: string; password?: string; signupVerificationToken?: string; referralCode?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'dealer', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'dealer');
@@ -654,7 +778,13 @@ export class MobileAuthService {
     (dealer as any).appInstalled = true;
     (dealer as any).firstAppLoginAt = new Date();
 
-    const saved = await this.dealerRepository.save(dealer) as Dealer;
+    const saved = await this.dataSource.transaction(async manager => {
+      const savedDealer = await manager.getRepository(Dealer).save(dealer) as Dealer;
+      await this.applyReferralReward(manager, data.referralCode, {
+        id: savedDealer.id, name: savedDealer.name, phone: savedDealer.phone, role: UserRole.DEALER,
+      });
+      return savedDealer;
+    });
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'dealer' };
     const tokens = await this.generateTokens(payload);
@@ -665,7 +795,7 @@ export class MobileAuthService {
     name: string; phone: string; email?: string; city: string;
     district: string; state: string; address?: string; pincode?: string;
     dealerPhone: string; password?: string; subCategory?: string;
-    signupVerificationToken?: string;
+    signupVerificationToken?: string; referralCode?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'electrician', data.signupVerificationToken);
 
@@ -675,6 +805,11 @@ export class MobileAuthService {
       where: { phone: this.normalizePhone(data.phone) },
     });
     if (existingElectrician) {
+      if (data.referralCode?.trim()) {
+        await this.dataSource.transaction(manager => this.applyReferralReward(manager, data.referralCode, {
+          id: existingElectrician.id, name: existingElectrician.name, phone: existingElectrician.phone, role: UserRole.ELECTRICIAN,
+        }));
+      }
       otpStore.delete(signupOtpKey);
       const existingWithDealer = await this.hydrateElectricianDealer(existingElectrician);
       const tokens = await this.generateTokens({
@@ -762,7 +897,7 @@ export class MobileAuthService {
         fallbackDealerPhone,
         electricianCode,
         subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
-        status: UserStatus.ACTIVE,
+        status: UserStatus.INACTIVE,
       });
       (electrician as any).passwordHash = passwordHash;
       // Signup = app is installed by definition
@@ -784,6 +919,10 @@ export class MobileAuthService {
           [fallbackDealerPhone, data.district || null, data.pincode || null],
         );
       }
+
+      await this.applyReferralReward(manager, data.referralCode, {
+        id: savedElectrician.id, name: savedElectrician.name, phone: savedElectrician.phone, role: UserRole.ELECTRICIAN,
+      });
 
       return savedElectrician;
     });
@@ -810,7 +949,7 @@ export class MobileAuthService {
   async registerUser(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    password?: string; signupVerificationToken?: string;
+    password?: string; signupVerificationToken?: string; referralCode?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'user', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'user');
@@ -836,7 +975,13 @@ export class MobileAuthService {
       firstAppLoginAt: new Date(),
     });
 
-    const saved = await this.appUserRepository.save(appUser);
+    const saved = await this.dataSource.transaction(async manager => {
+      const savedUser = await manager.getRepository(AppUser).save(appUser);
+      await this.applyReferralReward(manager, data.referralCode, {
+        id: savedUser.id, name: savedUser.name, phone: savedUser.phone, role: UserRole.USER,
+      });
+      return savedUser;
+    });
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
     const tokens = await this.generateTokens(payload);
@@ -853,7 +998,8 @@ export class MobileAuthService {
 
     let user = await this.appUserRepository
       .createQueryBuilder('user')
-      .where('LOWER(user.email) = :email', { email: googleUser.email })
+      .where('user.googleSubject = :googleSubject', { googleSubject: googleUser.sub })
+      .orWhere('LOWER(user.email) = :email', { email: googleUser.email })
       .getOne();
 
     if (!user) {
@@ -865,6 +1011,7 @@ export class MobileAuthService {
         name: googleUser.name || 'Customer',
         phone: existingPhone ? `${phone.slice(0, 9)}${Date.now().toString().slice(-1)}` : phone,
         email: googleUser.email,
+        googleSubject: googleUser.sub || undefined,
         profileImage: googleUser.picture ?? undefined,
         userCode,
         status: UserStatus.ACTIVE,
@@ -874,6 +1021,7 @@ export class MobileAuthService {
       user = await this.appUserRepository.save(user);
     } else {
       user.email = googleUser.email;
+      user.googleSubject = googleUser.sub || user.googleSubject;
       if (googleUser.picture) user.profileImage = googleUser.picture;
       if (!user.name?.trim()) user.name = googleUser.name || 'Customer';
       user.appInstalled = true;
@@ -892,7 +1040,7 @@ export class MobileAuthService {
   async registerCounterBoy(data: {
     name: string; phone: string; email?: string; city?: string;
     state?: string; district?: string; address?: string; pincode?: string;
-    password?: string; signupVerificationToken?: string;
+    password?: string; signupVerificationToken?: string; referralCode?: string;
   }) {
     const signupOtpKey = this.ensureSignupOtpVerified(data.phone, 'counterboy', data.signupVerificationToken);
     await this.crossRolePhoneService.assertPhoneAvailableForRole(data.phone, 'counterboy');
@@ -918,7 +1066,13 @@ export class MobileAuthService {
       firstAppLoginAt: new Date(),
     });
 
-    const saved = await this.counterboyRepository.save(counterboy);
+    const saved = await this.dataSource.transaction(async manager => {
+      const savedCounterBoy = await manager.getRepository(CounterBoy).save(counterboy);
+      await this.applyReferralReward(manager, data.referralCode, {
+        id: savedCounterBoy.id, name: savedCounterBoy.name, phone: savedCounterBoy.phone, role: UserRole.COUNTERBOY,
+      });
+      return savedCounterBoy;
+    });
     otpStore.delete(signupOtpKey);
     const savedWithDealer = await this.hydrateCounterBoyDealer(
       await this.counterboyRepository.findOne({ where: { id: saved.id } }),
@@ -1032,7 +1186,9 @@ export class MobileAuthService {
         );
         break;
       case 'dealer':
-        user = await this.dealerRepository.findOne({ where: { id: userId } });
+        user = await this.hydrateDealerElectricianCount(
+          await this.dealerRepository.findOne({ where: { id: userId } }),
+        );
         break;
       case 'user':
         user = await this.appUserRepository.findOne({ where: { id: userId } });
@@ -1299,7 +1455,9 @@ export class MobileAuthService {
         return {
           id: user.id,
           name: user.name,
-          phone: user.phone,
+          // Google-only customer records use an internal unique placeholder because
+          // the legacy schema requires a phone. Never present it as a verified number.
+          phone: user.googleSubject ? '' : user.phone,
           email: user.email,
           userCode: user.userCode,
           city: user.city,

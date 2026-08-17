@@ -451,8 +451,8 @@ export class MobileController {
   @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit app rating' })
-  submitRating(@Request() req: any, @Body() body: { rating: number; review?: string }) {
-    return this.mobileService.submitRating(req.user.id, req.user.role, body.rating, body.review);
+  submitRating(@Request() req: any, @Body() body: { rating: number; review?: string; displayConsent?: boolean }) {
+    return this.mobileService.submitRating(req.user.id, req.user.role, body.rating, body.review, body.displayConsent);
   }
 
   @Get('rating')

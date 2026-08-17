@@ -53,7 +53,7 @@ export class ElectricianService {
 
   private synchronizePoints(
     data: Record<string, any>,
-    current?: Pick<Electrician, 'totalPoints' | 'walletBalance'>,
+    current?: Pick<Electrician, 'totalPoints' | 'walletBalance' | 'status'>,
   ) {
     const totalProvided = data.totalPoints !== undefined;
     const walletProvided = data.walletBalance !== undefined;
@@ -87,6 +87,10 @@ export class ElectricianService {
     data.totalPoints = points;
     data.walletBalance = points;
     data.tier = this.tierService.calculateElectricianTier(points ?? 0);
+    const protectedStatus = data.status ?? current?.status;
+    if (protectedStatus !== UserStatus.SUSPENDED && protectedStatus !== UserStatus.PENDING) {
+      data.status = (points ?? 0) > 0 ? UserStatus.ACTIVE : UserStatus.INACTIVE;
+    }
   }
 
   private serialize(electrician: Electrician) {
@@ -201,7 +205,7 @@ export class ElectricianService {
       data.dealerId = data.dealerId.trim();
     }
     if (!data.status) {
-      data.status = UserStatus.ACTIVE;
+      data.status = UserStatus.INACTIVE;
     }
     data.electricianCode = await this.resolveElectricianCode({
       electricianCode: data.electricianCode,
@@ -273,16 +277,33 @@ export class ElectricianService {
     dateFrom?: string,
     dateTo?: string,
     kycStatus?: KYCStatus,
+    includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
     const queryBuilder = this.electricianRepository
       .createQueryBuilder('electrician')
-      .leftJoinAndMapOne(
-        'electrician.dealer',
-        Dealer,
-        'dealer',
-        'dealer.id::text = electrician."dealerId"::text',
-      );
+      .select([
+        'electrician.id', 'electrician.name', 'electrician.phone', 'electrician.electricianCode',
+        'electrician.email', 'electrician.city', 'electrician.state', 'electrician.district',
+        'electrician.pincode', 'electrician.address', 'electrician.subCategory', 'electrician.tier',
+        'electrician.totalPoints', 'electrician.totalScans', 'electrician.walletBalance',
+        'electrician.totalRedemptions', 'electrician.status', 'electrician.bankLinked',
+        'electrician.upiId', 'electrician.bankAccount', 'electrician.ifsc', 'electrician.bankName',
+        'electrician.accountHolderName', 'electrician.kycStatus', 'electrician.dealerId',
+        'electrician.fallbackDealerName', 'electrician.fallbackDealerPhone',
+        'electrician.fallbackDealerCode', 'electrician.lastActivityAt', 'electrician.appInstalled',
+        'electrician.firstAppLoginAt', 'electrician.joinedDate', 'electrician.updatedAt',
+      ])
+      .leftJoin('electrician.dealer', 'dealer')
+      .addSelect(['dealer.id', 'dealer.name', 'dealer.phone', 'dealer.dealerCode']);
+
+    if (includeMedia) {
+      queryBuilder.addSelect([
+        'electrician.profileImage', 'electrician.upiQrCodeImage', 'electrician.aadharNumber',
+        'electrician.panNumber', 'electrician.aadharFrontImage', 'electrician.panDocument',
+        'electrician.gstDocument', 'electrician.kycRejectionReason',
+      ]);
+    }
 
     if (search) {
       queryBuilder.andWhere(
@@ -1124,5 +1145,19 @@ export class ElectricianService {
       result[row.tier] = parseInt(row.count, 10);
     }
     return result;
+  }
+
+  async getStats() {
+    const row = await this.electricianRepository
+      .createQueryBuilder('e')
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE e.appInstalled = true)::int', 'installed')
+      .addSelect('COUNT(*) FILTER (WHERE e.appInstalled = false)::int', 'notInstalled')
+      .getRawOne();
+    return {
+      total: Number(row?.total ?? 0),
+      installed: Number(row?.installed ?? 0),
+      notInstalled: Number(row?.notInstalled ?? 0),
+    };
   }
 }

@@ -454,7 +454,7 @@ export class MobileService {
   }
 
   private buildTransferBalanceUpdate(
-    _user: any,
+    user: any,
     role: UserRole,
     newBalance: number,
     _pointsDelta: number,
@@ -469,6 +469,9 @@ export class MobileService {
 
       if (role === UserRole.ELECTRICIAN) {
         updateData.tier = this.tierService.calculateElectricianTier(syncedPoints);
+        if (user?.status !== UserStatus.SUSPENDED && user?.status !== UserStatus.PENDING) {
+          updateData.status = syncedPoints > 0 ? UserStatus.ACTIVE : UserStatus.INACTIVE;
+        }
       }
     }
 
@@ -1161,11 +1164,55 @@ export class MobileService {
       where: { isActive: true },
       order: { displayOrder: 'ASC', createdAt: 'DESC' },
     });
+    const communityReviews = await this.dataSource.query(`
+      SELECT
+        r."userId",
+        r."userRole",
+        r."rating",
+        r."review",
+        r."updatedAt",
+        COALESCE(e.name, d.name, u.name, c.name, 'SRV Member') AS "personName",
+        COALESCE(e.city, d.town, u.city, c.city, '') AS "location"
+      FROM "app_ratings" r
+      LEFT JOIN "electricians" e ON r."userId" = e.id::text
+      LEFT JOIN "dealers" d ON r."userId" = d.id::text
+      LEFT JOIN "app_users" u ON r."userId" = u.id::text
+      LEFT JOIN "counterboys" c ON r."userId" = c.id::text
+      WHERE r."displayConsent" = true
+        AND length(trim(COALESCE(r."review", ''))) >= 10
+        AND r."updatedAt" <= now() - interval '7 days'
+      ORDER BY r."updatedAt" DESC
+      LIMIT 5
+    `).catch(() => []);
+
+    const verifiedReviews = communityReviews.map((review: any, index: number) => {
+      const personName = String(review.personName || 'SRV Member').trim();
+      const initials = personName.split(/\s+/).slice(0, 2).map((part: string) => part[0]?.toUpperCase() ?? '').join('');
+      const rawRole = String(review.userRole || 'user').toLowerCase();
+      return {
+        id: `rating_${review.userId}`,
+        personName,
+        initials: initials || 'SRV',
+        location: review.location || null,
+        tier: rawRole === 'dealer' ? 'Dealer' : rawRole === 'counterboy' ? 'Counter Boy' : rawRole === 'electrician' ? 'Electrician' : 'Customer',
+        yearsConnected: 1,
+        quote: String(review.review).trim(),
+        highlight: 'Verified app review',
+        rating: Number(review.rating),
+        isActive: true,
+        displayOrder: 10_000 + index,
+        userCategory: rawRole === 'user' ? 'customer' : rawRole,
+        imageUrl: null,
+        createdAt: review.updatedAt,
+        updatedAt: review.updatedAt,
+        verifiedReview: true,
+      };
+    });
     return {
-      data: testimonials.map((t) => ({
+      data: [...testimonials.map((t) => ({
         ...t,
         imageUrl: this.normalizeUploadUrl((t as any).imageUrl) ?? (t as any).imageUrl ?? null,
-      })),
+      })), ...verifiedReviews],
     };
   }
 
@@ -1414,6 +1461,14 @@ export class MobileService {
         updateData.tier = this.tierService.calculateElectricianTier(
           newWallet,
         ) as any;
+      }
+
+      if (
+        userRole === UserRole.ELECTRICIAN &&
+        userRecord.status !== UserStatus.SUSPENDED &&
+        userRecord.status !== UserStatus.PENDING
+      ) {
+        updateData.status = newWallet > 0 ? UserStatus.ACTIVE : UserStatus.INACTIVE;
       }
 
       await this.updateUserByRole(userId, role, updateData, manager);
@@ -1781,6 +1836,7 @@ export class MobileService {
       if (!productRole || (productRole !== 'all' && productRole !== expectedProductRole)) {
         throw new ForbiddenException('This reward is not available for your role');
       }
+
       if (Number(product.stock ?? 0) <= 0) {
         throw new BadRequestException('Reward scheme is out of stock');
       }
@@ -2481,10 +2537,14 @@ export class MobileService {
     const playStoreSetting = await this.settingsRepository.findOne({ where: { key: 'playStoreUrl' } });
     const appLink = playStoreSetting?.value?.trim() || 'https://play.google.com/store/apps/details?id=com.srvelectricals.app';
     const separator = appLink.includes('?') ? '&' : '?';
+    const referralQuery = `ref=${encodeURIComponent(code)}`;
+    const installReferrer = appLink.includes('play.google.com')
+      ? `&referrer=${encodeURIComponent(referralQuery)}`
+      : '';
 
     return {
       code,
-      link: `${appLink}${separator}ref=${encodeURIComponent(code)}`,
+      link: `${appLink}${separator}${referralQuery}${installReferrer}`,
       channels: ['whatsapp', 'sms', 'copy'],
     };
   }
@@ -2510,15 +2570,15 @@ export class MobileService {
       const estimatedDeliveryAt = o.estimatedDeliveryAt ?? this.estimateDeliveryDate(o.paidAt ?? o.orderedAt ?? new Date());
       const status = String(o.status ?? '').toLowerCase();
       const canCancel =
-        ['pending', 'approved', 'out_for_delivery'].includes(status) &&
+        ['pending', 'approved'].includes(status) &&
         this.isWithinHours(o.orderedAt, 24);
       const canReturn =
         status === ProductOrderStatus.DELIVERED &&
         this.isWithinHours(o.deliveredAt, 24);
       const canRefund =
         o.paymentStatus === 'paid' &&
-        !['refunded', 'rejected'].includes(status) &&
-        !['requested', 'completed'].includes(String(o.refundStatus ?? '').toLowerCase());
+        ['cancelled', 'returned'].includes(status) &&
+        !o.refundStatus;
       return ({
       id: o.id,
       orderCode: getPublicOrderCode(o.id),
@@ -2569,7 +2629,7 @@ export class MobileService {
 
   // ── Rating ─────────────────────────────────────────────────────────────────
 
-  async submitRating(userId: string, role: string | undefined, rating: number, review?: string) {
+  async submitRating(userId: string, role: string | undefined, rating: number, review?: string, displayConsent?: boolean) {
 
     const numericRating = Number(rating);
     if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
@@ -2586,24 +2646,29 @@ export class MobileService {
       ? normalizedRequestRole
       : UserRole.USER;
 
+    const cleanedReview = String(review ?? '').trim().slice(0, 500) || null;
+    const consent = Boolean(displayConsent && cleanedReview && cleanedReview.length >= 10);
+
     await this.dataSource.query(
       `
-        INSERT INTO "app_ratings" ("userId", "userRole", "rating", "review")
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO "app_ratings" ("userId", "userRole", "rating", "review", "displayConsent")
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT ("userId")
         DO UPDATE SET
           "userRole" = EXCLUDED."userRole",
           "rating" = EXCLUDED."rating",
           "review" = EXCLUDED."review",
+          "displayConsent" = EXCLUDED."displayConsent",
           "updatedAt" = now()
       `,
-      [userId, userRole, numericRating, review ?? null],
+      [userId, userRole, numericRating, cleanedReview, consent],
     );
 
     return {
       id: `rating_${userId}`,
       rating: numericRating,
-      review: review ?? null,
+      review: cleanedReview,
+      displayConsent: consent,
     };
   }
 
@@ -2611,7 +2676,7 @@ export class MobileService {
 
     const rows = await this.dataSource.query(
       `
-        SELECT "rating", "review"
+        SELECT "rating", "review", "displayConsent"
         FROM "app_ratings"
         WHERE "userId" = $1
         LIMIT 1
@@ -2628,6 +2693,7 @@ export class MobileService {
       id: `rating_${userId}`,
       rating: Number(record.rating),
       review: record.review ?? null,
+      displayConsent: Boolean(record.displayConsent),
     };
   }
 }

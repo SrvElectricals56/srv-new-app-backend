@@ -206,7 +206,7 @@ export class FinanceService {
 
       const [receiverUser, senderUser] = await Promise.all([
         this.resolveUser(t.userId),
-        (t.referenceType === 'transfer' || t.referenceType === 'manual_transfer') && t.referenceId
+        (t.referenceType === 'transfer' || t.referenceType === 'manual_transfer' || t.referenceType === 'referral') && t.referenceId
           ? this.resolveUser(t.referenceId)
           : Promise.resolve(null),
       ]);

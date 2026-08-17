@@ -85,6 +85,11 @@ class BaseRegistrationDto {
   signupVerificationToken?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  referralCode?: string;
+
+  @IsOptional()
   @IsEmail()
   @MaxLength(254)
   email?: string;
@@ -211,6 +216,11 @@ export class RegisterUserDto {
   @IsNotEmpty()
   signupVerificationToken?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  referralCode?: string;
+
   @IsString()
   @IsOptional()
   email?: string;
@@ -254,6 +264,11 @@ export class RegisterCounterBoyDto {
   @IsString()
   @IsNotEmpty()
   signupVerificationToken?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  referralCode?: string;
 
   @IsString()
   @IsOptional()

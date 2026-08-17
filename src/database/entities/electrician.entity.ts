@@ -81,7 +81,7 @@ export class Electrician {
   @Column({
     type: 'enum',
     enum: UserStatus,
-    default: UserStatus.ACTIVE,
+    default: UserStatus.INACTIVE,
   })
   status: UserStatus;
 

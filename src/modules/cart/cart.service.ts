@@ -18,6 +18,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Settings } from '../../database/entities/settings.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { getSpendableProductPoints } from '../../common/utils/spendable-points.util';
 import { TransactionSource, TransactionType, UserRole } from '../../common/enums';
 
 const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
@@ -406,17 +407,17 @@ export class CartService {
         throw new BadRequestException('Product price is not valid for points payment');
       }
 
-      const isDealerRole = normalizedRole === UserRole.DEALER;
-      const balanceBefore = isDealerRole
-        ? Number((user as any).bonusPoints ?? 0)
-        : Number((user as any).walletBalance ?? 0);
+      // Product purchases always use the member's spendable wallet. A dealer's
+      // 5% bonus balance is a separate payout ledger and must not replace their
+      // normal reward points at checkout.
+      const balanceBefore = getSpendableProductPoints(user as any);
       if (balanceBefore < pointsRequired) {
         throw new BadRequestException(`Insufficient points. You have ${balanceBefore} points but need ${pointsRequired}.`);
       }
 
       const balanceAfter = balanceBefore - pointsRequired;
-      const updateData: any = isDealerRole
-        ? { bonusPoints: balanceAfter }
+      const updateData: any = normalizedRole === UserRole.DEALER
+        ? { walletBalance: balanceAfter }
         : { walletBalance: balanceAfter, totalPoints: balanceAfter };
       await userRepository.update(userId, updateData);
 
@@ -786,7 +787,7 @@ export class CartService {
     const mappedOrders = orders.map((order) => {
       const status = String(order.status ?? '').toLowerCase();
       const canCancel =
-        ['pending', 'approved', 'out_for_delivery'].includes(status) &&
+        ['pending', 'approved'].includes(status) &&
         this.isWithinHours(order.orderedAt, 24);
       const canReturn =
         status === ProductOrderStatus.DELIVERED &&
@@ -831,7 +832,7 @@ export class CartService {
     const note = reason?.trim();
 
     if (action === 'cancel') {
-      if (!['pending', 'approved', 'out_for_delivery'].includes(status)) {
+      if (!['pending', 'approved'].includes(status)) {
         throw new BadRequestException('This order can no longer be cancelled');
       }
       if (!this.isWithinHours(order.orderedAt, 24)) {
@@ -839,9 +840,10 @@ export class CartService {
       }
       await this.orderRepo.update(order.id, {
         status: ProductOrderStatus.CANCELLED,
-        refundStatus: order.paymentStatus === 'paid' ? 'pending' : null,
+        // Keep this empty so a paid cancelled order exposes the explicit Refund action.
+        refundStatus: null,
         refundMessage: order.paymentStatus === 'paid'
-          ? 'Cancellation requested. Your refund will be credited within 4 to 5 working days.'
+          ? 'Order cancelled. You can now submit the refund request.'
           : 'Order cancelled successfully.',
         deliveryNotes: note ? `Cancelled by user: ${note}` : 'Cancelled by user.',
         cancelReason: note || 'No reason provided',
@@ -856,8 +858,11 @@ export class CartService {
       }
       await this.orderRepo.update(order.id, {
         status: ProductOrderStatus.RETURNED,
-        refundStatus: order.paymentStatus === 'paid' ? 'pending' : order.refundStatus,
-        refundMessage: 'Return requested. After verification, your refund will be credited within 4 to 5 working days.',
+        // A return and a refund are separate customer actions.
+        refundStatus: null,
+        refundMessage: order.paymentStatus === 'paid'
+          ? 'Return requested. You can now submit the refund request.'
+          : 'Return requested successfully.',
         deliveryNotes: note ? `Return requested by user: ${note}` : 'Return requested by user.',
         returnReason: note || 'No reason provided',
         customerActionAt: new Date(),

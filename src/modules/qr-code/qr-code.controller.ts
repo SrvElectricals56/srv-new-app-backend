@@ -178,6 +178,14 @@ export class QrCodeController {
     return this.qrCodeService.scanLookup(body.qrCode ?? '');
   }
 
+  @Post(':id/regenerate')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.STAFF)
+  @ApiOperation({ summary: 'Generate a safe replacement for a used QR while preserving scan history' })
+  @ApiResponse({ status: 201, description: 'Replacement QR generated' })
+  regenerate(@Param('id') id: string, @CurrentUser() admin: any) {
+    return this.qrCodeService.regenerate(id, admin);
+  }
+
   @Get(':id/first-scan')
   @ApiOperation({ summary: 'Get first scanner details for a QR code' })
   @ApiResponse({ status: 200, description: 'First QR scan details' })
