@@ -71,7 +71,7 @@ curl --fail --silent --show-error \
   "${ORIGIN}/api/v1/mobile/app-settings" >"${work_dir}/settings.json"
 
 IFS='|' read -r test_user_id test_phone <<<"$(psql -X -AtF '|' -c \
-  'SELECT id, phone FROM electricians WHERE status = $$active$$ ORDER BY id LIMIT 1')"
+  'SELECT id, phone FROM electricians ORDER BY (status = $$active$$) DESC, id LIMIT 1')"
 test -n "${test_user_id}"
 test -n "${test_phone}"
 qr_code="$(psql -X -Atc \
