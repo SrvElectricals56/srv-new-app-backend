@@ -469,9 +469,6 @@ export class MobileService {
 
       if (role === UserRole.ELECTRICIAN) {
         updateData.tier = this.tierService.calculateElectricianTier(syncedPoints);
-        if (user?.status !== UserStatus.SUSPENDED && user?.status !== UserStatus.PENDING) {
-          updateData.status = syncedPoints > 0 ? UserStatus.ACTIVE : UserStatus.INACTIVE;
-        }
       }
     }
 
@@ -1468,7 +1465,7 @@ export class MobileService {
         userRecord.status !== UserStatus.SUSPENDED &&
         userRecord.status !== UserStatus.PENDING
       ) {
-        updateData.status = newWallet > 0 ? UserStatus.ACTIVE : UserStatus.INACTIVE;
+        updateData.status = UserStatus.ACTIVE;
       }
 
       await this.updateUserByRole(userId, role, updateData, manager);

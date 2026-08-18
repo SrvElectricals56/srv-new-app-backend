@@ -135,17 +135,14 @@ export class MobileAuthService {
       );
     } else {
       const tier = this.tierService.calculateElectricianTier(balanceAfter);
-      const activateElectrician = member.role === UserRole.ELECTRICIAN &&
-        before.status !== UserStatus.SUSPENDED && before.status !== UserStatus.PENDING;
       await manager.query(
         `UPDATE "${table}"
          SET "walletBalance" = $2,
              "totalPoints" = $2,
              tier = $3,
-             status = CASE WHEN $4::boolean THEN 'active' ELSE status END,
              "updatedAt" = now()
          WHERE id::text = $1`,
-        [member.id, balanceAfter, tier, activateElectrician],
+        [member.id, balanceAfter, tier],
       );
     }
 
@@ -897,7 +894,7 @@ export class MobileAuthService {
         fallbackDealerPhone,
         electricianCode,
         subCategory: (data.subCategory as ElectricianSubCategory) ?? ElectricianSubCategory.GENERAL_ELECTRICIAN,
-        status: UserStatus.INACTIVE,
+        status: UserStatus.ACTIVE,
       });
       (electrician as any).passwordHash = passwordHash;
       // Signup = app is installed by definition

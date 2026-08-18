@@ -102,12 +102,12 @@ describe('MobileAuthService electrician signup', () => {
       expect.objectContaining({
         phone: signupData.phone,
         electricianCode: `ELC-${signupData.phone}`,
-        status: UserStatus.INACTIVE,
+        status: UserStatus.ACTIVE,
       }),
     );
     expect(context.manager.query).toHaveBeenCalledTimes(1);
     expect(result.user.electricianCode).toBe(`ELC-${signupData.phone}`);
-    expect(result.user.status).toBe(UserStatus.INACTIVE);
+    expect(result.user.status).toBe(UserStatus.ACTIVE);
     expect(result.accessToken).toBe('signed-token');
   });
 

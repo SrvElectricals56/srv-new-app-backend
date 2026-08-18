@@ -14,6 +14,8 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserStatus, MemberTier, UserRole, ElectricianSubCategory, KYCStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { Cron } from '@nestjs/schedule';
+import { getElectricianActivityStatus } from '../../common/utils/electrician-activity.util';
 
 @Injectable()
 export class ElectricianService {
@@ -87,10 +89,41 @@ export class ElectricianService {
     data.totalPoints = points;
     data.walletBalance = points;
     data.tier = this.tierService.calculateElectricianTier(points ?? 0);
-    const protectedStatus = data.status ?? current?.status;
-    if (protectedStatus !== UserStatus.SUSPENDED && protectedStatus !== UserStatus.PENDING) {
-      data.status = (points ?? 0) > 0 ? UserStatus.ACTIVE : UserStatus.INACTIVE;
-    }
+  }
+
+  private async getScanActivity(
+    electricianIds: string[],
+  ): Promise<Map<string, { lastScanAt: Date | null; scansLast7Days: number }>> {
+    if (electricianIds.length === 0) return new Map<string, { lastScanAt: Date | null; scansLast7Days: number }>();
+
+    const rows = await this.scanRepository.query(
+      `SELECT "userId",
+              MAX("scannedAt") AS "lastScanAt",
+              COUNT(*) FILTER (WHERE "scannedAt" >= now() - interval '7 days')::int AS "scansLast7Days"
+       FROM "scans"
+       WHERE "role" = $1 AND "userId" = ANY($2::text[])
+       GROUP BY "userId"`,
+      [UserRole.ELECTRICIAN, electricianIds],
+    );
+
+    return new Map<string, { lastScanAt: Date | null; scansLast7Days: number }>(rows.map((row: any) => [row.userId, {
+      lastScanAt: row.lastScanAt ? new Date(row.lastScanAt) : null,
+      scansLast7Days: Number(row.scansLast7Days ?? 0),
+    }]));
+  }
+
+  private withScanActivity(electrician: Electrician, activity?: { lastScanAt: Date | null; scansLast7Days: number }) {
+    const lastScanAt = activity?.lastScanAt ?? null;
+    return {
+      ...this.serialize(electrician),
+      lastScanAt,
+      scansLast7Days: activity?.scansLast7Days ?? 0,
+      activityStatus: getElectricianActivityStatus({
+        accountStatus: electrician.status,
+        joinedDate: electrician.joinedDate,
+        lastScanAt,
+      }),
+    };
   }
 
   private serialize(electrician: Electrician) {
@@ -204,9 +237,7 @@ export class ElectricianService {
     } else {
       data.dealerId = data.dealerId.trim();
     }
-    if (!data.status) {
-      data.status = UserStatus.INACTIVE;
-    }
+    if (!data.status) data.status = UserStatus.ACTIVE;
     data.electricianCode = await this.resolveElectricianCode({
       electricianCode: data.electricianCode,
       dealerId: data.dealerId,
@@ -395,10 +426,11 @@ export class ElectricianService {
 
     const [rawData, total] = await queryBuilder.getManyAndCount();
 
-    const data = rawData.map(e => this.serialize({
+    const scanActivity = await this.getScanActivity(rawData.map(e => e.id));
+    const data = rawData.map(e => this.withScanActivity({
       ...e,
       dealerName: (e as any).dealer?.name ?? null,
-    } as Electrician & { dealerName?: string | null }));
+    } as Electrician & { dealerName?: string | null }, scanActivity.get(e.id)));
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -419,10 +451,42 @@ export class ElectricianService {
       throw new NotFoundException('Electrician not found');
     }
 
-    return this.serialize({
+    const scanActivity = await this.getScanActivity([electrician.id]);
+    return this.withScanActivity({
       ...electrician,
       dealerName: (electrician as any).dealer?.name ?? null,
-    } as Electrician & { dealerName?: string | null });
+    } as Electrician & { dealerName?: string | null }, scanActivity.get(electrician.id));
+  }
+
+  @Cron('0 5 0 * * *', { timeZone: 'Asia/Kolkata' })
+  async refreshActivityStatuses() {
+    await this.electricianRepository.query(`
+      UPDATE "electricians" AS e
+      SET "status" = CASE
+            WHEN e."joinedDate" >= now() - interval '30 days'
+              OR EXISTS (
+                SELECT 1 FROM "scans" AS s
+                WHERE s."role" = 'electrician'
+                  AND s."userId" = e.id::text
+                  AND s."scannedAt" >= now() - interval '30 days'
+              )
+            THEN 'active'::electricians_status_enum
+            ELSE 'inactive'::electricians_status_enum
+          END,
+          "updatedAt" = now()
+      WHERE e."status" NOT IN ('pending', 'suspended')
+        AND e."status" IS DISTINCT FROM CASE
+          WHEN e."joinedDate" >= now() - interval '30 days'
+            OR EXISTS (
+              SELECT 1 FROM "scans" AS s
+              WHERE s."role" = 'electrician'
+                AND s."userId" = e.id::text
+                AND s."scannedAt" >= now() - interval '30 days'
+            )
+          THEN 'active'::electricians_status_enum
+          ELSE 'inactive'::electricians_status_enum
+        END
+    `);
   }
 
   async update(id: string, updateElectricianDto: UpdateElectricianDto) {
