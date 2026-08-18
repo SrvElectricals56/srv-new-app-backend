@@ -14,7 +14,6 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserStatus, MemberTier, UserRole, ElectricianSubCategory, KYCStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
-import { Cron } from '@nestjs/schedule';
 import { getElectricianActivityStatus } from '../../common/utils/electrician-activity.util';
 
 @Injectable()
@@ -456,37 +455,6 @@ export class ElectricianService {
       ...electrician,
       dealerName: (electrician as any).dealer?.name ?? null,
     } as Electrician & { dealerName?: string | null }, scanActivity.get(electrician.id));
-  }
-
-  @Cron('0 5 0 * * *', { timeZone: 'Asia/Kolkata' })
-  async refreshActivityStatuses() {
-    await this.electricianRepository.query(`
-      UPDATE "electricians" AS e
-      SET "status" = CASE
-            WHEN e."joinedDate" >= now() - interval '30 days'
-              OR EXISTS (
-                SELECT 1 FROM "scans" AS s
-                WHERE s."role" = 'electrician'
-                  AND s."userId" = e.id::text
-                  AND s."scannedAt" >= now() - interval '30 days'
-              )
-            THEN 'active'::electricians_status_enum
-            ELSE 'inactive'::electricians_status_enum
-          END,
-          "updatedAt" = now()
-      WHERE e."status" NOT IN ('pending', 'suspended')
-        AND e."status" IS DISTINCT FROM CASE
-          WHEN e."joinedDate" >= now() - interval '30 days'
-            OR EXISTS (
-              SELECT 1 FROM "scans" AS s
-              WHERE s."role" = 'electrician'
-                AND s."userId" = e.id::text
-                AND s."scannedAt" >= now() - interval '30 days'
-            )
-          THEN 'active'::electricians_status_enum
-          ELSE 'inactive'::electricians_status_enum
-        END
-    `);
   }
 
   async update(id: string, updateElectricianDto: UpdateElectricianDto) {
