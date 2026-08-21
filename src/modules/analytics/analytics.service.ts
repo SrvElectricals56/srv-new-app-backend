@@ -177,7 +177,7 @@ export class AnalyticsService {
 
     const topProducts = await this.scanRepository
       .createQueryBuilder('scan')
-      .leftJoin('products', 'product', 'product.id::text = scan.productId::text')
+      .leftJoin('scan.product', 'product')
       .select('scan.productId', 'id')
       .addSelect('COALESCE(MAX(scan.productName), MAX(product.name), \'Unknown product\')', 'name')
       .addSelect('MAX(product.image)', 'image')
