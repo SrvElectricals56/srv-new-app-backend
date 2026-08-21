@@ -5,12 +5,22 @@ services:
     image: postgres:15-alpine
     container_name: srv_admin_postgres
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - idle_in_transaction_session_timeout=60000
+      - -c
+      - log_min_duration_statement=1000
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       POSTGRES_DB: ${DB_DATABASE:-srv_admin}
     ports:
-      - '5433:5432'
+      # Database administration is host-local. Remote access should use SSH.
+      - '127.0.0.1:5433:5432'
+    shm_size: 256mb
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/upadted.sql:/docker-entrypoint-initdb.d/01-upadted.sql:ro
@@ -23,30 +33,45 @@ services:
       retries: 10
 
   pgadmin:
-    image: dpage/pgadmin4
+    image: dpage/pgadmin4:9.17
     container_name: srv_admin_pgadmin
     restart: unless-stopped
     ports:
-      - '5050:80'
+      - '127.0.0.1:5050:8080'
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD is required}
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_SERVER_MODE: 'True'
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: 'True'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'True'
+      PGADMIN_CONFIG_MAX_LOGIN_ATTEMPTS: '5'
+      PGADMIN_CONFIG_SESSION_EXPIRATION_TIME: '30'
+      PGADMIN_CONFIG_LOGIN_BANNER: "'Authorized database administrators only'"
+      PGADMIN_DISABLE_POSTFIX: '1'
+      PGADMIN_LISTEN_PORT: 8080
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - pgadmin_data:/var/lib/pgadmin
       - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
 
   backend:
     build: .
     container_name: srv_admin_backend
     restart: unless-stopped
+    init: true
     ports:
       - '3001:3001'
     environment:
       NODE_ENV: production
+      APP_ENV: development
       RUNNING_IN_DOCKER: 'true'
       HOST: 0.0.0.0
       PORT: 3001
@@ -78,6 +103,14 @@ services:
         condition: service_healthy
     volumes:
       - ./uploads:/app/uploads
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -93,6 +126,7 @@ services:
         SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
     container_name: srv_admin_frontend
     restart: unless-stopped
+    init: true
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: 1
@@ -103,6 +137,15 @@ services:
         condition: service_healthy
     ports:
       - '3000:3000'
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /app/.next/cache:size=256m,uid=1000,gid=1000,mode=1770
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
 
   mobile-app:
     build:

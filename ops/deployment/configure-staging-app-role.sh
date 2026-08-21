@@ -73,6 +73,12 @@ psql -X -v ON_ERROR_STOP=1 \
   -v owner_role="${PGUSER}" \
   -v app_password="${app_password}" <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_role', :'app_password') \gexec
+SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 40', :'app_role') \gexec
+SELECT format('ALTER ROLE %I SET statement_timeout = %L', :'app_role', '30s') \gexec
+SELECT format('ALTER ROLE %I SET lock_timeout = %L', :'app_role', '5s') \gexec
+SELECT format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', :'app_role', '30s') \gexec
+REVOKE CONNECT, TEMPORARY ON DATABASE srv_staging FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT CONNECT ON DATABASE srv_staging TO :"app_role";
 GRANT USAGE ON SCHEMA public TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"app_role";
@@ -105,6 +111,13 @@ umask 077
   printf 'DB_SYNCHRONIZE=false\n'
   printf 'DB_MIGRATIONS_RUN=false\n'
   printf 'DB_LOGGING=false\n'
+  printf 'DB_POOL_MIN=2\n'
+  printf 'DB_POOL_MAX=20\n'
+  printf 'DB_CONNECTION_TIMEOUT_MS=5000\n'
+  printf 'DB_IDLE_TIMEOUT_MS=30000\n'
+  printf 'DB_QUERY_TIMEOUT_MS=30000\n'
+  printf 'DB_STATEMENT_TIMEOUT_MS=30000\n'
+  printf 'DB_IDLE_TRANSACTION_TIMEOUT_MS=30000\n'
   printf 'JWT_SECRET=%s\n' "${jwt_secret}"
   printf 'JWT_EXPIRES_IN=15m\n'
   printf 'JWT_REFRESH_SECRET=%s\n' "${jwt_refresh_secret}"
@@ -113,6 +126,7 @@ umask 077
   printf 'CORS_CREDENTIALS=true\n'
   printf 'API_PREFIX=api/v1\n'
   printf 'BODY_LIMIT=10mb\n'
+  printf 'TRUST_PROXY_HOPS=1\n'
   printf 'SWAGGER_ENABLED=true\n'
   printf 'THROTTLE_TTL=60\n'
   printf 'THROTTLE_LIMIT=100\n'

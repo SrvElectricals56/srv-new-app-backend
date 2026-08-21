@@ -10,8 +10,8 @@ This repository is the Docker entry point for the SRV backend, PostgreSQL databa
 | Mobile app web preview | http://localhost:8081 | Expo app running in Docker |
 | Backend API | http://localhost:3001/api/v1 | NestJS + TypeORM |
 | Swagger docs | http://localhost:3001/api/docs | API documentation |
-| pgAdmin | http://localhost:5050 | `admin@admin.com` / `admin123` |
-| PostgreSQL | localhost:5433 | `postgres` / `4268`, database `srv_admin` |
+| pgAdmin | http://127.0.0.1:5050 | Login is read from the untracked `.env` |
+| PostgreSQL | 127.0.0.1:5433 | Credentials are read from the untracked `.env` |
 
 ## Run Everything
 
@@ -19,7 +19,9 @@ This repository is the Docker entry point for the SRV backend, PostgreSQL databa
 docker compose up --build
 ```
 
-PostgreSQL imports `sql/upadted.sql` automatically when the `postgres_data` volume is first created. pgAdmin is preconfigured with the `SRV Docker Postgres` server; use database password `4268` if pgAdmin asks for it.
+PostgreSQL imports `sql/upadted.sql` automatically when the `postgres_data` volume is first created. pgAdmin is preconfigured with the `SRV Docker Postgres` server; use `DB_PASSWORD` from `.env` if pgAdmin asks for it. Database and pgAdmin ports bind only to loopback and are not exposed to the LAN.
+
+See [DATABASE_UI.md](DATABASE_UI.md) for local and production pgAdmin instructions. Production pgAdmin is an opt-in tool profile that is reachable only through an SSH tunnel.
 
 ## Backend Local Dev
 

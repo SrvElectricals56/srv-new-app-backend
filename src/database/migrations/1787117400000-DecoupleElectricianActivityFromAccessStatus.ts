@@ -11,7 +11,7 @@ export class DecoupleElectricianActivityFromAccessStatus1787117400000 implements
     await queryRunner.query(`ALTER TABLE "electricians" ALTER COLUMN "status" SET DEFAULT 'active'`);
     await queryRunner.query(`
       UPDATE "electricians"
-      SET "status" = 'active'::electricians_status_enum,
+      SET "status" = 'active',
           "updatedAt" = now()
       WHERE "status" = 'inactive'
     `);

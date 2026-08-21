@@ -100,10 +100,13 @@ export class MobileAuthController {
   }
 
   @Post('logout')
+  @UseGuards(MobileJwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Logout (client-side token invalidation)' })
-  logout() {
-    return { success: true, message: 'Logged out successfully' };
+  @ApiOperation({ summary: 'Logout and revoke the current mobile session' })
+  logout(@Request() req: any) {
+    return this.mobileAuthService.logout(req.user.id, req.user.role);
   }
 
   // ── Signup OTP ─────────────────────────────────────────────────────────────

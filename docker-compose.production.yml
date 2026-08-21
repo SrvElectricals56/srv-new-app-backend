@@ -16,6 +16,7 @@ services:
       SWAGGER_ENABLED: 'false'
       DB_SYNCHRONIZE: 'false'
       DB_LOGGING: 'false'
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
     ports:
       - '127.0.0.1:3001:3001'
     volumes:
@@ -85,6 +86,39 @@ services:
       retries: 10
       start_period: 30s
 
+  pgadmin:
+    profiles: ['database-tools']
+    image: dpage/pgadmin4:9.17
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${PGADMIN_ENV_FILE:-/opt/srv/secrets/pgadmin.env}
+    environment:
+      PGADMIN_CONFIG_SERVER_MODE: 'True'
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: 'True'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'True'
+      PGADMIN_CONFIG_MAX_LOGIN_ATTEMPTS: '5'
+      PGADMIN_CONFIG_SESSION_EXPIRATION_TIME: '15'
+      PGADMIN_CONFIG_LOGIN_BANNER: "'Authorized database administrators only'"
+      PGADMIN_DISABLE_POSTFIX: '1'
+      PGADMIN_LISTEN_PORT: 8080
+    ports:
+      - '127.0.0.1:${PGADMIN_PORT:-5050}:8080'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ${DB_CA_FILE:-/opt/srv/secrets/managed-postgres-ca.crt}:/certs/managed-postgres-ca.crt:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1.0
+    stop_grace_period: 30s
+
 networks:
   default:
     name: srv-production-network
+
+volumes:
+  pgadmin_data:

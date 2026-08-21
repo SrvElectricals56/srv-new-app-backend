@@ -35,6 +35,7 @@ import { AppIcon } from './database/entities/app-icon.entity';
 import { AppActivityEvent } from './database/entities/app-activity-event.entity';
 import { AdminPermission } from './database/entities/admin-permission.entity';
 import { existsSync } from 'fs';
+import { validateEnvironment } from './config/environment.validation';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -100,6 +101,8 @@ function getDatabaseHost(configService: ConfigService) {
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      cache: true,
+      validate: validateEnvironment,
     }),
 
     // Database

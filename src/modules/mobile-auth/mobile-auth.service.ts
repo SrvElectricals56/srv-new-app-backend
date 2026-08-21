@@ -248,7 +248,8 @@ export class MobileAuthService {
     const accessToken = this.jwtService.sign(tokenPayload);
     const refreshToken = this.jwtService.sign(tokenPayload, {
       secret: this.configService.get('JWT_REFRESH_SECRET'),
-      expiresIn: '30d',
+      expiresIn:
+        this.configService.get('JWT_REFRESH_EXPIRES_IN') || '30d',
     });
     return { accessToken, refreshToken };
   }
@@ -1163,13 +1164,31 @@ export class MobileAuthService {
       });
 
       const user = await this.findUserByPhone(payload.phone, payload.role as MobileUserRole);
-      if (!user) throw new UnauthorizedException('User not found');
+      if (
+        !user ||
+        user.id !== payload.sub ||
+        user.status === UserStatus.SUSPENDED ||
+        (user.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)
+      ) {
+        throw new UnauthorizedException('Session expired');
+      }
 
       const tokens = await this.generateTokens({ sub: user.id, phone: user.phone, role: payload.role });
       return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken };
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+  }
+
+  async logout(userId: string, role: MobileUserRole) {
+    const repository = this.getRepositoryByRole(role);
+    const result = await (repository as any).increment(
+      { id: userId },
+      'tokenVersion',
+      1,
+    );
+    if (!result?.affected) throw new UnauthorizedException('User not found');
+    return { success: true, message: 'Logged out successfully' };
   }
 
   // ── Profile ────────────────────────────────────────────────────────────────
