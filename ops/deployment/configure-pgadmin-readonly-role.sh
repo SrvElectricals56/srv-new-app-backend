@@ -56,8 +56,10 @@ psql -X -v ON_ERROR_STOP=1 \
   -v owner_role="${PGUSER}" \
   -v readonly_password="${readonly_password}" \
   -v target_database="${TARGET_DATABASE}" <<'SQL'
-SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'readonly_role', :'readonly_password') \gexec
-SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 5', :'readonly_role') \gexec
+-- PostgreSQL roles are created without elevated attributes by default. Avoid
+-- explicitly toggling SUPERUSER here because managed providers commonly deny
+-- that clause even to their administrative role.
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 5', :'readonly_role', :'readonly_password') \gexec
 SELECT format('ALTER ROLE %I SET default_transaction_read_only = on', :'readonly_role') \gexec
 SELECT format('ALTER ROLE %I SET statement_timeout = %L', :'readonly_role', '30s') \gexec
 SELECT format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', :'readonly_role', '30s') \gexec
@@ -67,6 +69,18 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO :"readonly_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
   GRANT SELECT ON TABLES TO :"readonly_role";
 SQL
+
+unsafe_role="$(psql -X -tAc "
+  SELECT CASE WHEN rolsuper OR rolcreatedb OR rolcreaterole OR
+                   rolreplication OR rolbypassrls
+              THEN 'unsafe' ELSE 'safe' END
+  FROM pg_roles
+  WHERE rolname='${READONLY_ROLE}'
+" | xargs)"
+if [[ "${unsafe_role}" != 'safe' ]]; then
+  echo "Role ${READONLY_ROLE} failed the privilege safety check." >&2
+  exit 1
+fi
 
 umask 077
 {
