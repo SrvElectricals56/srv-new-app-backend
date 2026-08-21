@@ -5,7 +5,6 @@ import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
-import { UserStatus } from '../../common/enums';
 
 @Injectable()
 export class ReferralService {
@@ -20,6 +19,97 @@ export class ReferralService {
     private counterboyRepository: Repository<CounterBoy>,
   ) {}
 
+  private getReferralOwnersCte() {
+    return `
+      WITH owners AS (
+        SELECT id::text, name, phone, "electricianCode" AS code, 'electrician' AS role, status::text, "joinedDate"
+        FROM "electricians"
+        UNION ALL
+        SELECT id::text, name, phone, "dealerCode" AS code, 'dealer' AS role, status::text, "joinedDate"
+        FROM "dealers"
+        UNION ALL
+        SELECT id::text, name, phone, "userCode" AS code, 'user' AS role, status::text, "joinedDate"
+        FROM "app_users"
+        UNION ALL
+        SELECT id::text, name, phone, "counterboyCode" AS code, 'counterboy' AS role, status::text, "joinedDate"
+        FROM "counterboys"
+      ), reward_totals AS (
+        SELECT
+          "referrerUserId"::text AS id,
+          "referrerRole"::text AS role,
+          COUNT(*)::int AS "referredCount",
+          COALESCE(SUM(points), 0) AS "bonusEarned",
+          MAX("createdAt") AS "latestReferralAt"
+        FROM "referral_rewards"
+        GROUP BY "referrerUserId", "referrerRole"
+      )`;
+  }
+
+  private async findRewardRows(
+    page: number,
+    limit: number,
+    search?: string,
+    status?: string,
+    type?: string,
+  ) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(200, Math.max(1, Number(limit) || 20));
+    const values: unknown[] = [];
+    const where: string[] = [];
+    const addValue = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (search?.trim()) {
+      const param = addValue(`%${search.trim()}%`);
+      where.push(`(o.name ILIKE ${param} OR o.phone ILIKE ${param} OR o.code ILIKE ${param})`);
+    }
+    if (status && status !== 'all') {
+      where.push(`o.status = ${addValue(status)}`);
+    }
+    if (type && type !== 'all') {
+      const normalizedType = type === 'customer' ? 'user' : type;
+      where.push(`o.role = ${addValue(normalizedType)}`);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const limitParam = addValue(safeLimit);
+    const offsetParam = addValue((safePage - 1) * safeLimit);
+    const rows = await this.electricianRepository.query(
+      `${this.getReferralOwnersCte()}
+       SELECT
+         o.id,
+         o.name AS "userName",
+         o.phone,
+         o.code AS "referralCode",
+         CASE WHEN o.role = 'user' THEN 'customer' ELSE o.role END AS type,
+         o.status,
+         r."referredCount",
+         r."bonusEarned",
+         r."latestReferralAt",
+         o."joinedDate"
+       FROM reward_totals r
+       JOIN owners o ON o.id = r.id AND o.role = r.role
+       ${whereSql}
+       ORDER BY r."latestReferralAt" DESC
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
+      values,
+    );
+
+    const countValues = values.slice(0, values.length - 2);
+    const countRows = await this.electricianRepository.query(
+      `${this.getReferralOwnersCte()}
+       SELECT COUNT(*)::int AS total
+       FROM reward_totals r
+       JOIN owners o ON o.id = r.id AND o.role = r.role
+       ${whereSql}`,
+      countValues,
+    );
+    const total = Number(countRows[0]?.total ?? 0);
+    return { data: rows, total, page: safePage, limit: safeLimit, totalPages: Math.ceil(total / safeLimit) };
+  }
+
   async findAll(
     page: number = 1,
     limit: number = 20,
@@ -27,159 +117,7 @@ export class ReferralService {
     status?: string,
     type?: string,
   ) {
-    const skip = (page - 1) * limit;
-
-    const electricianQb = this.electricianRepository.createQueryBuilder('e').select([
-      'e.id', 'e.name', 'e.phone', 'e.electricianCode', 'e.tier', 'e.status',
-      'e.totalPoints', 'e.walletBalance', 'e.totalScans', 'e.totalRedemptions',
-      'e.joinedDate', 'e.city', 'e.state', 'e.dealerId',
-    ]);
-    const dealerQb = this.dealerRepository.createQueryBuilder('d').select([
-      'd.id', 'd.name', 'd.phone', 'd.dealerCode', 'd.tier', 'd.status',
-      'd.walletBalance', 'd.joinedDate', 'd.town', 'd.state',
-    ]);
-    const appUserQb = this.appUserRepository.createQueryBuilder('u').select([
-      'u.id', 'u.name', 'u.phone', 'u.userCode', 'u.tier', 'u.status',
-      'u.totalPoints', 'u.walletBalance', 'u.totalRedemptions',
-      'u.joinedDate', 'u.city', 'u.state',
-    ]);
-    const counterboyQb = this.counterboyRepository.createQueryBuilder('c').select([
-      'c.id', 'c.name', 'c.phone', 'c.counterboyCode', 'c.tier', 'c.status',
-      'c.totalPoints', 'c.walletBalance', 'c.totalScans', 'c.totalRedemptions',
-      'c.joinedDate', 'c.city', 'c.state', 'c.dealerId',
-    ]);
-
-    if (search) {
-      electricianQb.andWhere(
-        '(e.name ILIKE :s OR e.phone ILIKE :s OR e.electricianCode ILIKE :s)',
-        { s: `%${search}%` },
-      );
-      dealerQb.andWhere(
-        '(d.name ILIKE :s OR d.phone ILIKE :s OR d.dealerCode ILIKE :s)',
-        { s: `%${search}%` },
-      );
-      appUserQb.andWhere(
-        '(u.name ILIKE :s OR u.phone ILIKE :s OR u.userCode ILIKE :s)',
-        { s: `%${search}%` },
-      );
-      counterboyQb.andWhere(
-        '(c.name ILIKE :s OR c.phone ILIKE :s OR c.counterboyCode ILIKE :s)',
-        { s: `%${search}%` },
-      );
-    }
-
-    if (status && status !== 'all') {
-      electricianQb.andWhere('e.status = :status', { status });
-      dealerQb.andWhere('d.status = :status', { status });
-      appUserQb.andWhere('u.status = :status', { status });
-      counterboyQb.andWhere('c.status = :status', { status });
-    }
-
-    let electricians: Electrician[] = [];
-    let dealers: Dealer[] = [];
-    let appUsers: AppUser[] = [];
-    let counterboys: CounterBoy[] = [];
-
-    if (!type || type === 'all' || type === 'electrician') {
-      electricians = await electricianQb.getMany();
-    }
-    if (!type || type === 'all' || type === 'dealer') {
-      dealers = await dealerQb.getMany();
-    }
-    if (!type || type === 'all' || type === 'customer') {
-      appUsers = await appUserQb.getMany();
-    }
-    if (!type || type === 'all' || type === 'counterboy') {
-      counterboys = await counterboyQb.getMany();
-    }
-
-    // Map to unified referral records
-    const elecRecords = electricians.map((e) => ({
-      id: e.id,
-      userName: e.name,
-      phone: e.phone,
-      referralCode: e.electricianCode,
-      type: 'electrician',
-      tier: e.tier,
-      status: e.status,
-      totalPoints: e.totalPoints,
-      walletBalance: e.walletBalance,
-      totalScans: e.totalScans,
-      totalRedemptions: e.totalRedemptions,
-      joinedDate: e.joinedDate,
-      city: e.city,
-      state: e.state,
-      dealerId: e.dealerId,
-    }));
-
-    const dealerRecords = dealers.map((d) => ({
-      id: d.id,
-      userName: d.name,
-      phone: d.phone,
-      referralCode: d.dealerCode,
-      type: 'dealer',
-      tier: d.tier,
-      status: d.status,
-      totalPoints: 0,
-      walletBalance: d.walletBalance,
-      totalScans: 0,
-      totalRedemptions: 0,
-      joinedDate: d.joinedDate,
-      city: d.town,
-      state: d.state,
-      dealerId: null,
-    }));
-
-    const customerRecords = appUsers.map((u) => ({
-      id: u.id,
-      userName: u.name,
-      phone: u.phone,
-      referralCode: u.userCode,
-      type: 'customer',
-      tier: u.tier,
-      status: u.status,
-      totalPoints: u.totalPoints,
-      walletBalance: u.walletBalance,
-      totalScans: 0,
-      totalRedemptions: u.totalRedemptions,
-      joinedDate: u.joinedDate,
-      city: u.city,
-      state: u.state,
-      dealerId: null,
-    }));
-
-    const counterboyRecords = counterboys.map((c) => ({
-      id: c.id,
-      userName: c.name,
-      phone: c.phone,
-      referralCode: c.counterboyCode,
-      type: 'counterboy',
-      tier: c.tier,
-      status: c.status,
-      totalPoints: c.totalPoints,
-      walletBalance: c.walletBalance,
-      totalScans: c.totalScans,
-      totalRedemptions: c.totalRedemptions,
-      joinedDate: c.joinedDate,
-      city: c.city,
-      state: c.state,
-      dealerId: c.dealerId,
-    }));
-
-    const all = [...elecRecords, ...dealerRecords, ...customerRecords, ...counterboyRecords].sort(
-      (a, b) => new Date(b.joinedDate).getTime() - new Date(a.joinedDate).getTime(),
-    );
-
-    const total = all.length;
-    const data = all.slice(skip, skip + limit);
-
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return this.findRewardRows(page, limit, search, status, type);
   }
 
   async findOne(id: string) {
@@ -363,40 +301,30 @@ export class ReferralService {
   }
 
   async getStats() {
-    const [totalElectricians, totalDealers, totalCustomers, totalCounterboys] = await Promise.all([
-      this.electricianRepository.count(),
-      this.dealerRepository.count(),
-      this.appUserRepository.count(),
-      this.counterboyRepository.count(),
-    ]);
-
-    const [activeElectricians, activeDealers, activeCustomers, activeCounterboys] = await Promise.all([
-      this.electricianRepository.count({ where: { status: UserStatus.ACTIVE } }),
-      this.dealerRepository.count({ where: { status: UserStatus.ACTIVE } }),
-      this.appUserRepository.count({ where: { status: UserStatus.ACTIVE } }),
-      this.counterboyRepository.count({ where: { status: UserStatus.ACTIVE } }),
-    ]);
-
-    const topElectricians = await this.electricianRepository.find({
-      order: { totalPoints: 'DESC' },
-      take: 5,
-    });
-
+    const rows = await this.electricianRepository.query(
+      `${this.getReferralOwnersCte()}
+       SELECT
+         COUNT(*)::int AS "totalReferrers",
+         COALESCE(SUM(r."referredCount"), 0)::int AS "successfulReferrals",
+         COALESCE(SUM(r."bonusEarned"), 0) AS "referrerBonusGiven"
+       FROM reward_totals r
+       JOIN owners o ON o.id = r.id AND o.role = r.role`,
+    );
+    const topReferrers = await this.electricianRepository.query(
+      `${this.getReferralOwnersCte()}
+       SELECT o.id, o.name, CASE WHEN o.role = 'user' THEN 'customer' ELSE o.role END AS type,
+              o.code AS "referralCode", r."referredCount", r."bonusEarned"
+       FROM reward_totals r
+       JOIN owners o ON o.id = r.id AND o.role = r.role
+       ORDER BY r."referredCount" DESC, r."latestReferralAt" DESC
+       LIMIT 5`,
+    );
+    const summary = rows[0] ?? {};
     return {
-      totalReferrals: totalElectricians + totalDealers + totalCustomers + totalCounterboys,
-      activeReferrals: activeElectricians + activeDealers + activeCustomers + activeCounterboys,
-      totalElectricians,
-      totalDealers,
-      totalCustomers,
-      totalCounterboys,
-      topReferrers: topElectricians.map((e) => ({
-        id: e.id,
-        name: e.name,
-        type: 'electrician',
-        referralCode: e.electricianCode,
-        totalPoints: e.totalPoints,
-        totalScans: e.totalScans,
-      })),
+      totalReferrals: Number(summary.successfulReferrals ?? 0),
+      activeReferrals: Number(summary.totalReferrers ?? 0),
+      bonusGiven: Number(summary.referrerBonusGiven ?? 0) * 2,
+      topReferrers,
     };
   }
 }

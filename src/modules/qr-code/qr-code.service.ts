@@ -850,9 +850,30 @@ export class QrCodeService {
       for (const a of admins) adminNameMap.set(a.id, a.name);
     }
 
+    const batchKeys = [...new Set(data.flatMap((qr) => [
+      qr.batchId ? String(qr.batchId) : '',
+      qr.batchNo !== null && qr.batchNo !== undefined ? String(qr.batchNo) : '',
+    ]).filter(Boolean))];
+    const batchRows = batchKeys.length
+      ? await this.qrCodeRepository.query(
+          `SELECT "batchId", "batchNo", "productId", "productName", "points"
+           FROM "qr_code_batches"
+           WHERE "batchId" = ANY($1::text[]) OR "batchNo"::text = ANY($1::text[])`,
+          [batchKeys],
+        )
+      : [];
+    const batchMap = new Map<string, any>();
+    for (const batch of batchRows) {
+      batchMap.set(String(batch.batchId), batch);
+      if (batch.batchNo !== null && batch.batchNo !== undefined) {
+        batchMap.set(String(batch.batchNo), batch);
+      }
+    }
+
     const enriched = data.map((qr) => {
+      const batch = batchMap.get(String(qr.batchId ?? qr.batchNo ?? ''));
       const productPoints = qr.product?.points ?? 0;
-      const effectivePoints = qr.rewardPoints ?? productPoints;
+      const effectivePoints = Number(batch?.points ?? qr.rewardPoints ?? productPoints);
       const user = qr.lastScannedBy ? userMap.get(qr.lastScannedBy) : undefined;
       const firstScan = firstScanMap.get(qr.id) ?? null;
 
@@ -861,8 +882,8 @@ export class QrCodeService {
       return {
         id: qr.id,
         code: qr.code,
-        productId: qr.productId,
-        productName: qr.productName,
+        productId: batch?.productId ?? qr.productId,
+        productName: batch?.productName ?? qr.productName,
         qrImageUrl: qr.qrImageUrl,
         isScanned: qr.isScanned,
         scanCount: qr.scanCount,
@@ -922,16 +943,24 @@ export class QrCodeService {
     }
 
     const firstScan = (await this.getFirstScanMap([qrCode.id])).get(qrCode.id);
+    const batchRows = await this.qrCodeRepository.query(
+      `SELECT "productId", "productName", "points"
+       FROM "qr_code_batches"
+       WHERE "batchId" = $1 OR "batchNo"::text = $1
+       LIMIT 1`,
+      [String(qrCode.batchId ?? qrCode.batchNo ?? '')],
+    );
+    const batch = batchRows[0];
 
     return {
       qrCodeId: qrCode.id,
       code: qrCode.code,
-      productId: qrCode.productId,
-      productName: qrCode.productName ?? qrCode.product?.name ?? null,
+      productId: batch?.productId ?? qrCode.productId,
+      productName: batch?.productName ?? qrCode.productName ?? qrCode.product?.name ?? null,
       productSku: qrCode.product?.sku ?? null,
       batchId: qrCode.batchId,
       batchNo: qrCode.batchNo,
-      points: Number(qrCode.rewardPoints ?? qrCode.product?.points ?? 0),
+      points: Number(batch?.points ?? qrCode.rewardPoints ?? qrCode.product?.points ?? 0),
       status: qrCode.isScanned ? 'used' : qrCode.isActive ? 'active' : 'inactive',
       isScanned: qrCode.isScanned,
       scanCount: qrCode.scanCount,
@@ -986,28 +1015,22 @@ export class QrCodeService {
     batchId: string,
     body: { productId?: string; rewardPoints?: number },
   ) {
-    const updates: Partial<QrCode> = {};
+    const normalizedBatchId = String(batchId ?? '').trim();
+    if (!normalizedBatchId) throw new BadRequestException('batchId is required');
+
+    const assignments: string[] = [];
+    const params: unknown[] = [normalizedBatchId];
+    let product: Product | null = null;
 
     if (body.productId) {
-      const product = await this.productRepository.findOne({
+      product = await this.productRepository.findOne({
         where: { id: body.productId },
       });
       if (!product) {
         throw new NotFoundException('Product not found');
       }
-      updates.productId = product.id;
-      updates.productName = product.name;
-
-      await this.qrCodeRepository.query(
-        `
-          UPDATE "qr_code_batches"
-          SET "productId" = $2,
-              "productName" = $3,
-              "updatedAt" = now()
-          WHERE "batchId" = $1 OR "batchNo"::text = $1
-        `,
-        [batchId, product.id, product.name],
-      );
+      params.push(product.id, product.name);
+      assignments.push(`"productId" = $${params.length - 1}`, `"productName" = $${params.length}`);
     }
 
     if (body.rewardPoints !== undefined) {
@@ -1017,39 +1040,29 @@ export class QrCodeService {
           'rewardPoints must be a valid non-negative number',
         );
       }
-      updates.rewardPoints = points;
-
-      await this.qrCodeRepository.query(
-        `
-          UPDATE "qr_code_batches"
-          SET "points" = $2,
-              "updatedAt" = now()
-          WHERE "batchId" = $1 OR "batchNo"::text = $1
-        `,
-        [batchId, points],
-      );
+      params.push(points);
+      assignments.push(`"points" = $${params.length}`);
     }
 
-    if (!Object.keys(updates).length) {
+    if (!assignments.length) {
       throw new BadRequestException('No batch fields provided to update');
     }
 
-    const result = await this.qrCodeRepository
-      .createQueryBuilder()
-      .update(QrCode)
-      .set(updates)
-      .where('"batchId" = :batchId OR CAST("batchNo" AS text) = :batchId', {
-        batchId,
-      })
-      .execute();
-
-    if (!result.affected) {
-      throw new NotFoundException(`QR batch "${batchId}" not found`);
+    const rows = await this.qrCodeRepository.query(
+      `UPDATE "qr_code_batches"
+       SET ${assignments.join(', ')}, "updatedAt" = now()
+       WHERE "batchId" = $1 OR "batchNo"::text = $1
+       RETURNING "batchId", "batchNo", "productId", "productName", "points", "qty"`,
+      params,
+    );
+    if (!rows.length) {
+      throw new NotFoundException(`QR batch "${normalizedBatchId}" not found`);
     }
 
     return {
       message: 'QR batch updated successfully',
-      updated: result.affected,
+      updated: 1,
+      batch: rows[0],
     };
   }
 

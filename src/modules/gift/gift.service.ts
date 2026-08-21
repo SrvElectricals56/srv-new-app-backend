@@ -186,18 +186,29 @@ export class GiftService {
     }
 
     if (role && role !== 'all') {
-      qb.andWhere('o.role = :role', { role });
+      qb.andWhere('o.role = :role', { role: role === 'customer' ? 'user' : role });
     }
 
     qb.orderBy('o.orderedAt', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await qb.getManyAndCount();
 
+    const userIds = [...new Set(data.map((order) => order.userId).filter(Boolean))];
+    const owners = userIds.length ? await this.productRepository.query(
+      `SELECT id::text, phone, 'electrician' AS role FROM "electricians" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, 'dealer' AS role FROM "dealers" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, 'user' AS role FROM "app_users" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, 'counterboy' AS role FROM "counterboys" WHERE id::text = ANY($1::text[])`,
+      [userIds],
+    ) : [];
+    const phoneMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.phone]));
+
     return {
       data: data.map((o) => ({
         id: o.id,
-        type: o.role,
+        type: o.role === ('user' as any) ? 'customer' : o.role,
         userName: o.userName,
+        userPhone: phoneMap.get(`${o.role}:${o.userId}`) ?? null,
         userCode: o.userCode ?? '',
         dealerName: o.dealerName ?? '—',
         giftName: o.giftName,

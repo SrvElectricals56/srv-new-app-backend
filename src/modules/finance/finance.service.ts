@@ -324,21 +324,21 @@ export class FinanceService {
     const toNewBalance = resolvedTo.walletBalance + points;
 
     if (resolvedFrom.role === 'dealer') {
-      await this.dealerRepository.update(fromUser, { walletBalance: fromNewBalance });
+      await this.dealerRepository.update(resolvedFrom.id, { walletBalance: fromNewBalance });
     } else {
-      await this.electricianRepository.update(fromUser, { walletBalance: fromNewBalance });
+      await this.electricianRepository.update(resolvedFrom.id, { walletBalance: fromNewBalance });
     }
     if (resolvedTo.role === 'dealer') {
-      await this.dealerRepository.update(toUser, { walletBalance: toNewBalance });
+      await this.dealerRepository.update(resolvedTo.id, { walletBalance: toNewBalance });
     } else {
-      await this.electricianRepository.update(toUser, { walletBalance: toNewBalance });
+      await this.electricianRepository.update(resolvedTo.id, { walletBalance: toNewBalance });
     }
 
     const transferRef = crypto.randomUUID();
 
     // Create debit record for sender
     const debitTx = this.walletRepository.create({
-      userId: fromUser,
+      userId: resolvedFrom.id,
       userRole: resolvedFrom.role === 'dealer' ? UserRole.DEALER : UserRole.ELECTRICIAN,
       type: TransactionType.DEBIT,
       source: TransactionSource.TRANSFER,
@@ -352,7 +352,7 @@ export class FinanceService {
 
     // Create credit record for receiver
     const creditTx = this.walletRepository.create({
-      userId: toUser,
+      userId: resolvedTo.id,
       userRole: resolvedTo.role === 'dealer' ? UserRole.DEALER : UserRole.ELECTRICIAN,
       type: TransactionType.CREDIT,
       source: TransactionSource.TRANSFER,
@@ -368,8 +368,8 @@ export class FinanceService {
 
     return {
       message: 'Points transferred successfully',
-      fromUser,
-      toUser,
+      fromUser: resolvedFrom.id,
+      toUser: resolvedTo.id,
       points,
       reason,
       fromBalance: fromNewBalance,
@@ -381,6 +381,13 @@ export class FinanceService {
     // Find the credit record (shown in the list)
     const creditTx = await this.walletRepository.findOne({ where: { id } });
     if (!creditTx) throw new Error('Transfer not found');
+    if (
+      creditTx.source !== TransactionSource.TRANSFER ||
+      creditTx.type !== TransactionType.CREDIT ||
+      creditTx.referenceType === 'reversed_transfer'
+    ) {
+      throw new Error('This transfer cannot be reversed or has already been reversed');
+    }
 
     const amount = creditTx.amount;
     const description = creditTx.description;
@@ -392,9 +399,19 @@ export class FinanceService {
         })
       : null;
 
-    // Restore sender's wallet balance
+    const receiver = await this.resolveUser(creditTx.userId);
+    if (!receiver) throw new Error('Transfer receiver no longer exists');
+    if (receiver.walletBalance < amount) {
+      throw new Error(`Cannot reverse: receiver has only ${receiver.walletBalance} points available`);
+    }
+
+    // Restore the amount against current balances so later wallet activity is
+    // never overwritten by an old balance snapshot.
+    let senderNewBalance: number | null = null;
     if (pairedDebit) {
-      const senderNewBalance = pairedDebit.balanceBefore;
+      const sender = await this.resolveUser(pairedDebit.userId);
+      if (!sender) throw new Error('Transfer sender no longer exists');
+      senderNewBalance = sender.walletBalance + amount;
       if (pairedDebit.userRole === UserRole.DEALER) {
         await this.dealerRepository.update(pairedDebit.userId, { walletBalance: senderNewBalance });
       } else {
@@ -403,7 +420,7 @@ export class FinanceService {
     }
 
     // Deduct from receiver's wallet balance
-    const receiverNewBalance = creditTx.balanceBefore;
+    const receiverNewBalance = receiver.walletBalance - amount;
     if (creditTx.userRole === UserRole.DEALER) {
       await this.dealerRepository.update(creditTx.userId, { walletBalance: receiverNewBalance });
     } else {
@@ -424,21 +441,33 @@ export class FinanceService {
       });
     }
 
-    // Create reversal audit record
-    const reversal = this.walletRepository.create({
-      userId: adminId,
-      userRole: UserRole.ELECTRICIAN,
+    const auditRows = [this.walletRepository.create({
+      userId: creditTx.userId,
+      userRole: creditTx.userRole,
       type: TransactionType.DEBIT,
       source: TransactionSource.TRANSFER,
       amount,
-      balanceBefore: creditTx.balanceAfter,
-      balanceAfter: creditTx.balanceBefore,
-      description: `Reversal of: ${description}`,
+      balanceBefore: receiver.walletBalance,
+      balanceAfter: receiverNewBalance,
+      description: `Transfer reversed by admin ${adminId}: ${description}`,
       referenceId: id,
       referenceType: 'transfer_reversal',
-    });
-
-    await this.walletRepository.save(reversal);
+    })];
+    if (pairedDebit && senderNewBalance !== null) {
+      auditRows.push(this.walletRepository.create({
+        userId: pairedDebit.userId,
+        userRole: pairedDebit.userRole,
+        type: TransactionType.CREDIT,
+        source: TransactionSource.REFUND,
+        amount,
+        balanceBefore: senderNewBalance - amount,
+        balanceAfter: senderNewBalance,
+        description: `Points restored after transfer reversal by admin ${adminId}`,
+        referenceId: id,
+        referenceType: 'transfer_reversal',
+      }));
+    }
+    const reversal = await this.walletRepository.save(auditRows);
 
     return { message: 'Transfer reversed successfully', reversal };
   }

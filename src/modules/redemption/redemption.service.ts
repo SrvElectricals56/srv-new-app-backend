@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
@@ -230,12 +230,59 @@ export class RedemptionService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
+    const idsByRole = new Map<UserRole, string[]>();
+    for (const row of data) {
+      idsByRole.set(row.role, [...(idsByRole.get(row.role) ?? []), row.userId]);
+    }
+    const [electricians, dealers, appUsers, counterboys, statusRows] = await Promise.all([
+      idsByRole.get(UserRole.ELECTRICIAN)?.length
+        ? this.electricianRepository.find({ where: { id: In(idsByRole.get(UserRole.ELECTRICIAN)!) }, select: ['id', 'name', 'phone', 'electricianCode'] })
+        : Promise.resolve([]),
+      idsByRole.get(UserRole.DEALER)?.length
+        ? this.dealerRepository.find({ where: { id: In(idsByRole.get(UserRole.DEALER)!) }, select: ['id', 'name', 'phone', 'dealerCode'] })
+        : Promise.resolve([]),
+      idsByRole.get(UserRole.USER)?.length
+        ? this.appUserRepository.find({ where: { id: In(idsByRole.get(UserRole.USER)!) }, select: ['id', 'name', 'phone', 'userCode'] })
+        : Promise.resolve([]),
+      idsByRole.get(UserRole.COUNTERBOY)?.length
+        ? this.counterboyRepository.find({ where: { id: In(idsByRole.get(UserRole.COUNTERBOY)!) }, select: ['id', 'name', 'phone', 'counterboyCode'] })
+        : Promise.resolve([]),
+      this.redemptionRepository
+        .createQueryBuilder('summary')
+        .select('summary.status', 'status')
+        .addSelect('COUNT(*)::int', 'count')
+        .addSelect('COALESCE(SUM(summary.amount), 0)', 'amount')
+        .where(role ? 'summary.role = :summaryRole' : '1=1', role ? { summaryRole: role } : {})
+        .andWhere(userId ? 'summary.userId = :summaryUserId' : '1=1', userId ? { summaryUserId: userId } : {})
+        .groupBy('summary.status')
+        .getRawMany(),
+    ]);
+    const userMap = new Map<string, { name: string; phone: string; code?: string | null }>();
+    electricians.forEach((user) => userMap.set(`${UserRole.ELECTRICIAN}:${user.id}`, { name: user.name, phone: user.phone, code: user.electricianCode }));
+    dealers.forEach((user) => userMap.set(`${UserRole.DEALER}:${user.id}`, { name: user.name, phone: user.phone, code: user.dealerCode }));
+    appUsers.forEach((user) => userMap.set(`${UserRole.USER}:${user.id}`, { name: user.name, phone: user.phone, code: user.userCode }));
+    counterboys.forEach((user) => userMap.set(`${UserRole.COUNTERBOY}:${user.id}`, { name: user.name, phone: user.phone, code: user.counterboyCode }));
+    const enrichedData = data.map((row) => {
+      const user = userMap.get(`${row.role}:${row.userId}`);
+      return {
+        ...row,
+        userName: row.userName || user?.name || 'Unknown user',
+        userPhone: user?.phone ?? null,
+        userCode: user?.code ?? null,
+      };
+    });
+    const summary = { approved: { count: 0, amount: 0 }, pending: { count: 0, amount: 0 }, rejected: { count: 0, amount: 0 }, processing: { count: 0, amount: 0 }, completed: { count: 0, amount: 0 } } as Record<string, { count: number; amount: number }>;
+    for (const row of statusRows) {
+      summary[row.status] = { count: Number(row.count ?? 0), amount: Number(row.amount ?? 0) };
+    }
+
     return {
-      data,
+      data: enrichedData,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      summary,
     };
   }
 

@@ -669,12 +669,16 @@ export class MobileService {
     // Transform products to include imageUrl field and handle null/empty images
     const transformedProducts = products.map(product => {
       // If image is null, empty, or just whitespace, set it to null so app can use fallback
-      const imageValue = this.normalizeUploadUrl(product.image) || null;
+      const images = Array.from(new Set([...(product.images ?? []), product.image]
+        .map(value => this.normalizeUploadUrl(value) || value?.trim() || null)
+        .filter((value): value is string => Boolean(value))));
+      const imageValue = images[0] ?? null;
       
       return {
         ...product,
         image: imageValue,
         imageUrl: imageValue, // Add imageUrl field that points to image
+        images,
       };
     });
     
@@ -736,11 +740,15 @@ export class MobileService {
       where: { id, isActive: true },
     });
     if (!product) throw new NotFoundException('Product not found');
-    const imageValue = this.normalizeUploadUrl(product.image) ?? product.image?.trim() ?? null;
+    const images = Array.from(new Set([...(product.images ?? []), product.image]
+      .map(value => this.normalizeUploadUrl(value) || value?.trim() || null)
+      .filter((value): value is string => Boolean(value))));
+    const imageValue = images[0] ?? null;
     return {
       ...product,
       image: imageValue,
       imageUrl: imageValue,
+      images,
     };
   }
 
@@ -1398,7 +1406,19 @@ export class MobileService {
         );
       }
 
-      const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
+      const batchRows = await manager.query(
+        `SELECT "productId", "productName", "points"
+         FROM "qr_code_batches"
+         WHERE "batchId" = $1 OR "batchNo"::text = $1
+         LIMIT 1`,
+        [String(qr.batchId ?? qr.batchNo ?? '')],
+      );
+      const batch = batchRows[0];
+      const effectiveProduct = batch?.productId && batch.productId !== qr.product.id
+        ? await manager.getRepository(Product).findOne({ where: { id: batch.productId } })
+        : qr.product;
+      if (!effectiveProduct) throw new NotFoundException('QR product is no longer available');
+      const points = Number(batch?.points ?? qr.rewardPoints ?? effectiveProduct.points ?? 0);
       const userRole = this.normalizeRole(role);
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
@@ -1408,8 +1428,8 @@ export class MobileService {
         userId,
         userName: userRecord.name ?? 'Unknown',
         role: userRole,
-        productId: qr.product.id,
-        productName: qr.product.name,
+        productId: effectiveProduct.id,
+        productName: batch?.productName ?? effectiveProduct.name,
         points,
         mode: mode === 'multi' ? ScanMode.MULTI : ScanMode.SINGLE,
         qrCodeId: qr.id,
@@ -1436,9 +1456,7 @@ export class MobileService {
         [qr.batchId ?? (qr.batchNo ? String(qr.batchNo) : qr.id)],
       );
 
-      await manager.getRepository(Product).update(qr.product.id, {
-        totalScanned: (qr.product.totalScanned ?? 0) + 1,
-      });
+      await manager.getRepository(Product).increment({ id: effectiveProduct.id }, 'totalScanned', 1);
 
       const balanceBefore = Number(userRecord.walletBalance ?? 0);
       const newScans = Number(userRecord.totalScans ?? 0) + 1;
@@ -1479,7 +1497,7 @@ export class MobileService {
           amount: points,
           balanceBefore,
           balanceAfter: newWallet,
-          description: `Scan: ${qr.product.name}`,
+          description: `Scan: ${batch?.productName ?? effectiveProduct.name}`,
           referenceId: scan.id,
           referenceType: 'scan',
         }),
@@ -1490,8 +1508,8 @@ export class MobileService {
         msg: 'QR code scan successfully.',
         scan: {
           id: scan.id,
-          productId: qr.product.id,
-          productName: qr.product.name,
+          productId: effectiveProduct.id,
+          productName: batch?.productName ?? effectiveProduct.name,
           points,
           mode,
           scannedAt: scan.scannedAt instanceof Date
@@ -1537,14 +1555,26 @@ export class MobileService {
         );
       }
 
-      const points = Number(qr.rewardPoints ?? qr.product.points ?? 0);
+      const batchRows = await manager.query(
+        `SELECT "productId", "productName", "points"
+         FROM "qr_code_batches"
+         WHERE "batchId" = $1 OR "batchNo"::text = $1
+         LIMIT 1`,
+        [String(qr.batchId ?? qr.batchNo ?? '')],
+      );
+      const batch = batchRows[0];
+      const effectiveProduct = batch?.productId && batch.productId !== qr.product.id
+        ? await manager.getRepository(Product).findOne({ where: { id: batch.productId } })
+        : qr.product;
+      if (!effectiveProduct) throw new NotFoundException('QR product is no longer available');
+      const points = Number(batch?.points ?? qr.rewardPoints ?? effectiveProduct.points ?? 0);
 
       return {
         success: true,
         msg: 'QR code scan successfully.',
-        productId: qr.product.id,
-        productName: qr.product.name,
-        productImage: this.normalizeUploadUrl(qr.product.image) ?? qr.product.image ?? null,
+        productId: effectiveProduct.id,
+        productName: batch?.productName ?? effectiveProduct.name,
+        productImage: this.normalizeUploadUrl(effectiveProduct.image) ?? effectiveProduct.image ?? null,
         qrcodeprice: points,
         points,
         batchId: qr.batchId ?? null,

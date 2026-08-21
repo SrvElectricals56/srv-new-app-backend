@@ -31,6 +31,9 @@ export class Product {
   @Column({ nullable: true })
   image: string;
 
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  images: string[];
+
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numericTransformer })
   points: number;
 

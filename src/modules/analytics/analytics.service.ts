@@ -175,9 +175,29 @@ export class AnalyticsService {
       });
     }
 
+    const topProducts = await this.scanRepository
+      .createQueryBuilder('scan')
+      .leftJoin('products', 'product', 'product.id::text = scan.productId::text')
+      .select('scan.productId', 'id')
+      .addSelect('COALESCE(MAX(scan.productName), MAX(product.name), \'Unknown product\')', 'name')
+      .addSelect('MAX(product.image)', 'image')
+      .addSelect('COUNT(*)::int', 'totalScanned')
+      .addSelect('COALESCE(SUM(scan.points), 0)', 'pointsAwarded')
+      .groupBy('scan.productId')
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(10)
+      .getRawMany();
+
     return {
       last7Days,
       totalScans: last7Days.reduce((sum, day) => sum + day.total, 0),
+      topProducts: topProducts.map((row) => ({
+        id: row.id,
+        name: row.name,
+        image: row.image ?? '',
+        totalScanned: Number(row.totalScanned ?? 0),
+        pointsAwarded: Number(row.pointsAwarded ?? 0),
+      })),
     };
   }
 

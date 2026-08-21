@@ -130,6 +130,13 @@ export class ProductService {
     const data: any = { ...dto };
 
     if (!data.image && data.imageUrl) data.image = data.imageUrl;
+    if (Array.isArray(data.images)) {
+      data.images = Array.from(new Set(data.images.map((value: unknown) => String(value ?? '').trim()).filter(Boolean)));
+      data.image = data.images[0] ?? data.image ?? null;
+    } else if (typeof data.image === 'string' && data.image.trim()) {
+      data.image = data.image.trim();
+      data.images = [data.image];
+    }
     if (!data.points && data.pointsValue) data.points = data.pointsValue;
     if (!data.sub && data.description) data.sub = data.description;
 

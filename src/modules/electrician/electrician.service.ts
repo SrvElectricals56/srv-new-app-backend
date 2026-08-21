@@ -428,8 +428,10 @@ export class ElectricianService {
     const scanActivity = await this.getScanActivity(rawData.map(e => e.id));
     const data = rawData.map(e => this.withScanActivity({
       ...e,
-      dealerName: (e as any).dealer?.name ?? null,
-    } as Electrician & { dealerName?: string | null }, scanActivity.get(e.id)));
+      dealerName: (e as any).dealer?.name ?? e.fallbackDealerName ?? 'SRV Dealer',
+      dealerPhone: (e as any).dealer?.phone ?? e.fallbackDealerPhone ?? null,
+      dealerCode: (e as any).dealer?.dealerCode ?? e.fallbackDealerCode ?? null,
+    } as Electrician & { dealerName?: string | null; dealerPhone?: string | null; dealerCode?: string | null }, scanActivity.get(e.id)));
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -453,8 +455,10 @@ export class ElectricianService {
     const scanActivity = await this.getScanActivity([electrician.id]);
     return this.withScanActivity({
       ...electrician,
-      dealerName: (electrician as any).dealer?.name ?? null,
-    } as Electrician & { dealerName?: string | null }, scanActivity.get(electrician.id));
+      dealerName: (electrician as any).dealer?.name ?? electrician.fallbackDealerName ?? 'SRV Dealer',
+      dealerPhone: (electrician as any).dealer?.phone ?? electrician.fallbackDealerPhone ?? null,
+      dealerCode: (electrician as any).dealer?.dealerCode ?? electrician.fallbackDealerCode ?? null,
+    } as Electrician & { dealerName?: string | null; dealerPhone?: string | null; dealerCode?: string | null }, scanActivity.get(electrician.id));
   }
 
   async update(id: string, updateElectricianDto: UpdateElectricianDto) {
