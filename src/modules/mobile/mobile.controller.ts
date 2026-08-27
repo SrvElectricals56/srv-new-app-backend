@@ -226,7 +226,7 @@ export class MobileController {
   @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Redeem points for a reward' })
-  redeemReward(@Request() req: any, @Body() body: { schemeId: string; note?: string; giftImage?: string }) {
+  redeemReward(@Request() req: any, @Body() body: { schemeId: string; note?: string; giftImage?: string; shippingAddress: string }) {
     return this.mobileService.redeemReward(req.user.id, req.user.role, body);
   }
 

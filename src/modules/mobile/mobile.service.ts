@@ -593,7 +593,7 @@ export class MobileService {
     const isDealer = normalizedRole === UserRole.DEALER;
     const totalPoints = isDealer
       ? Number((user as any)?.bonusPoints ?? 0)
-      : balance;
+      : Number((user as any)?.totalPoints ?? 0);
 
     return {
       balance,
@@ -801,8 +801,23 @@ export class MobileService {
     const addressOf = (row: any) => row.district || row.city || row.town || row.state || row.address || 'Location not added';
 
     if (normalized === 'dealer') {
-      const rows = await this.dealerRepository.find({ where: { status: UserStatus.ACTIVE }, order: { electricianCount: 'DESC', joinedDate: 'ASC' }, take: 5 });
-      return rows.map((row, index) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.electricianCount || 0), valueLabel: 'Associated electricians', address: addressOf(row) }));
+      const rows = await this.dealerRepository.query(
+        `SELECT d.*, COUNT(DISTINCT e."id")::int AS "actualElectricianCount"
+         FROM "dealers" d
+         LEFT JOIN "electricians" e ON (
+           e."dealerId" = d."id"
+           OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
+               AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
+           OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+               = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
+         )
+         WHERE d."status" = $1
+         GROUP BY d."id"
+         ORDER BY COUNT(DISTINCT e."id") DESC, d."joinedDate" ASC
+         LIMIT 5`,
+        [UserStatus.ACTIVE],
+      );
+      return rows.map((row: any, index: number) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.actualElectricianCount || 0), valueLabel: 'Associated electricians', address: addressOf(row) }));
     }
 
     if (normalized === 'user' || normalized === 'customer') {
@@ -1362,7 +1377,18 @@ export class MobileService {
     if (!dealer.dealerCode?.trim()) {
       throw new BadRequestException('Dealer code is missing for this account. Please contact admin.');
     }
-    const nextElectricianSerial = await this.getNextElectricianSerial(dealer.id, dealer.dealerCode);
+    const [nextElectricianSerial, countRow] = await Promise.all([
+      this.getNextElectricianSerial(dealer.id, dealer.dealerCode),
+      this.electricianRepository.createQueryBuilder('electrician')
+        .select('COUNT(DISTINCT electrician.id)', 'count')
+        .where(`(
+          electrician.dealerId = :dealerId
+          OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+          OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+            = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+        )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
+        .getRawOne(),
+    ]);
     return {
       id: dealer.id,
       name: dealer.name,
@@ -1371,7 +1397,7 @@ export class MobileService {
       town: dealer.town,
       district: dealer.district,
       state: dealer.state,
-      electricianCount: dealer.electricianCount ?? Math.max(0, nextElectricianSerial - 1),
+      electricianCount: Number(countRow?.count ?? 0),
       nextElectricianSerial,
     };
   }
@@ -1848,7 +1874,11 @@ export class MobileService {
     });
   }
 
-  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string }) {
+  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress: string }) {
+    const shippingAddress = data.shippingAddress?.trim();
+    if (!shippingAddress || shippingAddress.length < 10) {
+      throw new BadRequestException('Enter a complete delivery address before confirming the gift order');
+    }
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
@@ -1967,7 +1997,7 @@ export class MobileService {
           giftImage,
           pointsUsed: pointsRequired,
           status: GiftOrderStatus.PENDING,
-          shippingAddress: (user as any).address ?? undefined,
+          shippingAddress,
         }),
       );
 

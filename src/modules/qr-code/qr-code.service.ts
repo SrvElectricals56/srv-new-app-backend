@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, DataSource, Repository } from 'typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { GenerateQrCodeDto } from './dto/generate-qr-code.dto';
 import { QrCode } from '../../database/entities/qr-code.entity';
@@ -16,6 +16,9 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
+import { Scan } from '../../database/entities/scan.entity';
+import { Wallet } from '../../database/entities/wallet.entity';
+import { TransactionSource, TransactionType, UserRole } from '../../common/enums';
 import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 import type { Response } from 'express';
 import * as ExcelJS from 'exceljs';
@@ -56,6 +59,7 @@ export class QrCodeService {
     private counterBoyRepository: Repository<CounterBoy>,
     @InjectRepository(Admin)
     private adminRepository: Repository<Admin>,
+    private readonly dataSource: DataSource,
   ) {}
 
   private parseQrSearchDate(value: string): { start: Date; end: Date } | null {
@@ -1064,6 +1068,102 @@ export class QrCodeService {
       updated: 1,
       batch: rows[0],
     };
+  }
+
+  async reverseUsage(id: string, admin?: { id?: string }) {
+    return this.dataSource.transaction(async (manager) => {
+      const qrRepo = manager.getRepository(QrCode);
+      const qr = await qrRepo.findOne({
+        where: [{ id }, { code: id }],
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!qr) throw new NotFoundException('QR code not found');
+      if (!qr.isScanned) throw new BadRequestException('This QR code is already reusable');
+
+      const scanRepo = manager.getRepository(Scan);
+      const scan = await scanRepo.findOne({
+        where: { qrCodeId: qr.id },
+        order: { scannedAt: 'DESC' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!scan) throw new BadRequestException('The scan record for this QR code was not found');
+
+      const amount = Number(scan.points ?? qr.rewardPoints ?? 0);
+      const role = scan.role;
+      const userRepo = role === UserRole.DEALER
+        ? manager.getRepository(Dealer)
+        : role === UserRole.ELECTRICIAN
+          ? manager.getRepository(Electrician)
+          : role === UserRole.USER
+            ? manager.getRepository(AppUser)
+            : manager.getRepository(CounterBoy);
+      const user: any = await userRepo.findOne({
+        where: { id: scan.userId } as any,
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!user) throw new BadRequestException('The original scanner account no longer exists');
+
+      const balanceBefore = Number(user.walletBalance ?? 0);
+      if (balanceBefore < amount) {
+        throw new BadRequestException(`Cannot reverse this QR: the scanner has only ${balanceBefore} points available`);
+      }
+      const balanceAfter = balanceBefore - amount;
+      const userUpdate: Record<string, number> = {
+        walletBalance: balanceAfter,
+        totalScans: Math.max(0, Number(user.totalScans ?? 0) - 1),
+      };
+      if (role !== UserRole.DEALER) {
+        userUpdate.totalPoints = Math.max(0, Number(user.totalPoints ?? 0) - amount);
+      }
+      await userRepo.update(scan.userId, userUpdate as any);
+
+      await manager.getRepository(Wallet).save(manager.getRepository(Wallet).create({
+        userId: scan.userId,
+        userRole: role,
+        type: TransactionType.DEBIT,
+        source: TransactionSource.SCAN,
+        amount,
+        balanceBefore,
+        balanceAfter,
+        description: `QR scan reversed by admin ${admin?.id ?? 'unknown'}: ${qr.code}`,
+        referenceId: scan.id,
+        referenceType: 'scan_reversal',
+      }));
+
+      await scanRepo.delete(scan.id);
+      await qrRepo.update(qr.id, {
+        isScanned: false,
+        scanCount: Math.max(0, Number(qr.scanCount ?? 1) - 1),
+        lastScannedBy: null as any,
+        lastScannedAt: null as any,
+        legacyRedeemerId: null,
+        redeemerName: null as any,
+        redeemerPhone: null as any,
+        redeemerCode: null as any,
+        isActive: true,
+      });
+      await manager.query(
+        `UPDATE "products" SET "totalScanned" = GREATEST(COALESCE("totalScanned", 0) - 1, 0) WHERE "id" = $1`,
+        [qr.productId],
+      );
+      if (qr.batchId) {
+        await manager.query(
+          `UPDATE "qr_code_batches"
+           SET "usedQty" = GREATEST("usedQty" - 1, 0),
+               "activeQty" = LEAST("qty", "activeQty" + 1),
+               "updatedAt" = now()
+           WHERE "batchId" = $1`,
+          [qr.batchId],
+        );
+      }
+
+      return {
+        message: 'QR usage reversed successfully. The same QR code is active and reusable again.',
+        qrCode: qr.code,
+        pointsDeducted: amount,
+        scannerId: scan.userId,
+      };
+    });
   }
 
   async remove(id: string) {

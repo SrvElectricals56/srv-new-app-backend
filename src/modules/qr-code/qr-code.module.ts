@@ -10,9 +10,11 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Admin } from '../../database/entities/admin.entity';
+import { Scan } from '../../database/entities/scan.entity';
+import { Wallet } from '../../database/entities/wallet.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([QrCode, QrDownloadHistory, Product, Electrician, Dealer, AppUser, CounterBoy, Admin])],
+  imports: [TypeOrmModule.forFeature([QrCode, QrDownloadHistory, Product, Electrician, Dealer, AppUser, CounterBoy, Admin, Scan, Wallet])],
   controllers: [QrCodeController],
   providers: [QrCodeService],
   exports: [QrCodeService],

@@ -52,52 +52,27 @@ export class ElectricianService {
     return points;
   }
 
-  private synchronizePoints(
-    data: Record<string, any>,
-    current?: Pick<Electrician, 'totalPoints' | 'walletBalance' | 'status'>,
-  ) {
+  private normalizeIndependentPointFields(data: Record<string, any>) {
     const totalProvided = data.totalPoints !== undefined;
     const walletProvided = data.walletBalance !== undefined;
     if (!totalProvided && !walletProvided) return;
 
-    const incomingTotal = totalProvided ? this.parsePoints(data.totalPoints) : undefined;
-    const incomingWallet = walletProvided ? this.parsePoints(data.walletBalance) : undefined;
-    let points: number | undefined;
-
-    if (!current) {
-      if (incomingTotal !== undefined && incomingWallet !== undefined && incomingTotal !== incomingWallet) {
-        if (incomingTotal === 0) points = incomingWallet;
-        else if (incomingWallet === 0) points = incomingTotal;
-        else throw new BadRequestException('Total points and wallet balance must match');
-      } else {
-        points = incomingTotal ?? incomingWallet ?? 0;
-      }
-    } else if (incomingTotal !== undefined && incomingWallet !== undefined) {
-      const totalChanged = incomingTotal !== Number(current.totalPoints);
-      const walletChanged = incomingWallet !== Number(current.walletBalance);
-
-      if (!totalChanged && !walletChanged) return;
-      if (totalChanged && !walletChanged) points = incomingTotal;
-      else if (walletChanged && !totalChanged) points = incomingWallet;
-      else if (incomingTotal === incomingWallet) points = incomingTotal;
-      else throw new BadRequestException('Total points and wallet balance must match');
-    } else {
-      points = incomingTotal ?? incomingWallet;
+    if (totalProvided) {
+      data.totalPoints = this.parsePoints(data.totalPoints);
+      data.tier = this.tierService.calculateElectricianTier(data.totalPoints);
     }
-
-    data.totalPoints = points;
-    data.walletBalance = points;
-    data.tier = this.tierService.calculateElectricianTier(points ?? 0);
+    if (walletProvided) data.walletBalance = this.parsePoints(data.walletBalance);
   }
 
   private async getScanActivity(
     electricianIds: string[],
-  ): Promise<Map<string, { lastScanAt: Date | null; scansLast7Days: number }>> {
-    if (electricianIds.length === 0) return new Map<string, { lastScanAt: Date | null; scansLast7Days: number }>();
+  ): Promise<Map<string, { lastScanAt: Date | null; scansLast7Days: number; totalScans: number }>> {
+    if (electricianIds.length === 0) return new Map();
 
     const rows = await this.scanRepository.query(
       `SELECT "userId",
               MAX("scannedAt") AS "lastScanAt",
+              COUNT(*)::int AS "totalScans",
               COUNT(*) FILTER (WHERE "scannedAt" >= now() - interval '7 days')::int AS "scansLast7Days"
        FROM "scans"
        WHERE "role" = $1 AND "userId" = ANY($2::text[])
@@ -105,16 +80,18 @@ export class ElectricianService {
       [UserRole.ELECTRICIAN, electricianIds],
     );
 
-    return new Map<string, { lastScanAt: Date | null; scansLast7Days: number }>(rows.map((row: any) => [row.userId, {
+    return new Map(rows.map((row: any) => [row.userId, {
       lastScanAt: row.lastScanAt ? new Date(row.lastScanAt) : null,
       scansLast7Days: Number(row.scansLast7Days ?? 0),
+      totalScans: Number(row.totalScans ?? 0),
     }]));
   }
 
-  private withScanActivity(electrician: Electrician, activity?: { lastScanAt: Date | null; scansLast7Days: number }) {
+  private withScanActivity(electrician: Electrician, activity?: { lastScanAt: Date | null; scansLast7Days: number; totalScans: number }) {
     const lastScanAt = activity?.lastScanAt ?? null;
     return {
       ...this.serialize(electrician),
+      totalScans: activity?.totalScans ?? 0,
       lastScanAt,
       scansLast7Days: activity?.scansLast7Days ?? 0,
       activityStatus: getElectricianActivityStatus({
@@ -250,13 +227,13 @@ export class ElectricianService {
       throw new ConflictException('Electrician with this code already exists');
     }
 
-    // Points and wallet represent the same spendable balance throughout the app.
-    this.synchronizePoints(data);
+    // Ranking points and spendable wallet balance are separate admin fields.
+    this.normalizeIndependentPointFields(data);
     if (data.totalPoints === undefined) {
       data.totalPoints = 0;
-      data.walletBalance = 0;
       data.tier = this.tierService.calculateElectricianTier(0);
     }
+    if (data.walletBalance === undefined) data.walletBalance = 0;
 
     const electrician = this.electricianRepository.create(data);
     const saved = (await this.electricianRepository.save(electrician as any)) as unknown as Electrician;
@@ -495,9 +472,7 @@ export class ElectricianService {
       }
     }
 
-    // Keep ranking points and spendable wallet points synchronized even when
-    // admin clients submit both fields but only one was actually edited.
-    this.synchronizePoints(data, electrician);
+    this.normalizeIndependentPointFields(data);
 
     if (passwordHash) {
       data.passwordHash = passwordHash;
@@ -1137,6 +1112,7 @@ export class ElectricianService {
       .where('e.id IN (:...ids)', { ids: [...allUserIds] })
       .andWhere('e.status = :status', { status: 'active' })
       .getMany();
+    const actualScanCounts = await this.getScanActivity(electricians.map((electrician) => electrician.id));
 
     const result = electricians.map(e => {
       const s = scanMap.get(e.id);
@@ -1151,7 +1127,7 @@ export class ElectricianService {
         tier: e.tier,
         walletBalance: e.walletBalance,
         totalPoints: e.totalPoints,
-        totalScans: e.totalScans,
+        totalScans: actualScanCounts.get(e.id)?.totalScans ?? 0,
         totalRedemptions: e.totalRedemptions,
         periodPoints: s ? Number(s.periodPoints) : 0,
         periodScans: s ? Number(s.periodScans) : 0,

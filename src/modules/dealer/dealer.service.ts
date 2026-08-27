@@ -66,6 +66,25 @@ export class DealerService {
     };
   }
 
+  private async getActualElectricianCounts(dealerIds: string[]): Promise<Map<string, number>> {
+    if (!dealerIds.length) return new Map();
+    const rows = await this.dealerRepository.query(
+      `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "electricianCount"
+       FROM "dealers" d
+       LEFT JOIN "electricians" e ON (
+         e."dealerId" = d."id"
+         OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
+             AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
+         OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
+       )
+       WHERE d."id" = ANY($1::uuid[])
+       GROUP BY d."id"`,
+      [dealerIds],
+    );
+    return new Map(rows.map((row: any) => [row.dealerId, Number(row.electricianCount ?? 0)]));
+  }
+
   private async tableExists(tableName: string): Promise<boolean> {
     const rows = await this.dealerRepository.query('SELECT to_regclass($1) AS name', [`public.${tableName}`]);
     return Boolean(rows?.[0]?.name);
@@ -353,9 +372,13 @@ export class DealerService {
     queryBuilder.orderBy('dealer.joinedDate', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
+    const actualCounts = await this.getActualElectricianCounts(data.map((dealer) => dealer.id));
 
     return {
-      data: data.map((dealer) => this.serialize(dealer)),
+      data: data.map((dealer) => this.serialize({
+        ...dealer,
+        electricianCount: actualCounts.get(dealer.id) ?? 0,
+      } as Dealer)),
       total,
       page,
       limit,
@@ -378,8 +401,11 @@ export class DealerService {
     if (!dealer) {
       throw new NotFoundException('Dealer not found');
     }
-
-    return this.serialize(dealer);
+    const actualCounts = await this.getActualElectricianCounts([dealer.id]);
+    return this.serialize({
+      ...dealer,
+      electricianCount: actualCounts.get(dealer.id) ?? 0,
+    } as Dealer);
   }
 
   async getOptions() {
@@ -447,12 +473,19 @@ export class DealerService {
 
   async getDealerElectricians(id: string, page: number = 1, limit: number = 20) {
     const skip = (page - 1) * limit;
-    const [data, total] = await this.electricianRepository.findAndCount({
-      where: { dealerId: id },
-      skip,
-      take: limit,
-      order: { joinedDate: 'DESC' },
-    });
+    const dealer = await this.dealerRepository.findOne({ where: { id } });
+    if (!dealer) throw new NotFoundException('Dealer not found');
+    const query = this.electricianRepository.createQueryBuilder('electrician')
+      .where(`(
+        electrician.dealerId = :dealerId
+        OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId: id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' })
+      .orderBy('electrician.joinedDate', 'DESC')
+      .skip(skip)
+      .take(limit);
+    const [data, total] = await query.getManyAndCount();
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
@@ -948,17 +981,22 @@ export class DealerService {
     }
     toDate.setHours(23, 59, 59, 999);
 
-    const results = await this.electricianRepository
-      .createQueryBuilder('e')
-      .select('e.dealerId', 'dealerId')
-      .addSelect('COUNT(*)', 'periodElectricians')
-      .where('e.joinedDate >= :from', { from: fromDate })
-      .andWhere('e.joinedDate <= :to', { to: toDate })
-      .andWhere('e.dealerId IS NOT NULL')
-      .groupBy('e.dealerId')
-      .orderBy('COUNT(*)', 'DESC')
-      .limit(limit)
-      .getRawMany();
+    const results = await this.dealerRepository.query(
+      `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "periodElectricians"
+       FROM "dealers" d
+       JOIN "electricians" e ON (
+         e."dealerId" = d."id"
+         OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
+             AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
+         OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
+       )
+       WHERE e."joinedDate" >= $1 AND e."joinedDate" <= $2
+       GROUP BY d."id"
+       ORDER BY COUNT(DISTINCT e."id") DESC
+       LIMIT $3`,
+      [fromDate, toDate, limit],
+    );
 
     if (results.length === 0) return [];
 
@@ -969,6 +1007,7 @@ export class DealerService {
       .getMany();
 
     const dealerMap = new Map(dealers.map(d => [d.id, d]));
+    const actualCounts = await this.getActualElectricianCounts(dealerIds);
 
     return results.map(r => {
       const d = dealerMap.get(r.dealerId);
@@ -980,7 +1019,7 @@ export class DealerService {
         town: d?.town ?? '',
         state: d?.state ?? '',
         tier: d?.tier ?? 'Silver',
-        electricianCount: d?.electricianCount ?? 0,
+        electricianCount: actualCounts.get(r.dealerId) ?? 0,
         monthlyTarget: d?.monthlyTarget ?? 0,
         achievedTarget: d?.achievedTarget ?? 0,
         periodElectricians: Number(r.periodElectricians),

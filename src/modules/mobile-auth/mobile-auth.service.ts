@@ -435,7 +435,16 @@ export class MobileAuthService {
 
   private async hydrateDealerElectricianCount(dealer: Dealer | null) {
     if (!dealer) return null;
-    const electricianCount = await this.electricianRepository.count({ where: { dealerId: dealer.id } });
+    const row = await this.electricianRepository.createQueryBuilder('electrician')
+      .select('COUNT(DISTINCT electrician.id)', 'count')
+      .where(`(
+        electrician.dealerId = :dealerId
+        OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' })
+      .getRawOne();
+    const electricianCount = Number(row?.count ?? 0);
     if (dealer.electricianCount !== electricianCount) {
       await this.dealerRepository.update(dealer.id, { electricianCount });
     }

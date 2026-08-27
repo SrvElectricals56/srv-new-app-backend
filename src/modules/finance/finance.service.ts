@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Wallet } from '../../database/entities/wallet.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
@@ -25,7 +25,15 @@ export class FinanceService {
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(CounterBoy)
     private counterBoyRepository: Repository<CounterBoy>,
+    private readonly dataSource: DataSource,
   ) {}
+
+  private getRoleRepository(manager: EntityManager, role: UserRole) {
+    if (role === UserRole.DEALER) return manager.getRepository(Dealer);
+    if (role === UserRole.ELECTRICIAN) return manager.getRepository(Electrician);
+    if (role === UserRole.USER) return manager.getRepository(AppUser);
+    return manager.getRepository(CounterBoy);
+  }
 
   private async resolveUser(identifier: string): Promise<{ id: string; name: string; phone: string; role: string; code: string; walletBalance: number } | null> {
     if (!identifier) return null;
@@ -264,6 +272,7 @@ export class FinanceService {
 
       return {
         ...t,
+        status: t.referenceType === 'reversed_transfer' ? 'reversed' : 'completed',
         fromName,
         fromPhone,
         fromCode,
@@ -378,98 +387,116 @@ export class FinanceService {
   }
 
   async reverseTransfer(id: string, adminId: string) {
-    // Find the credit record (shown in the list)
-    const creditTx = await this.walletRepository.findOne({ where: { id } });
-    if (!creditTx) throw new Error('Transfer not found');
-    if (
-      creditTx.source !== TransactionSource.TRANSFER ||
-      creditTx.type !== TransactionType.CREDIT ||
-      creditTx.referenceType === 'reversed_transfer'
-    ) {
-      throw new Error('This transfer cannot be reversed or has already been reversed');
-    }
-
-    const amount = creditTx.amount;
-    const description = creditTx.description;
-
-    // Find the paired debit record by referenceId if it's a paired transfer
-    const pairedDebit = creditTx.referenceId && creditTx.referenceType === 'manual_transfer'
-      ? await this.walletRepository.findOne({
-          where: { referenceId: creditTx.referenceId, referenceType: 'manual_transfer', type: TransactionType.DEBIT },
-        })
-      : null;
-
-    const receiver = await this.resolveUser(creditTx.userId);
-    if (!receiver) throw new Error('Transfer receiver no longer exists');
-    if (receiver.walletBalance < amount) {
-      throw new Error(`Cannot reverse: receiver has only ${receiver.walletBalance} points available`);
-    }
-
-    // Restore the amount against current balances so later wallet activity is
-    // never overwritten by an old balance snapshot.
-    let senderNewBalance: number | null = null;
-    if (pairedDebit) {
-      const sender = await this.resolveUser(pairedDebit.userId);
-      if (!sender) throw new Error('Transfer sender no longer exists');
-      senderNewBalance = sender.walletBalance + amount;
-      if (pairedDebit.userRole === UserRole.DEALER) {
-        await this.dealerRepository.update(pairedDebit.userId, { walletBalance: senderNewBalance });
-      } else {
-        await this.electricianRepository.update(pairedDebit.userId, { walletBalance: senderNewBalance });
+    return this.dataSource.transaction(async (manager) => {
+      const walletRepo = manager.getRepository(Wallet);
+      const creditTx = await walletRepo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!creditTx) throw new Error('Transfer not found');
+      if (
+        creditTx.source !== TransactionSource.TRANSFER ||
+        creditTx.type !== TransactionType.CREDIT ||
+        creditTx.referenceType === 'reversed_transfer'
+      ) {
+        throw new Error('This transfer cannot be reversed or has already been reversed');
       }
-    }
 
-    // Deduct from receiver's wallet balance
-    const receiverNewBalance = receiver.walletBalance - amount;
-    if (creditTx.userRole === UserRole.DEALER) {
-      await this.dealerRepository.update(creditTx.userId, { walletBalance: receiverNewBalance });
-    } else {
-      await this.electricianRepository.update(creditTx.userId, { walletBalance: receiverNewBalance });
-    }
+      const pairedDebit = creditTx.referenceType === 'manual_transfer' && creditTx.referenceId
+        ? await walletRepo.findOne({
+            where: {
+              referenceId: creditTx.referenceId,
+              referenceType: 'manual_transfer',
+              type: TransactionType.DEBIT,
+            },
+            lock: { mode: 'pessimistic_write' },
+          })
+        : creditTx.referenceType === 'transfer' && creditTx.referenceId
+          ? await walletRepo.createQueryBuilder('wallet')
+              .setLock('pessimistic_write')
+              .where('wallet.userId = :senderId', { senderId: creditTx.referenceId })
+              .andWhere('wallet.referenceId = :receiverId', { receiverId: creditTx.userId })
+              .andWhere('wallet.referenceType = :referenceType', { referenceType: 'transfer' })
+              .andWhere('wallet.type = :type', { type: TransactionType.DEBIT })
+              .andWhere('wallet.source = :source', { source: TransactionSource.TRANSFER })
+              .andWhere('wallet.amount = :amount', { amount: creditTx.amount })
+              .andWhere('wallet.createdAt <= :createdAt', { createdAt: creditTx.createdAt })
+              .orderBy('wallet.createdAt', 'DESC')
+              .getOne()
+          : null;
 
-    // Mark credit record as reversed
-    await this.walletRepository.update(id, {
-      description: `[REVERSED] ${description}`,
-      referenceType: 'reversed_transfer',
-    });
+      if (!pairedDebit) throw new Error('Transfer sender record was not found; no balance was changed');
 
-    // Mark paired debit record as reversed if it exists
-    if (pairedDebit) {
-      await this.walletRepository.update(pairedDebit.id, {
+      const receiverRepo = this.getRoleRepository(manager, creditTx.userRole);
+      const senderRepo = this.getRoleRepository(manager, pairedDebit.userRole);
+      const receiver: any = await receiverRepo.findOne({
+        where: { id: creditTx.userId } as any,
+        lock: { mode: 'pessimistic_write' },
+      });
+      const sender: any = await senderRepo.findOne({
+        where: { id: pairedDebit.userId } as any,
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!receiver) throw new Error('Transfer receiver no longer exists');
+      if (!sender) throw new Error('Transfer sender no longer exists');
+
+      const amount = Number(creditTx.amount);
+      const receiverBalance = Number(receiver.walletBalance ?? 0);
+      const senderBalance = Number(sender.walletBalance ?? 0);
+      if (receiverBalance < amount) {
+        throw new Error(`Cannot reverse: receiver has only ${receiverBalance} points available`);
+      }
+
+      const receiverNewBalance = receiverBalance - amount;
+      const senderNewBalance = senderBalance + amount;
+      const receiverUpdate: Record<string, number> = { walletBalance: receiverNewBalance };
+      const senderUpdate: Record<string, number> = { walletBalance: senderNewBalance };
+      if (creditTx.referenceType === 'transfer') {
+        if (creditTx.userRole !== UserRole.DEALER) {
+          receiverUpdate.totalPoints = Math.max(0, Number(receiver.totalPoints ?? 0) - amount);
+        }
+        if (pairedDebit.userRole !== UserRole.DEALER) {
+          senderUpdate.totalPoints = Number(sender.totalPoints ?? 0) + amount;
+        }
+      }
+      await receiverRepo.update(creditTx.userId, receiverUpdate as any);
+      await senderRepo.update(pairedDebit.userId, senderUpdate as any);
+
+      const description = creditTx.description;
+      await walletRepo.update([id, pairedDebit.id], {
         description: `[REVERSED] ${description}`,
         referenceType: 'reversed_transfer',
       });
-    }
 
-    const auditRows = [this.walletRepository.create({
-      userId: creditTx.userId,
-      userRole: creditTx.userRole,
-      type: TransactionType.DEBIT,
-      source: TransactionSource.TRANSFER,
-      amount,
-      balanceBefore: receiver.walletBalance,
-      balanceAfter: receiverNewBalance,
-      description: `Transfer reversed by admin ${adminId}: ${description}`,
-      referenceId: id,
-      referenceType: 'transfer_reversal',
-    })];
-    if (pairedDebit && senderNewBalance !== null) {
-      auditRows.push(this.walletRepository.create({
-        userId: pairedDebit.userId,
-        userRole: pairedDebit.userRole,
-        type: TransactionType.CREDIT,
-        source: TransactionSource.REFUND,
-        amount,
-        balanceBefore: senderNewBalance - amount,
-        balanceAfter: senderNewBalance,
-        description: `Points restored after transfer reversal by admin ${adminId}`,
-        referenceId: id,
-        referenceType: 'transfer_reversal',
-      }));
-    }
-    const reversal = await this.walletRepository.save(auditRows);
+      const reversal = await walletRepo.save([
+        walletRepo.create({
+          userId: creditTx.userId,
+          userRole: creditTx.userRole,
+          type: TransactionType.DEBIT,
+          source: TransactionSource.TRANSFER,
+          amount,
+          balanceBefore: receiverBalance,
+          balanceAfter: receiverNewBalance,
+          description: `Transfer reversed by admin ${adminId}: ${description}`,
+          referenceId: id,
+          referenceType: 'transfer_reversal',
+        }),
+        walletRepo.create({
+          userId: pairedDebit.userId,
+          userRole: pairedDebit.userRole,
+          type: TransactionType.CREDIT,
+          source: TransactionSource.REFUND,
+          amount,
+          balanceBefore: senderBalance,
+          balanceAfter: senderNewBalance,
+          description: `Points restored after transfer reversal by admin ${adminId}`,
+          referenceId: id,
+          referenceType: 'transfer_reversal',
+        }),
+      ]);
 
-    return { message: 'Transfer reversed successfully', reversal };
+      return { message: 'Transfer reversed successfully', reversal };
+    });
   }
 
   async deleteTransfer(id: string) {
