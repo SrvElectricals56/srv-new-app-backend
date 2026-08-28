@@ -26,6 +26,7 @@ function createService(options: {
   };
   const electricianRepository = {
     increment: jest.fn().mockResolvedValue({ affected: 1 }),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
     findOne: jest
       .fn()
       .mockResolvedValueOnce(options.existingElectrician ?? null)
@@ -193,6 +194,29 @@ describe('MobileAuthService session revocation', () => {
       { id: 'electrician-id' },
       'tokenVersion',
       1,
+    );
+  });
+});
+
+describe('MobileAuthService app-install tracking', () => {
+  it('records first login when a stale imported install flag has no timestamp', async () => {
+    const context = createService({
+      existingElectrician: {
+        id: 'electrician-id',
+        appInstalled: true,
+        firstAppLoginAt: null,
+      },
+    });
+
+    await (context.service as any).touchActivity('electrician-id', 'electrician');
+
+    expect(context.electricianRepository.update).toHaveBeenCalledWith(
+      'electrician-id',
+      expect.objectContaining({
+        appInstalled: true,
+        firstAppLoginAt: expect.any(Date),
+        lastActivityAt: expect.any(Date),
+      }),
     );
   });
 });

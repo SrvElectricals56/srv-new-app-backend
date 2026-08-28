@@ -34,7 +34,8 @@ FROM legacy_mysql.tbl_wallet_history w
 JOIN current_migration_run r ON true
 LEFT JOIN "legacy_entity_map" map
   ON map."sourceTable" = 'tbl_users' AND map."sourceId" = w.user_id
-WHERE map."targetId" IS NULL;
+WHERE map."targetId" IS NULL
+  AND COALESCE(w.wallet_status::text, '1') = '1';
 
 WITH base AS (
   SELECT
@@ -66,6 +67,7 @@ WITH base AS (
   JOIN legacy_mysql.tbl_users u ON u.user_id = w.user_id
   JOIN "legacy_entity_map" map
     ON map."sourceTable" = 'tbl_users' AND map."sourceId" = w.user_id
+  WHERE COALESCE(w.wallet_status::text, '1') = '1'
 ), running AS (
   SELECT
     base.*,
@@ -106,7 +108,8 @@ SELECT
   map."targetId"::text
 FROM legacy_mysql.tbl_wallet_history w
 JOIN "legacy_entity_map" map
-  ON map."sourceTable" = 'tbl_users' AND map."sourceId" = w.user_id;
+  ON map."sourceTable" = 'tbl_users' AND map."sourceId" = w.user_id
+WHERE COALESCE(w.wallet_status::text, '1') = '1';
 
 INSERT INTO "legacy_import_exceptions" (
   "migrationRunId", "sourceTable", "sourceId", "exceptionType", severity, details
@@ -138,7 +141,7 @@ SELECT
   abs(migration_support.to_numeric(w.w_amount::text)),
   abs(migration_support.to_numeric(w.w_amount::text)),
   CASE w.w_type::text
-    WHEN '2' THEN 'completed'
+    WHEN '2' THEN 'approved'
     WHEN '3' THEN 'rejected'
     ELSE 'pending'
   END::redemptions_status_enum,
@@ -208,6 +211,7 @@ SELECT
   CASE ur.user_redeem_type::text
     WHEN '3' THEN 'delivered'
     WHEN '2' THEN 'shipped'
+    WHEN '4' THEN 'rejected'
     ELSE 'pending'
   END::gift_orders_status_enum,
   NULLIF(btrim(ur.user_redeem_address::text), ''),

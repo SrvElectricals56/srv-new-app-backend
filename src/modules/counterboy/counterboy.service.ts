@@ -6,6 +6,7 @@ import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { UserStatus } from '../../common/enums';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
 export class CounterBoyService {
@@ -55,7 +56,7 @@ export class CounterBoyService {
       dealerName: dealer?.name ?? null,
       dealerPhone: dealer?.phone ?? null,
       dealerCode: dealer?.dealerCode ?? null,
-      appInstalled: Boolean(counterboy.appInstalled),
+      appInstalled: hasRecordedAppInstall(counterboy.firstAppLoginAt),
       firstAppLoginAt: counterboy.firstAppLoginAt ?? null,
       hasPassword: Boolean(passwordHash),
     };
@@ -189,8 +190,10 @@ export class CounterBoyService {
     if (city) {
       query.andWhere('cb.city = :city', { city });
     }
-    if (appInstalled !== undefined) {
-      query.andWhere('cb.appInstalled = :appInstalled', { appInstalled });
+    if (appInstalled === true) {
+      query.andWhere('cb.firstAppLoginAt IS NOT NULL');
+    } else if (appInstalled === false) {
+      query.andWhere('cb.firstAppLoginAt IS NULL');
     }
 
     const total = await query.clone().getCount();

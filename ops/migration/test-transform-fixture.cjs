@@ -53,7 +53,7 @@ CREATE TABLE legacy_mysql.tbl_users (
   status text, code text, gst_number text, bank_status int, upiid text,
   account_number text, ifsc_code text, bank_name text, account_holder_name text,
   kyc_status int, pan_card text, adharcard_front text, document text,
-  dealer_code text, sells_code text, wallet text, created_at timestamp
+  dealer_code text, sells_code text, wallet text, device_id text, token text, created_at timestamp
 );
 CREATE TABLE legacy_mysql.tbl_category (
   category_id int PRIMARY KEY, category_name text, category_image text, category_status int
@@ -106,7 +106,8 @@ CREATE TABLE legacy_mysql.tbl_settings (
 );
 CREATE TABLE legacy_mysql.tbl_wallet_history (
   wallet_id int PRIMARY KEY, user_id int, wallet_desc text, wallet_date text,
-  wallet_cdate text, wallet_amount text, wallet_payment_type text, wallet_type text
+  wallet_cdate text, wallet_amount text, wallet_payment_type text, wallet_type text,
+  wallet_status text
 );
 CREATE TABLE legacy_mysql.tbl_withdrawal (
   w_id int PRIMARY KEY, user_id int, w_desc text, w_amount text, w_type text,
@@ -119,10 +120,10 @@ CREATE TABLE legacy_mysql.tbl_user_redeem (
 );
 
 INSERT INTO legacy_mysql.tbl_users VALUES
-  (1,2,'Dealer One','dealer@example.test','', '9999999999','Shop','Punjab','Ludhiana','Ludhiana','141001','1','REF-DLR','',2,'','111','IFSC1','Bank','Dealer One',2,'','','','DLR1','', '100.00','2025-01-01'),
-  (2,1,'Electrician One','electrician@example.test','', '8888888888','Home','Punjab','Ludhiana','Ludhiana','141001','1','REF-ELC','',2,'','222','IFSC2','Bank','Electrician One',2,'','','','ELC1','DLR1','10.50','2025-01-02'),
-  (3,1,'Duplicate Electrician','','', '8888888888','','Punjab','Ludhiana','Ludhiana','','0','REF-DUP','',0,'','','','','',0,'','','','ELC2','DLR1','12.50','2025-01-03'),
-  (4,1,'Invalid Phone','','', 'abc','','Punjab','Unknown','Unknown','','1','','',0,'','','','','',0,'','','','','','0','2025-01-04');
+  (1,2,'Dealer One','dealer@example.test','', '9999999999','Shop','Punjab','Ludhiana','Ludhiana','141001','1','REF-DLR','',2,'','111','IFSC1','Bank','Dealer One',2,'','','','DLR1','', '100.00','dealer-device','dealer-token','2025-01-01'),
+  (2,1,'Electrician One','electrician@example.test','', '8888888888','Home','Punjab','Ludhiana','Ludhiana','141001','1','REF-ELC','',2,'','222','IFSC2','Bank','Electrician One',2,'','','','ELC1','DLR1','10.50','electrician-device','','2025-01-02'),
+  (3,1,'Duplicate Electrician','','', '8888888888','','Punjab','Ludhiana','Ludhiana','','0','REF-DUP','',0,'','','','','',0,'','','','ELC2','DLR1','12.50','','','2025-01-03'),
+  (4,1,'Invalid Phone','','', 'abc','','Punjab','Unknown','Unknown','','1','','',0,'','','','','',0,'','','','','','0','','','2025-01-04');
 INSERT INTO legacy_mysql.tbl_category VALUES (10,'Switches','category.png',1);
 INSERT INTO legacy_mysql.tbl_product VALUES
   (100,10,'Main Switch','MS-100','product.png','Short','Long','Description','Use safely',1);
@@ -146,15 +147,17 @@ INSERT INTO legacy_mysql.tbl_enquiry VALUES
 INSERT INTO legacy_mysql.tbl_settings VALUES
   (1,'SRV Electricals','info@srvelectricals.com','9999999999','https://srvelectricals.com','Privacy','Terms','10','5','2.0.0',0,'Maintenance');
 INSERT INTO legacy_mysql.tbl_wallet_history VALUES
-  (400,2,'Credit','2025-03-01','2025-03-01','5.50','2','2'),
-  (401,2,'Debit','2025-03-02','2025-03-02','1.25','1','4'),
-  (402,999,'Orphan','2025-03-03','2025-03-03','2','2','2');
+  (400,2,'Credit','2025-03-01','2025-03-01','5.50','2','2','1'),
+  (401,2,'Debit','2025-03-02','2025-03-02','1.25','1','4','1'),
+  (402,999,'Orphan','2025-03-03','2025-03-03','2','2','1'),
+  (403,2,'Inactive history','2025-03-03','2025-03-03','99','2','2','0');
 INSERT INTO legacy_mysql.tbl_withdrawal VALUES
   (500,2,'Paid','2.00','2','2025-03-04','2025-03-04'),
   (501,999,'Orphan','3.00','1','2025-03-04','2025-03-04');
 INSERT INTO legacy_mysql.tbl_user_redeem VALUES
   (300,2,200,'Address','5.50','Electrician One','2025-03-05',1,'',''),
-  (301,999,200,'Address','5.50','Missing User','2025-03-05',1,'','');
+  (301,999,200,'Address','5.50','Missing User','2025-03-05',1,'',''),
+  (302,2,200,'Address','5.50','Electrician One','2025-03-06',4,'','');
 `;
 
 async function main() {

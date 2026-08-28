@@ -16,7 +16,8 @@ SELECT id FROM "migration_runs" WHERE status = 'running' ORDER BY "startedAt" DE
 -- Preserve legacy user roles that have no direct replacement role. These
 -- records are inactive audit placeholders and cannot authenticate.
 INSERT INTO "app_users" (
-  id, name, phone, "userCode", "walletBalance", status, "kycStatus", "joinedDate", "updatedAt"
+  id, name, phone, "userCode", "walletBalance", status, "kycStatus", "appInstalled",
+  "firstAppLoginAt", "joinedDate", "updatedAt"
 )
 SELECT
   uuid_generate_v5(uuid_ns_url(), 'srv:legacy:tbl_users:unknown:' || u.user_id),
@@ -31,6 +32,17 @@ SELECT
     WHEN '0' THEN 'rejected'
     ELSE 'not_submitted'
   END::app_users_kycstatus_enum,
+  (
+    migration_support.to_timestamp(u.created_at::text) IS NOT NULL
+    AND (
+      NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+      OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
+    )
+  ),
+  CASE WHEN
+    NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+    OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
+  THEN migration_support.to_timestamp(u.created_at::text) ELSE NULL END,
   COALESCE(migration_support.to_timestamp(u.created_at::text), now()),
   now()
 FROM legacy_mysql.tbl_users u

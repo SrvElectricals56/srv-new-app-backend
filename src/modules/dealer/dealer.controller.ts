@@ -48,6 +48,7 @@ export class DealerController {
     @Query('appInstalled') appInstalled?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('dateField') dateField?: 'joined' | 'installed',
     @Query('includeMedia') includeMedia?: string,
   ) {
     return this.dealerService.findAll(
@@ -55,7 +56,7 @@ export class DealerController {
       search, status, tier, state, city,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
-      dateFrom, dateTo, includeMedia === 'true',
+      dateFrom, dateTo, dateField, includeMedia === 'true',
     );
   }
 

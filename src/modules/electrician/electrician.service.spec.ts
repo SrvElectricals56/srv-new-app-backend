@@ -42,3 +42,47 @@ describe('ElectricianService admin point fields', () => {
     expect(() => normalize({ totalPoints: -1 })).toThrow(BadRequestException);
   });
 });
+
+describe('ElectricianService app-install date filtering', () => {
+  it('uses first app login for date shortcuts even when app status is not supplied', async () => {
+    const queryBuilder: Record<string, jest.Mock> = {};
+    for (const method of [
+      'select', 'leftJoin', 'addSelect', 'andWhere', 'setParameters',
+      'orderBy', 'addOrderBy', 'skip', 'take',
+    ]) {
+      queryBuilder[method] = jest.fn().mockReturnValue(queryBuilder);
+    }
+    queryBuilder.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+
+    const service = new ElectricianService(
+      { createQueryBuilder: jest.fn(() => queryBuilder) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.findAll(
+      1, 20,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined,
+      '2026-08-28', '2026-08-28', undefined, 'installed',
+    );
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'electrician.firstAppLoginAt IS NOT NULL',
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      `(electrician.firstAppLoginAt AT TIME ZONE 'Asia/Kolkata')::date >= CAST(:dateFrom AS date)`,
+      { dateFrom: '2026-08-28' },
+    );
+    expect(queryBuilder.orderBy).toHaveBeenCalledWith(
+      'electrician.firstAppLoginAt',
+      'DESC',
+    );
+  });
+});

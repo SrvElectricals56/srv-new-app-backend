@@ -15,6 +15,7 @@ import { UserStatus, MemberTier, UserRole, ElectricianSubCategory, KYCStatus } f
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { getElectricianActivityStatus } from '../../common/utils/electrician-activity.util';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
 export class ElectricianService {
@@ -122,7 +123,7 @@ export class ElectricianService {
           }
         : {}),
       hasPassword: Boolean(passwordHash),
-      appInstalled: Boolean((electrician as any).appInstalled),
+      appInstalled: hasRecordedAppInstall((electrician as any).firstAppLoginAt),
       firstAppLoginAt: (electrician as any).firstAppLoginAt ?? null,
     };
   }
@@ -284,6 +285,7 @@ export class ElectricianService {
     dateFrom?: string,
     dateTo?: string,
     kycStatus?: KYCStatus,
+    dateField?: 'joined' | 'installed',
     includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
@@ -351,8 +353,10 @@ export class ElectricianService {
       queryBuilder.andWhere('electrician.bankLinked = :bankLinked', { bankLinked });
     }
 
-    if (appInstalled !== undefined) {
-      queryBuilder.andWhere('electrician.appInstalled = :appInstalled', { appInstalled });
+    if (appInstalled === true) {
+      queryBuilder.andWhere('electrician.firstAppLoginAt IS NOT NULL');
+    } else if (appInstalled === false) {
+      queryBuilder.andWhere('electrician.firstAppLoginAt IS NULL');
     }
 
     if (welcomeBonus) {
@@ -374,11 +378,14 @@ export class ElectricianService {
       });
     }
 
-    // When the admin selects App Installed, date shortcuts describe the app
-    // installation date. Otherwise they continue to describe registration.
-    // Compare calendar dates in IST so Today does not drift to the previous or
-    // following day when the browser and server use different time zones.
-    const filteredDateColumn = appInstalled === true
+    // The UI sends dateField=installed for app-install shortcuts. Keep this
+    // explicit so an "All App Status" selection cannot silently switch the
+    // same date picker back to account registration date.
+    const filterByInstallDate = dateField === 'installed' || appInstalled === true;
+    if (filterByInstallDate) {
+      queryBuilder.andWhere('electrician.firstAppLoginAt IS NOT NULL');
+    }
+    const filteredDateColumn = filterByInstallDate
       ? 'electrician.firstAppLoginAt'
       : 'electrician.joinedDate';
     if (dateFrom) {
@@ -396,7 +403,8 @@ export class ElectricianService {
     }
 
     queryBuilder
-      .orderBy('electrician.joinedDate', 'DESC')
+      .orderBy(filteredDateColumn, 'DESC')
+      .addOrderBy('electrician.id', 'ASC')
       .skip(skip)
       .take(limit);
 
@@ -1163,8 +1171,8 @@ export class ElectricianService {
     const row = await this.electricianRepository
       .createQueryBuilder('e')
       .select('COUNT(*)::int', 'total')
-      .addSelect('COUNT(*) FILTER (WHERE e.appInstalled = true)::int', 'installed')
-      .addSelect('COUNT(*) FILTER (WHERE e.appInstalled = false)::int', 'notInstalled')
+      .addSelect('COUNT(*) FILTER (WHERE e.firstAppLoginAt IS NOT NULL)::int', 'installed')
+      .addSelect('COUNT(*) FILTER (WHERE e.firstAppLoginAt IS NULL)::int', 'notInstalled')
       .getRawOne();
     return {
       total: Number(row?.total ?? 0),

@@ -135,7 +135,8 @@ INSERT INTO "dealers" (
   address, pincode, "gstNumber", tier, "electricianCount", status,
   "bankLinked", "upiId", "bankAccount", ifsc, "bankName", "accountHolderName",
   "kycStatus", "aadharNumber", "panNumber", "aadharFrontImage", "panDocument",
-  "gstDocument", "walletBalance", bonuspoints, "joinedDate", "updatedAt"
+  "gstDocument", "walletBalance", bonuspoints, "appInstalled", "firstAppLoginAt",
+  "joinedDate", "updatedAt"
 )
 SELECT
   uuid_generate_v5(uuid_ns_url(), 'srv:legacy:tbl_users:dealer:' || u.user_id),
@@ -177,6 +178,17 @@ SELECT
   NULLIF(btrim(u.document::text), ''),
   0,
   migration_support.to_numeric(u.wallet::text),
+  (
+    migration_support.to_timestamp(u.created_at::text) IS NOT NULL
+    AND (
+      NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+      OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
+    )
+  ),
+  CASE WHEN
+    NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+    OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
+  THEN migration_support.to_timestamp(u.created_at::text) ELSE NULL END,
   COALESCE(u.created_at, now()),
   now()
 FROM legacy_users_ranked u
@@ -188,7 +200,8 @@ INSERT INTO "electricians" (
   "walletBalance", "totalRedemptions", status, "bankLinked", "upiId",
   "bankAccount", ifsc, "bankName", "accountHolderName", "kycStatus",
   "aadharNumber", "panNumber", "aadharFrontImage", "panDocument", "gstDocument",
-  "fallbackDealerPhone", "fallbackDealerCode", "joinedDate", "updatedAt"
+  "fallbackDealerPhone", "fallbackDealerCode", "appInstalled", "firstAppLoginAt",
+  "joinedDate", "updatedAt"
 )
 SELECT
   uuid_generate_v5(uuid_ns_url(), 'srv:legacy:tbl_users:electrician:' || u.user_id),
@@ -236,6 +249,17 @@ SELECT
     WHEN lower(btrim(COALESCE(u.sells_code::text, ''))) IN ('', 'undefined', 'null', 'n/a') THEN NULL
     ELSE btrim(u.sells_code::text)
   END,
+  (
+    migration_support.to_timestamp(u.created_at::text) IS NOT NULL
+    AND (
+      NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+      OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
+    )
+  ),
+  CASE WHEN
+    NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+    OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
+  THEN migration_support.to_timestamp(u.created_at::text) ELSE NULL END,
   COALESCE(u.created_at, now()),
   now()
 FROM legacy_users_ranked u

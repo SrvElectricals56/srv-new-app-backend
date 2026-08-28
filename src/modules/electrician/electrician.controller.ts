@@ -52,6 +52,7 @@ export class ElectricianController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('kycStatus') kycStatus?: KYCStatus,
+    @Query('dateField') dateField?: 'joined' | 'installed',
     @Query('includeMedia') includeMedia?: string,
   ) {
     return this.electricianService.findAll(
@@ -60,7 +61,7 @@ export class ElectricianController {
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       welcomeBonus === 'true' ? true : undefined,
-      dateFrom, dateTo, kycStatus, includeMedia === 'true',
+      dateFrom, dateTo, kycStatus, dateField, includeMedia === 'true',
     );
   }
 

@@ -54,6 +54,51 @@ INSERT INTO reconciliation_results VALUES
     ) canonical),
     (SELECT count(*) FROM "electricians") + (SELECT count(*) FROM "dealers"),
     true),
+  ('legacy_kyc_status_preserved',
+    (SELECT count(*) FROM reconciliation_legacy_users),
+    (SELECT count(*)
+     FROM reconciliation_legacy_users source
+     LEFT JOIN "electricians" electrician
+       ON source."targetTable" = 'electricians' AND electrician.id = source."targetId"
+     LEFT JOIN "dealers" dealer
+       ON source."targetTable" = 'dealers' AND dealer.id = source."targetId"
+     WHERE COALESCE(electrician."kycStatus"::text, dealer."kycStatus"::text) = CASE source.kyc_status::text
+       WHEN '2' THEN 'verified' WHEN '1' THEN 'pending' WHEN '0' THEN 'rejected'
+       ELSE 'not_submitted' END),
+    true),
+  ('legacy_app_install_evidence_preserved',
+    (SELECT count(*) FROM (
+       SELECT map."targetTable", map."targetId"
+       FROM "legacy_entity_map" map
+       JOIN legacy_mysql.tbl_users source ON source.user_id = map."sourceId"
+       WHERE map."sourceTable" = 'tbl_users'
+         AND map."targetTable" IN ('electricians', 'dealers')
+         AND (
+           NULLIF(btrim(COALESCE(source.device_id::text, '')), '') IS NOT NULL
+           OR NULLIF(btrim(COALESCE(source.token::text, '')), '') IS NOT NULL
+         )
+         AND migration_support.to_timestamp(source.created_at::text) IS NOT NULL
+       GROUP BY map."targetTable", map."targetId"
+     ) evidence),
+    (SELECT count(*) FROM (
+       SELECT map."targetTable", map."targetId"
+       FROM "legacy_entity_map" map
+       JOIN legacy_mysql.tbl_users source ON source.user_id = map."sourceId"
+       LEFT JOIN "electricians" electrician
+         ON map."targetTable" = 'electricians' AND electrician.id = map."targetId"
+       LEFT JOIN "dealers" dealer
+         ON map."targetTable" = 'dealers' AND dealer.id = map."targetId"
+       WHERE map."sourceTable" = 'tbl_users'
+         AND map."targetTable" IN ('electricians', 'dealers')
+         AND (
+           NULLIF(btrim(COALESCE(source.device_id::text, '')), '') IS NOT NULL
+           OR NULLIF(btrim(COALESCE(source.token::text, '')), '') IS NOT NULL
+         )
+         AND migration_support.to_timestamp(source.created_at::text) IS NOT NULL
+         AND COALESCE(electrician."firstAppLoginAt", dealer."firstAppLoginAt") IS NOT NULL
+       GROUP BY map."targetTable", map."targetId"
+     ) evidence),
+    true),
   ('legacy_dealer_codes_preserved',
     (SELECT count(*) FROM reconciliation_legacy_users source
      WHERE source."targetTable" = 'dealers'
@@ -145,7 +190,7 @@ INSERT INTO reconciliation_results VALUES
     (SELECT count(*) FROM "scans"),
     true),
   ('wallet_rows_accounted',
-    (SELECT count(*) FROM legacy_mysql.tbl_wallet_history),
+    (SELECT count(*) FROM legacy_mysql.tbl_wallet_history WHERE COALESCE(wallet_status::text, '1') = '1'),
     (SELECT count(*) FROM "wallet_transactions") +
       (SELECT count(*) FROM "legacy_import_exceptions"
        WHERE "migrationRunId" = (SELECT id FROM current_migration_run)
@@ -168,12 +213,33 @@ INSERT INTO reconciliation_results VALUES
          AND "sourceTable" = 'tbl_user_redeem'
          AND "exceptionType" IN ('missing_gift_order_user', 'missing_gift_product')),
     true),
+  ('legacy_withdrawal_status_preserved',
+    (SELECT count(*) FROM "legacy_entity_map" WHERE "sourceTable" = 'tbl_withdrawal'),
+    (SELECT count(*)
+     FROM "legacy_entity_map" map
+     JOIN legacy_mysql.tbl_withdrawal source ON source.w_id = map."sourceId"
+     JOIN "redemptions" target ON target.id = map."targetId"
+     WHERE map."sourceTable" = 'tbl_withdrawal'
+       AND target.status::text = CASE source.w_type::text
+         WHEN '2' THEN 'approved' WHEN '3' THEN 'rejected' ELSE 'pending' END),
+    true),
+  ('legacy_gift_status_preserved',
+    (SELECT count(*) FROM "legacy_entity_map" WHERE "sourceTable" = 'tbl_user_redeem'),
+    (SELECT count(*)
+     FROM "legacy_entity_map" map
+     JOIN legacy_mysql.tbl_user_redeem source ON source.user_redeem_id = map."sourceId"
+     JOIN "gift_orders" target ON target.id = map."targetId"
+     WHERE map."sourceTable" = 'tbl_user_redeem'
+       AND target.status::text = CASE source.user_redeem_type::text
+         WHEN '2' THEN 'shipped' WHEN '3' THEN 'delivered'
+         WHEN '4' THEN 'rejected' ELSE 'pending' END),
+    true),
   ('wallet_credit_total_linked',
     (SELECT COALESCE(sum(abs(migration_support.to_numeric(w.wallet_amount::text))), 0)
      FROM legacy_mysql.tbl_wallet_history w
      JOIN "legacy_entity_map" map
        ON map."sourceTable" = 'tbl_users' AND map."sourceId" = w.user_id
-     WHERE w.wallet_payment_type::text = '2'),
+     WHERE w.wallet_payment_type::text = '2' AND COALESCE(w.wallet_status::text, '1') = '1'),
     (SELECT COALESCE(sum(amount), 0) FROM "wallet_transactions" WHERE type = 'credit'),
     true),
   ('wallet_debit_total_linked',
@@ -181,7 +247,7 @@ INSERT INTO reconciliation_results VALUES
      FROM legacy_mysql.tbl_wallet_history w
      JOIN "legacy_entity_map" map
        ON map."sourceTable" = 'tbl_users' AND map."sourceId" = w.user_id
-     WHERE w.wallet_payment_type::text <> '2'),
+     WHERE w.wallet_payment_type::text <> '2' AND COALESCE(w.wallet_status::text, '1') = '1'),
     (SELECT COALESCE(sum(amount), 0) FROM "wallet_transactions" WHERE type = 'debit'),
     true),
   ('wallet_balance_mismatches',

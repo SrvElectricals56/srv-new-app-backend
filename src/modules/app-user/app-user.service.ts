@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { UserStatus } from '../../common/enums';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
 export class AppUserService {
@@ -47,7 +48,7 @@ export class AppUserService {
     const { passwordHash, ...rest } = user;
     return {
       ...rest,
-      appInstalled: Boolean(user.appInstalled),
+      appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
       firstAppLoginAt: user.firstAppLoginAt ?? null,
       hasPassword: Boolean(passwordHash),
     };
@@ -226,8 +227,10 @@ export class AppUserService {
     if (city) {
       query.andWhere('u.city = :city', { city });
     }
-    if (appInstalled !== undefined) {
-      query.andWhere('u.appInstalled = :appInstalled', { appInstalled });
+    if (appInstalled === true) {
+      query.andWhere('u.firstAppLoginAt IS NOT NULL');
+    } else if (appInstalled === false) {
+      query.andWhere('u.firstAppLoginAt IS NULL');
     }
 
     const [data, total] = await query
