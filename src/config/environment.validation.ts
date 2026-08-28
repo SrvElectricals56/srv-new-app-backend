@@ -54,15 +54,15 @@ export function validateEnvironment(
 
   validateInteger(config, 'PORT', 3001, 1, 65535);
   validateInteger(config, 'TRUST_PROXY_HOPS', 0, 0, 10);
-  validateInteger(config, 'DB_POOL_MIN', 2, 0, 100);
-  validateInteger(config, 'DB_POOL_MAX', 20, 1, 100);
+  validateInteger(config, 'DB_POOL_MIN', 1, 0, 100);
+  validateInteger(config, 'DB_POOL_MAX', 5, 1, 100);
   validateInteger(config, 'DB_CONNECTION_TIMEOUT_MS', 5000, 100, 120000);
   validateInteger(config, 'DB_QUERY_TIMEOUT_MS', 30000, 100, 300000);
   validateInteger(config, 'DB_STATEMENT_TIMEOUT_MS', 30000, 100, 300000);
   validateInteger(config, 'DB_IDLE_TRANSACTION_TIMEOUT_MS', 30000, 1000, 300000);
 
-  const poolMin = Number(config.DB_POOL_MIN ?? 2);
-  const poolMax = Number(config.DB_POOL_MAX ?? 20);
+  const poolMin = Number(config.DB_POOL_MIN ?? 1);
+  const poolMax = Number(config.DB_POOL_MAX ?? 5);
   if (poolMin > poolMax) {
     throw new Error('DB_POOL_MIN cannot be greater than DB_POOL_MAX');
   }
