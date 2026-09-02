@@ -101,15 +101,15 @@ export class AnalyticsService {
       this.redemptionRepository.count({ where: { status: RedemptionStatus.PENDING, role: UserRole.ELECTRICIAN } }),
       this.redemptionRepository.count({ where: { status: RedemptionStatus.PENDING, role: UserRole.DEALER } }),
       this.giftOrderRepository.count({ where: { status: GiftOrderStatus.PENDING } }),
-      this.productOrderRepository.createQueryBuilder('productOrder')
-        .where('productOrder.status = :pending', { pending: ProductOrderStatus.PENDING })
-        .andWhere('(productOrder.paymentMethod <> :razorpay OR productOrder.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
+      this.productOrderRepository.createQueryBuilder('product_order')
+        .where('product_order.status = :pending', { pending: ProductOrderStatus.PENDING })
+        .andWhere('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
         .getCount(),
-      this.productOrderRepository.createQueryBuilder('productOrder')
-        .where('(productOrder.paymentMethod <> :razorpay OR productOrder.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
+      this.productOrderRepository.createQueryBuilder('product_order')
+        .where('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
         .andWhere(`(
-          productOrder.status IN (:...customerRequestStatuses)
-          OR productOrder."refundStatus" = :refundPending
+          product_order.status IN (:...customerRequestStatuses)
+          OR product_order."refundStatus" = :refundPending
         )`, {
           customerRequestStatuses: [
             ProductOrderStatus.PENDING,
