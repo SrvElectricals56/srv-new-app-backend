@@ -14,7 +14,10 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserStatus, MemberTier, UserRole, ElectricianSubCategory, KYCStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
-import { getElectricianActivityStatus } from '../../common/utils/electrician-activity.util';
+import {
+  ElectricianActivityStatus,
+  getElectricianActivityStatus,
+} from '../../common/utils/electrician-activity.util';
 import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
@@ -286,6 +289,7 @@ export class ElectricianService {
     dateTo?: string,
     kycStatus?: KYCStatus,
     dateField?: 'joined' | 'installed',
+    activityStatus?: ElectricianActivityStatus,
     includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
@@ -323,6 +327,54 @@ export class ElectricianService {
 
     if (status) {
       queryBuilder.andWhere('electrician.status = :status', { status });
+    }
+
+    if (activityStatus && !['proactive', 'active', 'inactive'].includes(activityStatus)) {
+      throw new BadRequestException('Invalid electrician activity status');
+    }
+
+    if (activityStatus) {
+      const hasRecentScan = (days: 7 | 30) =>
+        `EXISTS (
+          SELECT 1 FROM "scans" "activityScan"
+          WHERE "activityScan"."userId" = electrician.id::text
+            AND "activityScan"."role" = :activityRole
+            AND "activityScan"."scannedAt" >= now() - interval '${days} days'
+        )`;
+      const accountAllowsActivity =
+        'electrician.status NOT IN (:...inactiveAccountStatuses)';
+
+      if (activityStatus === 'proactive') {
+        queryBuilder.andWhere(
+          `${accountAllowsActivity} AND ${hasRecentScan(7)}`,
+          {
+            activityRole: UserRole.ELECTRICIAN,
+            inactiveAccountStatuses: [UserStatus.INACTIVE, UserStatus.SUSPENDED],
+          },
+        );
+      } else if (activityStatus === 'active') {
+        queryBuilder.andWhere(
+          `${accountAllowsActivity}
+           AND NOT ${hasRecentScan(7)}
+           AND (${hasRecentScan(30)} OR electrician.joinedDate >= now() - interval '30 days')`,
+          {
+            activityRole: UserRole.ELECTRICIAN,
+            inactiveAccountStatuses: [UserStatus.INACTIVE, UserStatus.SUSPENDED],
+          },
+        );
+      } else {
+        queryBuilder.andWhere(
+          `(electrician.status IN (:...inactiveAccountStatuses)
+            OR (
+              NOT ${hasRecentScan(30)}
+              AND (electrician.joinedDate IS NULL OR electrician.joinedDate < now() - interval '30 days')
+            ))`,
+          {
+            activityRole: UserRole.ELECTRICIAN,
+            inactiveAccountStatuses: [UserStatus.INACTIVE, UserStatus.SUSPENDED],
+          },
+        );
+      }
     }
 
     if (kycStatus) {

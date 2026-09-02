@@ -86,3 +86,59 @@ describe('ElectricianService app-install date filtering', () => {
     );
   });
 });
+
+describe('ElectricianService scan-activity filtering', () => {
+  const createService = () => {
+    const queryBuilder: Record<string, jest.Mock> = {};
+    for (const method of [
+      'select', 'leftJoin', 'addSelect', 'andWhere', 'setParameters',
+      'orderBy', 'addOrderBy', 'skip', 'take',
+    ]) {
+      queryBuilder[method] = jest.fn().mockReturnValue(queryBuilder);
+    }
+    queryBuilder.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+
+    const service = new ElectricianService(
+      { createQueryBuilder: jest.fn(() => queryBuilder) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    return { service, queryBuilder };
+  };
+
+  it('filters proactive electricians by scans in the last seven days', async () => {
+    const { service, queryBuilder } = createService();
+
+    await service.findAll(
+      1, 20,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      'proactive',
+    );
+
+    const activityFilter = queryBuilder.andWhere.mock.calls.find(
+      ([condition]) => typeof condition === 'string' && condition.includes("interval '7 days'"),
+    );
+    expect(activityFilter?.[0]).toContain('electrician.status NOT IN');
+    expect(activityFilter?.[0]).toContain('EXISTS');
+    expect(activityFilter?.[1]).toEqual(expect.objectContaining({ activityRole: 'electrician' }));
+  });
+
+  it('rejects an unknown activity status', async () => {
+    const { service } = createService();
+    await expect(service.findAll(
+      1, 20,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      'weekly' as any,
+    )).rejects.toThrow(BadRequestException);
+  });
+});
