@@ -78,15 +78,35 @@ export class ProductOrderService {
     };
   }
 
-  private mapOrder(o: ProductOrder) {
+  private identityValue(value: string | null | undefined, fallback: string | null | undefined) {
+    const normalized = value?.trim();
+    return normalized && normalized.toUpperCase() !== 'N/A' ? normalized : fallback ?? null;
+  }
+
+  private async getOrderOwnerMap(orders: ProductOrder[]) {
+    const userIds = [...new Set(orders.map((order) => order.userId).filter(Boolean))];
+    if (!userIds.length) return new Map<string, { name: string | null; phone: string | null; code: string | null }>();
+    const rows = await this.productOrderRepository.query(
+      `SELECT id::text, name, phone, "electricianCode" AS code, 'electrician' AS role FROM "electricians" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, name, phone, "dealerCode" AS code, 'dealer' AS role FROM "dealers" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, name, phone, "userCode" AS code, 'user' AS role FROM "app_users" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, name, phone, "counterboyCode" AS code, 'counterboy' AS role FROM "counterboys" WHERE id::text = ANY($1::text[])`,
+      [userIds],
+    );
+    return new Map<string, { name: string | null; phone: string | null; code: string | null }>(
+      rows.map((row: any) => [`${row.role}:${row.id}`, { name: row.name, phone: row.phone, code: row.code }]),
+    );
+  }
+
+  private mapOrder(o: ProductOrder, owner?: { name: string | null; phone: string | null; code: string | null }) {
     return {
       id: o.id,
       orderCode: this.getOrderCode(o.id),
       userId: o.userId,
       userRole: o.userRole,
-      userName: o.userName,
-      userPhone: o.userPhone,
-      userCode: o.userCode,
+      userName: this.identityValue(o.userName, owner?.name) ?? 'Unknown user',
+      userPhone: this.identityValue(o.userPhone, owner?.phone),
+      userCode: this.identityValue(o.userCode, owner?.code),
       productId: o.productId,
       productName: o.productName,
       productImage: o.productImage,
@@ -140,7 +160,8 @@ export class ProductOrderService {
     const total = await qb.getCount();
     const data = await qb.skip((page - 1) * limit).take(limit).getMany();
 
-    const mapped = data.map((o) => this.mapOrder(o));
+    const ownerMap = await this.getOrderOwnerMap(data);
+    const mapped = data.map((o) => this.mapOrder(o, ownerMap.get(`${o.userRole}:${o.userId}`)));
 
     return { data: mapped, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
@@ -150,7 +171,8 @@ export class ProductOrderService {
     if (!order || (order.paymentMethod === 'razorpay' && order.paymentStatus !== 'paid')) {
       throw new NotFoundException('Product order not found');
     }
-    return this.mapOrder(order);
+    const ownerMap = await this.getOrderOwnerMap([order]);
+    return this.mapOrder(order, ownerMap.get(`${order.userRole}:${order.userId}`));
   }
 
   async updateStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string; refundMessage?: string }) {

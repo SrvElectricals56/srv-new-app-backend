@@ -33,16 +33,13 @@ SELECT
     ELSE 'not_submitted'
   END::app_users_kycstatus_enum,
   (
-    migration_support.to_timestamp(u.created_at::text) IS NOT NULL
-    AND (
-      NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
-      OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
-    )
+    NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
+    OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
   ),
   CASE WHEN
     NULLIF(btrim(COALESCE(u.device_id::text, '')), '') IS NOT NULL
     OR NULLIF(btrim(COALESCE(u.token::text, '')), '') IS NOT NULL
-  THEN migration_support.to_timestamp(u.created_at::text) ELSE NULL END,
+  THEN COALESCE(migration_support.to_timestamp(u.created_at::text), now()) ELSE NULL END,
   COALESCE(migration_support.to_timestamp(u.created_at::text), now()),
   now()
 FROM legacy_mysql.tbl_users u
