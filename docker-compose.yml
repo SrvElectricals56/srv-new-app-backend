@@ -2,7 +2,7 @@ services:
   postgres:
     # Keep the image major version aligned with the existing postgres_data
     # volume. PostgreSQL data directories cannot be opened by a different major.
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     container_name: srv_admin_postgres
     restart: unless-stopped
     command:
@@ -115,62 +115,6 @@ services:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
-      retries: 20
-
-  admin-frontend:
-    build:
-      context: ../srv-new-adminpanel
-      dockerfile: ../srv-new-app-backend/docker/frontend.Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
-        SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
-    container_name: srv_admin_frontend
-    restart: unless-stopped
-    init: true
-    environment:
-      NODE_ENV: production
-      NEXT_TELEMETRY_DISABLED: 1
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
-      SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
-    depends_on:
-      backend:
-        condition: service_healthy
-    ports:
-      - '3000:3000'
-    read_only: true
-    tmpfs:
-      - /tmp:size=128m,mode=1777
-      - /app/.next/cache:size=256m,uid=1000,gid=1000,mode=1770
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 256
-
-  mobile-app:
-    build:
-      context: ../srv-new-app-frontend
-      dockerfile: ../srv-new-app-backend/docker/expo-app.Dockerfile
-    container_name: srv_mobile_app
-    restart: unless-stopped
-    environment:
-      CI: 1
-      EXPO_NO_TELEMETRY: 1
-      EXPO_DEVTOOLS_LISTEN_ADDRESS: 0.0.0.0
-      REACT_NATIVE_PACKAGER_HOSTNAME: localhost
-      EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
-    depends_on:
-      backend:
-        condition: service_healthy
-    ports:
-      - '8081:8081'
-      - '19000:19000'
-      - '19001:19001'
-      - '19002:19002'
-    healthcheck:
-      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8081').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 20s
-      timeout: 10s
       retries: 20
 
 volumes:

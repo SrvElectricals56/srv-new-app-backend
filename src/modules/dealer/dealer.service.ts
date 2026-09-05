@@ -72,7 +72,7 @@ export class DealerService {
       `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "electricianCount"
        FROM "dealers" d
        LEFT JOIN "electricians" e ON (
-         e."dealerId" = d."id"
+         e."dealerId"::text = d."id"::text
          OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
              AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
          OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
@@ -477,7 +477,7 @@ export class DealerService {
     if (!dealer) throw new NotFoundException('Dealer not found');
     const query = this.electricianRepository.createQueryBuilder('electrician')
       .where(`(
-        electrician.dealerId = :dealerId
+        electrician."dealerId"::text = :dealerId
         OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
         OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
@@ -985,7 +985,7 @@ export class DealerService {
       `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "periodElectricians"
        FROM "dealers" d
        JOIN "electricians" e ON (
-         e."dealerId" = d."id"
+         e."dealerId"::text = d."id"::text
          OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
              AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
          OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
