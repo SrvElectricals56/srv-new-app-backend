@@ -274,7 +274,7 @@ export class GiftService {
     return saved;
   }
 
-  async updateOrderStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string }) {
+  async updateOrderStatus(id: string, status: string, extra?: { shippingAddress?: string; rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string }) {
     const order = await this.giftOrderRepository.findOne({ where: { id } });
 
     if (!order) {
@@ -290,6 +290,11 @@ export class GiftService {
       status: status as GiftOrderStatus,
     };
 
+    const shippingAddress = extra?.shippingAddress?.trim();
+    if (status === GiftOrderStatus.APPROVED && !shippingAddress && !order.shippingAddress?.trim()) {
+      throw new BadRequestException('Enter a complete shipping address before approving this gift order');
+    }
+    if (shippingAddress) updateData.shippingAddress = shippingAddress;
     if (extra?.rejectionReason) updateData.rejectionReason = extra.rejectionReason;
     if (extra?.trackingNumber) updateData.trackingNumber = extra.trackingNumber;
     if (extra?.courierName) updateData.courierName = extra.courierName;

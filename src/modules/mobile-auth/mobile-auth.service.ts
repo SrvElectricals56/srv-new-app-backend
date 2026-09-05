@@ -25,6 +25,7 @@ import { ElectricianSubCategory, TransactionSource, TransactionType, UserRole, U
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<
@@ -520,9 +521,9 @@ export class MobileAuthService {
     const now = new Date();
     switch (role) {
       case 'electrician': {
-        const existing = await this.electricianRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.electricianRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -530,9 +531,9 @@ export class MobileAuthService {
         break;
       }
       case 'dealer': {
-        const existing = await this.dealerRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.dealerRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -540,9 +541,9 @@ export class MobileAuthService {
         break;
       }
       case 'user': {
-        const existing = await this.appUserRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.appUserRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -550,9 +551,9 @@ export class MobileAuthService {
         break;
       }
       case 'counterboy': {
-        const existing = await this.counterboyRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.counterboyRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -1431,7 +1432,7 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'electrician',
         };
@@ -1471,7 +1472,7 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'dealer',
         };
@@ -1510,7 +1511,7 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'user',
         };
@@ -1552,7 +1553,7 @@ export class MobileAuthService {
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'counterboy',
         };

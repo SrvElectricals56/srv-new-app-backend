@@ -14,6 +14,7 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserStatus, MemberTier, UserRole } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
 export class DealerService {
@@ -54,14 +55,14 @@ export class DealerService {
               return {
                 ...electricianRest,
                 hasPassword: Boolean(electricianPasswordHash),
-                appInstalled: Boolean((electrician as any).appInstalled),
+                appInstalled: hasRecordedAppInstall((electrician as any).firstAppLoginAt),
                 firstAppLoginAt: (electrician as any).firstAppLoginAt ?? null,
               };
             }),
           }
         : {}),
       hasPassword: Boolean(passwordHash),
-      appInstalled: Boolean((dealer as any).appInstalled),
+      appInstalled: hasRecordedAppInstall((dealer as any).firstAppLoginAt),
       firstAppLoginAt: (dealer as any).firstAppLoginAt ?? null,
     };
   }
@@ -296,6 +297,7 @@ export class DealerService {
     appInstalled?: boolean,
     dateFrom?: string,
     dateTo?: string,
+    dateField?: 'joined' | 'installed',
     includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
@@ -348,11 +350,17 @@ export class DealerService {
       queryBuilder.andWhere('dealer.bankLinked = :bankLinked', { bankLinked });
     }
 
-    if (appInstalled !== undefined) {
-      queryBuilder.andWhere('dealer.appInstalled = :appInstalled', { appInstalled });
+    if (appInstalled === true) {
+      queryBuilder.andWhere('dealer.firstAppLoginAt IS NOT NULL');
+    } else if (appInstalled === false) {
+      queryBuilder.andWhere('dealer.firstAppLoginAt IS NULL');
     }
 
-    const filteredDateColumn = appInstalled === true
+    const filterByInstallDate = dateField === 'installed' || appInstalled === true;
+    if (filterByInstallDate) {
+      queryBuilder.andWhere('dealer.firstAppLoginAt IS NOT NULL');
+    }
+    const filteredDateColumn = filterByInstallDate
       ? 'dealer.firstAppLoginAt'
       : 'dealer.joinedDate';
     if (dateFrom) {
@@ -369,7 +377,7 @@ export class DealerService {
       );
     }
 
-    queryBuilder.orderBy('dealer.joinedDate', 'DESC').skip(skip).take(limit);
+    queryBuilder.orderBy(filteredDateColumn, 'DESC').addOrderBy('dealer.id', 'ASC').skip(skip).take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
     const actualCounts = await this.getActualElectricianCounts(data.map((dealer) => dealer.id));
@@ -1034,8 +1042,8 @@ export class DealerService {
       .addSelect('COUNT(*) FILTER (WHERE d.status = :active)::int', 'active')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :pending)::int', 'pending')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :inactive)::int', 'inactive')
-      .addSelect('COUNT(*) FILTER (WHERE d.appInstalled = true)::int', 'installed')
-      .addSelect('COUNT(*) FILTER (WHERE d.appInstalled = false)::int', 'notInstalled')
+      .addSelect('COUNT(*) FILTER (WHERE d.firstAppLoginAt IS NOT NULL)::int', 'installed')
+      .addSelect('COUNT(*) FILTER (WHERE d.firstAppLoginAt IS NULL)::int', 'notInstalled')
       .setParameters({
         active: UserStatus.ACTIVE,
         pending: UserStatus.PENDING,

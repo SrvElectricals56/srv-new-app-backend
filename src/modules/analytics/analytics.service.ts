@@ -69,6 +69,7 @@ export class AnalyticsService {
       pendingDealerRedemptions,
       pendingGiftOrders,
       pendingProductOrders,
+      actionableProductOrders,
       openEnquiries,
       pendingDealerApprovals,
     ] = await Promise.all([
@@ -100,7 +101,24 @@ export class AnalyticsService {
       this.redemptionRepository.count({ where: { status: RedemptionStatus.PENDING, role: UserRole.ELECTRICIAN } }),
       this.redemptionRepository.count({ where: { status: RedemptionStatus.PENDING, role: UserRole.DEALER } }),
       this.giftOrderRepository.count({ where: { status: GiftOrderStatus.PENDING } }),
-      this.productOrderRepository.count({ where: { status: ProductOrderStatus.PENDING } }),
+      this.productOrderRepository.createQueryBuilder('product_order')
+        .where('product_order.status = :pending', { pending: ProductOrderStatus.PENDING })
+        .andWhere('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
+        .getCount(),
+      this.productOrderRepository.createQueryBuilder('product_order')
+        .where('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
+        .andWhere(`(
+          product_order.status IN (:...customerRequestStatuses)
+          OR product_order."refundStatus" = :refundPending
+        )`, {
+          customerRequestStatuses: [
+            ProductOrderStatus.PENDING,
+            ProductOrderStatus.CANCELLED,
+            ProductOrderStatus.RETURNED,
+          ],
+          refundPending: 'pending',
+        })
+        .getCount(),
       this.supportTicketRepository.createQueryBuilder('ticket')
         .where('ticket.status IN (:...statuses)', { statuses: [SupportTicketStatus.OPEN, SupportTicketStatus.IN_PROGRESS] })
         .getCount(),
@@ -143,6 +161,7 @@ export class AnalyticsService {
         pendingDealerRedemptions,
         pendingGiftOrders,
         pendingProductOrders,
+        actionableProductOrders,
         openEnquiries,
         pendingElectricianKyc: electricianKyc.pending,
         pendingDealerKyc: dealerKyc.pending,

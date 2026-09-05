@@ -11,13 +11,6 @@ export class AddProductImagesAndRepairLegacyStatuses1787310000000 implements Mig
       WHERE COALESCE(BTRIM("image"), '') <> '' AND jsonb_array_length("images") = 0
     `);
     await queryRunner.query(`
-      UPDATE "redemptions"
-      SET "status" = 'approved', "processedAt" = COALESCE("processedAt", "updatedAt", now())
-      WHERE "status" = 'pending'
-        AND "role" IN ('electrician', 'dealer')
-        AND "requestedAt" < TIMESTAMPTZ '2026-08-21 00:00:00+05:30'
-    `);
-    await queryRunner.query(`
       UPDATE "dealers"
       SET "bonusStatus" = 'paid'
       WHERE "bonusStatus" = 'pending' AND COALESCE("bonuspoints", 0) = 0
