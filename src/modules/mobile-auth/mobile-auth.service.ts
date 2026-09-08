@@ -135,15 +135,16 @@ export class MobileAuthService {
         [member.id, balanceAfter],
       );
     } else {
-      const tier = this.tierService.calculateElectricianTier(balanceAfter);
+      const totalPoints = Number(before.totalPoints ?? 0) + points;
+      const tier = this.tierService.calculateElectricianTier(totalPoints);
       await manager.query(
         `UPDATE "${table}"
          SET "walletBalance" = $2,
-             "totalPoints" = $2,
+             "totalPoints" = $4,
              tier = $3,
              "updatedAt" = now()
          WHERE id::text = $1`,
-        [member.id, balanceAfter, tier],
+        [member.id, balanceAfter, tier, totalPoints],
       );
     }
 
@@ -1282,6 +1283,11 @@ export class MobileAuthService {
         updateData.kycStatus = 'pending';
         updateData.kycRejectionReason = null;
       }
+    }
+
+    if (role === 'electrician' && data.aadharFrontImage !== undefined) {
+      updateData.kycStatus = String(data.aadharFrontImage ?? '').trim() ? 'verified' : 'pending';
+      updateData.kycRejectionReason = null;
     }
 
     if (Object.keys(updateData).length > 0) {

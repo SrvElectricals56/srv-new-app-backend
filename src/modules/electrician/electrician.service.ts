@@ -18,6 +18,7 @@ import {
   ElectricianActivityStatus,
   getElectricianActivityStatus,
 } from '../../common/utils/electrician-activity.util';
+import { electricianKycStatus } from '../../common/utils/electrician-kyc.util';
 import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
@@ -66,6 +67,16 @@ export class ElectricianService {
       data.tier = this.tierService.calculateElectricianTier(data.totalPoints);
     }
     if (walletProvided) data.walletBalance = this.parsePoints(data.walletBalance);
+  }
+
+  private async getRedemptionCounts(ids: string[]): Promise<Map<string, number>> {
+    if (!ids.length) return new Map();
+    const rows = await this.electricianRepository.query(
+      `SELECT "userId", COUNT(*)::int AS count FROM redemptions
+       WHERE role = $1 AND "userId" = ANY($2::text[]) GROUP BY "userId"`,
+      [UserRole.ELECTRICIAN, ids],
+    );
+    return new Map(rows.map((row: any) => [row.userId, Number(row.count)]));
   }
 
   private async getScanActivity(
@@ -232,6 +243,10 @@ export class ElectricianService {
     }
 
     // Ranking points and spendable wallet balance are separate admin fields.
+    if (data.kycStatus === KYCStatus.REJECTED && !data.kycRejectionReason?.trim()) {
+      data.kycRejectionReason = 'Rejected by admin';
+    }
+    data.kycStatus = electricianKycStatus(data);
     this.normalizeIndependentPointFields(data);
     if (data.totalPoints === undefined) {
       data.totalPoints = 0;
@@ -462,9 +477,12 @@ export class ElectricianService {
 
     const [rawData, total] = await queryBuilder.getManyAndCount();
 
-    const scanActivity = await this.getScanActivity(rawData.map(e => e.id));
+    const [scanActivity, redemptionCounts] = await Promise.all([
+      this.getScanActivity(rawData.map(e => e.id)), this.getRedemptionCounts(rawData.map(e => e.id)),
+    ]);
     const data = rawData.map(e => this.withScanActivity({
       ...e,
+      totalRedemptions: redemptionCounts.get(e.id) ?? 0,
       dealerName: (e as any).dealer?.name ?? e.fallbackDealerName ?? 'SRV Dealer',
       dealerPhone: (e as any).dealer?.phone ?? e.fallbackDealerPhone ?? null,
       dealerCode: (e as any).dealer?.dealerCode ?? e.fallbackDealerCode ?? null,
@@ -489,9 +507,12 @@ export class ElectricianService {
       throw new NotFoundException('Electrician not found');
     }
 
-    const scanActivity = await this.getScanActivity([electrician.id]);
+    const [scanActivity, redemptionCounts] = await Promise.all([
+      this.getScanActivity([electrician.id]), this.getRedemptionCounts([electrician.id]),
+    ]);
     return this.withScanActivity({
       ...electrician,
+      totalRedemptions: redemptionCounts.get(electrician.id) ?? 0,
       dealerName: (electrician as any).dealer?.name ?? electrician.fallbackDealerName ?? 'SRV Dealer',
       dealerPhone: (electrician as any).dealer?.phone ?? electrician.fallbackDealerPhone ?? null,
       dealerCode: (electrician as any).dealer?.dealerCode ?? electrician.fallbackDealerCode ?? null,
@@ -532,6 +553,10 @@ export class ElectricianService {
       }
     }
 
+    if (data.kycStatus === KYCStatus.REJECTED && !data.kycRejectionReason?.trim()) {
+      data.kycRejectionReason = 'Rejected by admin';
+    }
+    data.kycStatus = electricianKycStatus({ ...electrician, ...data });
     this.normalizeIndependentPointFields(data);
 
     if (passwordHash) {
@@ -1127,7 +1152,8 @@ export class ElectricianService {
     fallbackFrom.setDate(fallbackFrom.getDate() - 30);
     fallbackFrom.setHours(0, 0, 0, 0);
 
-    const fromDate = from ? new Date(from) : fallbackFrom;
+    const allTime = from === 'all';
+    const fromDate = allTime ? new Date(0) : from ? new Date(from) : fallbackFrom;
     const toDate = to ? new Date(to) : now;
     if (Number.isNaN(fromDate.getTime())) {
       fromDate.setTime(fallbackFrom.getTime());
@@ -1165,11 +1191,11 @@ export class ElectricianService {
     const redemptionMap = new Map(redemptionResults.map(r => [r.userId, r]));
     const allUserIds = new Set([...scanMap.keys(), ...redemptionMap.keys()]);
 
-    if (allUserIds.size === 0) return [];
+    if (!allTime && sortBy !== 'wallet' && allUserIds.size === 0) return [];
 
     const electricians = await this.electricianRepository
       .createQueryBuilder('e')
-      .where('e.id IN (:...ids)', { ids: [...allUserIds] })
+      .where(allTime || sortBy === 'wallet' ? '1=1' : 'e.id IN (:...ids)', { ids: [...allUserIds] })
       .andWhere('e.status = :status', { status: 'active' })
       .getMany();
     const actualScanCounts = await this.getScanActivity(electricians.map((electrician) => electrician.id));
@@ -1196,6 +1222,7 @@ export class ElectricianService {
     });
 
     result.sort((a, b) => {
+      if (sortBy === 'wallet') return Number(b.walletBalance) - Number(a.walletBalance);
       if (sortBy === 'scans') return b.periodScans - a.periodScans;
       if (sortBy === 'redemptions') return b.periodRedemptions - a.periodRedemptions;
       return b.periodPoints - a.periodPoints;

@@ -14,6 +14,22 @@ export class SupportService {
     private notificationRepository: Repository<Notification>,
   ) {}
 
+  private async enrichUsers(tickets: SupportTicket[]) {
+    const ids = [...new Set(tickets.map(ticket => ticket.userId).filter(Boolean))];
+    if (!ids.length) return tickets.map(ticket => ({ ...ticket, userPhone: null }));
+    const accounts = await this.supportTicketRepository.query(`
+      SELECT id::text, name, phone, 'electrician' AS role FROM electricians WHERE id::text = ANY($1::text[])
+      UNION ALL SELECT id::text, name, phone, 'dealer' FROM dealers WHERE id::text = ANY($1::text[])
+      UNION ALL SELECT id::text, name, phone, 'user' FROM app_users WHERE id::text = ANY($1::text[])
+      UNION ALL SELECT id::text, name, phone, 'counterboy' FROM counterboys WHERE id::text = ANY($1::text[])
+    `, [ids]);
+    const users = new Map(accounts.map((account: any) => [`${account.role}:${account.id}`, account]));
+    return tickets.map(ticket => {
+      const account: any = users.get(`${ticket.userRole}:${ticket.userId}`);
+      return { ...ticket, userName: ticket.userName || account?.name, userPhone: account?.phone ?? null };
+    });
+  }
+
   async getTickets(
     page: number = 1,
     limit: number = 20,
@@ -41,7 +57,7 @@ export class SupportService {
     const [data, total] = await queryBuilder.getManyAndCount();
 
     return {
-      data,
+      data: await this.enrichUsers(data),
       total,
       page,
       limit,
@@ -58,7 +74,7 @@ export class SupportService {
       throw new NotFoundException('Support ticket not found');
     }
 
-    return ticket;
+    return (await this.enrichUsers([ticket]))[0];
   }
 
   async respond(id: string, message: string, adminId: string) {

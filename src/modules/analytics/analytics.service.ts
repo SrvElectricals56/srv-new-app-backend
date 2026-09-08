@@ -108,11 +108,13 @@ export class AnalyticsService {
       this.productOrderRepository.createQueryBuilder('product_order')
         .where('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
         .andWhere(`(
-          product_order.status IN (:...customerRequestStatuses)
-          OR product_order."refundStatus" = :refundPending
+          product_order.status = :newOrder
+          OR (product_order."customerActionAt" IS NOT NULL AND (
+            product_order.status IN (:...customerRequestStatuses) OR product_order."refundStatus" = :refundPending
+          ))
         )`, {
+          newOrder: ProductOrderStatus.PENDING,
           customerRequestStatuses: [
-            ProductOrderStatus.PENDING,
             ProductOrderStatus.CANCELLED,
             ProductOrderStatus.RETURNED,
           ],

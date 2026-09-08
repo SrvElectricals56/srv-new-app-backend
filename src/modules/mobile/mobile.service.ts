@@ -457,14 +457,14 @@ export class MobileService {
     user: any,
     role: UserRole,
     newBalance: number,
-    _pointsDelta: number,
+    pointsDelta: number,
   ) {
     const updateData: Record<string, any> = {
       walletBalance: newBalance,
     };
 
     if (role !== UserRole.DEALER) {
-      const syncedPoints = Math.max(0, Number(newBalance ?? 0));
+      const syncedPoints = Math.max(0, Number(user.totalPoints ?? 0) + pointsDelta);
       updateData.totalPoints = syncedPoints;
 
       if (role === UserRole.ELECTRICIAN) {
@@ -1488,7 +1488,7 @@ export class MobileService {
       const newScans = Number(userRecord.totalScans ?? 0) + 1;
       const newWallet = balanceBefore + points;
       const updateData: Record<string, any> = {
-        totalPoints: newWallet,
+        totalPoints: Number(userRecord.totalPoints ?? 0) + points,
         totalScans: newScans,
         walletBalance: newWallet,
         lastActivityAt: new Date(),
@@ -1500,7 +1500,7 @@ export class MobileService {
         userRole === UserRole.USER
       ) {
         updateData.tier = this.tierService.calculateElectricianTier(
-          newWallet,
+          updateData.totalPoints,
         ) as any;
       }
 

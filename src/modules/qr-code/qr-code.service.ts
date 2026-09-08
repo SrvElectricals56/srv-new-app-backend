@@ -935,13 +935,21 @@ export class QrCodeService {
   }
 
   async findFirstScan(id: string) {
-    const qrCode = await this.qrCodeRepository
+    // Keep each lookup indexable. Casting millions of IDs in an OR query
+    // forced a full table scan for an ordinary QR value.
+    let qrCode = await this.qrCodeRepository
       .createQueryBuilder('qrCode')
       .leftJoinAndSelect('qrCode.product', 'product')
-      .where('"qrCode"."id"::text = :candidate', { candidate: id })
-      .orWhere('LOWER("qrCode"."code") = LOWER(:candidate)', { candidate: id })
-      .orWhere('"qrCode"."legacyId"::text = :candidate', { candidate: id })
+      .where('LOWER("qrCode"."code") = LOWER(:candidate)', { candidate: id })
       .getOne();
+    if (!qrCode && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      qrCode = await this.qrCodeRepository.findOne({ where: { id }, relations: ['product'] });
+    }
+    if (!qrCode && /^\d{1,18}$/.test(id)) {
+      qrCode = await this.qrCodeRepository.createQueryBuilder('qrCode')
+        .leftJoinAndSelect('qrCode.product', 'product')
+        .where('"qrCode"."legacyId" = :legacyId', { legacyId: id }).getOne();
+    }
     if (!qrCode) {
       throw new NotFoundException(`QR code "${id}" not found`);
     }
