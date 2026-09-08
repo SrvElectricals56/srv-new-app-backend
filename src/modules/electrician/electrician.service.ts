@@ -1199,6 +1199,7 @@ export class ElectricianService {
       .andWhere('e.status = :status', { status: 'active' })
       .getMany();
     const actualScanCounts = await this.getScanActivity(electricians.map((electrician) => electrician.id));
+    const actualRedemptionCounts = await this.getRedemptionCounts(electricians.map((electrician) => electrician.id));
 
     const result = electricians.map(e => {
       const s = scanMap.get(e.id);
@@ -1214,7 +1215,7 @@ export class ElectricianService {
         walletBalance: e.walletBalance,
         totalPoints: e.totalPoints,
         totalScans: actualScanCounts.get(e.id)?.totalScans ?? 0,
-        totalRedemptions: e.totalRedemptions,
+        totalRedemptions: actualRedemptionCounts.get(e.id) ?? 0,
         periodPoints: s ? Number(s.periodPoints) : 0,
         periodScans: s ? Number(s.periodScans) : 0,
         periodRedemptions: r ? Number(r.periodRedemptions) : 0,

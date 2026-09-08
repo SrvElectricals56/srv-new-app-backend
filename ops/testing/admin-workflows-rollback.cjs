@@ -13,6 +13,7 @@ const { RedemptionService } = require('/app/dist/modules/redemption/redemption.s
 const { MobileAuthService } = require('/app/dist/modules/mobile-auth/mobile-auth.service');
 const { QrCodeService } = require('/app/dist/modules/qr-code/qr-code.service');
 const { TierService } = require('/app/dist/common/services/tier.service');
+const { MobileService } = require('/app/dist/modules/mobile/mobile.service');
 
 (async () => {
   assert.equal(process.env.DB_DATABASE, 'srv_staging');
@@ -72,7 +73,14 @@ const { TierService } = require('/app/dist/common/services/tier.service');
     assert.equal(await repo(Scan).count({where:{qrCodeId:qr.id}}),0);
     await assert.rejects(()=>qrService.reverseUsage(qr.id,{id:a.id}));
     sender=await repo(Electrician).findOneBy({id:a.id});assert.equal(sender.walletBalance,105);assert.equal(sender.totalPoints,155);
-    results.push('Used QR reversal removes old award and active scan, reactivates QR, rejects duplicate reversal');
+    const mobile=Object.create(MobileService.prototype);mobile.dataSource=transactional;mobile.tierService=Object.create(TierService.prototype);
+    const rescanned=await mobile.submitScan(a.id,'electrician',qr.code,'single');
+    assert.equal(rescanned.pointsEarned,5);
+    sender=await repo(Electrician).findOneBy({id:a.id});assert.equal(sender.walletBalance,110);assert.equal(sender.totalPoints,160);
+    assert.equal(await repo(Scan).count({where:{qrCodeId:qr.id}}),1);
+    await assert.rejects(()=>mobile.submitScan(a.id,'electrician',qr.code,'single'));
+    sender=await repo(Electrician).findOneBy({id:a.id});assert.equal(sender.walletBalance,110);assert.equal(sender.totalPoints,160);
+    results.push('Used QR reversal removes old award, reactivates QR, mobile rescan awards once, repeated scan and reversal rejected');
     console.log(JSON.stringify({passed:results.length,results}));
   } finally {
     await runner.rollbackTransaction(); await runner.release(); await ds.destroy();
