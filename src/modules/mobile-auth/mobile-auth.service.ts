@@ -439,10 +439,11 @@ export class MobileAuthService {
     if (!dealer) return null;
     const row = await this.electricianRepository.createQueryBuilder('electrician')
       .select('COUNT(DISTINCT electrician.id)', 'count')
+      .addSelect("COUNT(DISTINCT electrician.id) FILTER (WHERE electrician.status = 'active')", 'activeCount')
       .where(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' })
       .getRawOne();
@@ -450,7 +451,7 @@ export class MobileAuthService {
     if (dealer.electricianCount !== electricianCount) {
       await this.dealerRepository.update(dealer.id, { electricianCount });
     }
-    return { ...dealer, electricianCount };
+    return { ...dealer, electricianCount, activeElectricianCount: Number(row?.activeCount ?? 0) };
   }
 
   /** Find user entity by phone + role */
@@ -486,6 +487,7 @@ export class MobileAuthService {
     }
 
     const user = await query.getOne();
+    if (role === 'user' && (user as AppUser | null)?.googleSubject && !(user as AppUser).phoneVerified) return null;
     if (role === 'dealer') {
       return this.hydrateDealerElectricianCount(user as Dealer | null);
     }
@@ -792,7 +794,9 @@ export class MobileAuthService {
       await this.applyReferralReward(manager, data.referralCode, {
         id: savedDealer.id, name: savedDealer.name, phone: savedDealer.phone, role: UserRole.DEALER,
       });
-      return savedDealer;
+      return data.referralCode?.trim()
+        ? manager.getRepository(Dealer).findOneByOrFail({ id: savedDealer.id })
+        : savedDealer;
     });
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'dealer' };
@@ -820,7 +824,10 @@ export class MobileAuthService {
         }));
       }
       otpStore.delete(signupOtpKey);
-      const existingWithDealer = await this.hydrateElectricianDealer(existingElectrician);
+      const refreshed = data.referralCode?.trim()
+        ? await this.electricianRepository.findOneByOrFail({ id: existingElectrician.id })
+        : existingElectrician;
+      const existingWithDealer = await this.hydrateElectricianDealer(refreshed);
       const tokens = await this.generateTokens({
         sub: existingElectrician.id,
         phone: existingElectrician.phone,
@@ -933,7 +940,9 @@ export class MobileAuthService {
         id: savedElectrician.id, name: savedElectrician.name, phone: savedElectrician.phone, role: UserRole.ELECTRICIAN,
       });
 
-      return savedElectrician;
+      return data.referralCode?.trim()
+        ? manager.getRepository(Electrician).findOneByOrFail({ id: savedElectrician.id })
+        : savedElectrician;
     });
 
     otpStore.delete(signupOtpKey);
@@ -971,6 +980,7 @@ export class MobileAuthService {
     const appUser = this.appUserRepository.create({
       name: data.name,
       phone: data.phone,
+      phoneVerified: true,
       email: data.email,
       city: data.city,
       state: data.state,
@@ -989,7 +999,8 @@ export class MobileAuthService {
       await this.applyReferralReward(manager, data.referralCode, {
         id: savedUser.id, name: savedUser.name, phone: savedUser.phone, role: UserRole.USER,
       });
-      return savedUser;
+      // Referral credits update the row inside this transaction; return that balance.
+      return manager.getRepository(AppUser).findOneByOrFail({ id: savedUser.id });
     });
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
@@ -1030,6 +1041,7 @@ export class MobileAuthService {
       user = await this.appUserRepository.save(user);
     } else {
       user.email = googleUser.email;
+      if (!user.googleSubject) user.phoneVerified = true;
       user.googleSubject = googleUser.sub || user.googleSubject;
       if (googleUser.picture) user.profileImage = googleUser.picture;
       if (!user.name?.trim()) user.name = googleUser.name || 'Customer';
@@ -1174,7 +1186,9 @@ export class MobileAuthService {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
       });
 
-      const user = await this.findUserByPhone(payload.phone, payload.role as MobileUserRole);
+      // A verified profile edit can change the phone after this token was issued.
+      // Google accounts may also have no verified phone yet; the signed subject is stable.
+      const user: any = await this.getRepositoryByRole(payload.role).findOne({ where: { id: payload.sub } });
       if (
         !user ||
         user.id !== payload.sub ||
@@ -1252,6 +1266,19 @@ export class MobileAuthService {
       'aadharFrontImage', 'panDocument', 'gstDocument'];
 
     const updateData: any = {};
+    let phoneProofKey: string | undefined;
+    if (role === 'user' && data.phone !== undefined) {
+      const account = await this.appUserRepository.findOne({ where: { id: userId } });
+      if (!account) throw new NotFoundException('User not found');
+      const phone = this.normalizePhone(String(data.phone));
+      if (phone && (phone !== account.phone || (account.googleSubject && !account.phoneVerified))) {
+        if (!/^[6-9]\d{9}$/.test(phone)) throw new BadRequestException('Please enter a valid Indian mobile number');
+        phoneProofKey = this.ensureSignupOtpVerified(phone, 'user', data.phoneVerificationToken);
+        await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'user');
+        updateData.phone = phone;
+        updateData.phoneVerified = true;
+      }
+    }
     commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
     if (role === 'user' || role === 'counterboy') {
       ['language', 'darkMode', 'pushEnabled'].forEach(k => {
@@ -1317,6 +1344,7 @@ export class MobileAuthService {
       );
     }
 
+    if (phoneProofKey) otpStore.delete(phoneProofKey);
     return this.getProfile(userId, role);
   }
 
@@ -1394,7 +1422,7 @@ export class MobileAuthService {
   // ── Format User Profile ────────────────────────────────────────────────────
 
   private getEffectivePoints(user: any) {
-    return Number(user?.walletBalance ?? user?.totalPoints ?? 0);
+    return Number(user?.totalPoints ?? user?.walletBalance ?? 0);
   }
 
   formatUserProfile(user: any, role: string) {
@@ -1458,7 +1486,9 @@ export class MobileAuthService {
           gstNumber: user.gstNumber,
           tier: user.tier,
           electricianCount: user.electricianCount,
+          activeElectricianCount: user.activeElectricianCount ?? 0,
           walletBalance: user.walletBalance,
+          totalPoints: Number(user.walletBalance ?? 0),
           bonusPoints: Number((user as any).bonusPoints ?? 0),
           bonusStatus: (user as any).bonusStatus ?? 'pending',
           status: user.status,
@@ -1489,7 +1519,8 @@ export class MobileAuthService {
           name: user.name,
           // Google-only customer records use an internal unique placeholder because
           // the legacy schema requires a phone. Never present it as a verified number.
-          phone: user.googleSubject ? '' : user.phone,
+          phone: user.googleSubject && !user.phoneVerified ? '' : user.phone,
+          phoneVerified: Boolean(user.phoneVerified || !user.googleSubject),
           email: user.email,
           userCode: user.userCode,
           city: user.city,

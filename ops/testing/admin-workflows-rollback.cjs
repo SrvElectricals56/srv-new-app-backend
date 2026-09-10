@@ -81,6 +81,31 @@ const { MobileService } = require('/app/dist/modules/mobile/mobile.service');
     await assert.rejects(()=>mobile.submitScan(a.id,'electrician',qr.code,'single'));
     sender=await repo(Electrician).findOneBy({id:a.id});assert.equal(sender.walletBalance,110);assert.equal(sender.totalPoints,160);
     results.push('Used QR reversal removes old award, reactivates QR, mobile rescan awards once, repeated scan and reversal rejected');
+
+    Object.assign(mobile, {dealerRepository:repo(Dealer),electricianRepository:repo(Electrician),appUserRepository:repo(AppUser),counterBoyRepository:repo(CounterBoy),walletRepository:repo(Wallet),scanRepository:repo(Scan),redemptionRepository:repo(Redemption)});
+    const dealer=await repo(Dealer).save(repo(Dealer).create({name:'QA Network Dealer',phone:`QA-${randomUUID()}`,dealerCode:`QA-${randomUUID()}`,town:'QA',district:'QA',state:'QA',address:'QA',walletBalance:75,bonusPoints:5}));
+    await repo(Electrician).update(a.id,{dealerId:dealer.id,status:'active'});
+    await repo(Electrician).update(b.id,{dealerId:null,fallbackDealerCode:dealer.dealerCode.toLowerCase(),status:'inactive'});
+    const network=await mobile.getDealerElectricians(dealer.id,1,50);
+    assert.equal(network.total,2);assert.equal(network.activeElectricianCount,1);
+    Object.assign(auth,{dealerRepository:repo(Dealer),electricianRepository:repo(Electrician)});
+    const dealerProfile=auth.formatUserProfile(await auth.hydrateDealerElectricianCount(dealer),'dealer');
+    const dealerWallet=await mobile.getWallet(dealer.id,'dealer');
+    assert.equal(dealerProfile.electricianCount,network.total);assert.equal(dealerWallet.activeElectricianCount,1);
+    assert.equal(dealerProfile.totalPoints,75);assert.equal(dealerWallet.totalPoints,75);assert.equal(dealerProfile.bonusPoints,5);
+    results.push('Dealer profile, network and wallet counts match; active members counted separately; transferable points are separate from commission');
+
+    const gift=await repo(Product).save(repo(Product).create({name:'QA Gift',sub:'QA',category:'gift',subCategory:'electrician',price:0,points:100,stock:1,isActive:true}));
+    await assert.rejects(()=>mobile.redeemReward(a.id,'electrician',{schemeId:gift.id,shippingAddress:''}),/complete delivery address/);
+    const address='House 25, Model Town, Ludhiana, Punjab 141001';
+    const giftResult=await mobile.redeemReward(a.id,'electrician',{schemeId:gift.id,shippingAddress:address});
+    const GiftOrder=entity('gift-order','GiftOrder');
+    assert.equal((await repo(GiftOrder).findOneBy({giftProductId:gift.id,userId:a.id})).shippingAddress,address);
+    const history=await mobile.getWallet(a.id,'electrician',1,100);
+    assert.equal(history.transactions.total,await repo(Wallet).count({where:{userId:a.id}}));
+    assert.equal(history.transactions.data.filter(row=>row.referenceId===giftResult.redemptionId).length,1);
+    assert.equal(new Set(history.transactions.data.map(row=>row.id)).size,history.transactions.data.length);
+    results.push('Gift requires an address and saves it with the order; wallet returns one ledger transaction and the exact database count');
     console.log(JSON.stringify({passed:results.length,results}));
   } finally {
     await runner.rollbackTransaction(); await runner.release(); await ds.destroy();

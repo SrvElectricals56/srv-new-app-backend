@@ -588,11 +588,12 @@ export class MobileService {
       await this.updateUserByRole(userId, role, { totalScans: actualScanCount });
     }
 
+    const network = normalizedRole === UserRole.DEALER ? await this.getDealerElectricians(userId, 1, 1) : null;
     const balance = Number((user as any)?.walletBalance ?? 0);
-    // Dealers earn via bonusPoints (commission from electrician activity), not walletBalance
+    // Dealer commission is separate from the transferable points wallet.
     const isDealer = normalizedRole === UserRole.DEALER;
     const totalPoints = isDealer
-      ? Number((user as any)?.bonusPoints ?? 0)
+      ? balance
       : Number((user as any)?.totalPoints ?? 0);
 
     return {
@@ -606,6 +607,8 @@ export class MobileService {
       totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
       totalPoints,
       totalScans: actualScanCount,
+      electricianCount: network?.total ?? 0,
+      activeElectricianCount: network?.activeElectricianCount ?? 0,
     };
   }
 
@@ -1383,8 +1386,8 @@ export class MobileService {
         .select('COUNT(DISTINCT electrician.id)', 'count')
         .where(`(
           electrician.dealerId = :dealerId
-          OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
-          OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+          OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
             = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
         )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
         .getRawOne(),
@@ -1677,6 +1680,8 @@ export class MobileService {
       totalredeemedwallet_amount: summary.totalredeemedwallet_amount,
       totalPoints: summary.totalPoints,
       totalScans: summary.totalScans,
+      electricianCount: summary.electricianCount,
+      activeElectricianCount: summary.activeElectricianCount,
       transactions: {
         data: enrichedTransactions,
         total,
@@ -2268,10 +2273,12 @@ export class MobileService {
       ])
       .where(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone });
+
+    const activeElectricianCount = await qb.clone().andWhere('electrician.status = :activeStatus', { activeStatus: 'active' }).getCount();
 
     if (search) {
       qb.andWhere(
@@ -2282,7 +2289,7 @@ export class MobileService {
 
     qb.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return { data, total, activeElectricianCount, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async getDealerElectriciansCallList(dealerId: string) {
@@ -2328,8 +2335,8 @@ export class MobileService {
       .where('electrician.id = :electricianId', { electricianId })
       .andWhere(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
       .getOne();
