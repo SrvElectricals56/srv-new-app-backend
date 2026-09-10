@@ -84,6 +84,7 @@ const { MobileService } = require('/app/dist/modules/mobile/mobile.service');
 
     Object.assign(mobile, {dealerRepository:repo(Dealer),electricianRepository:repo(Electrician),appUserRepository:repo(AppUser),counterBoyRepository:repo(CounterBoy),walletRepository:repo(Wallet),scanRepository:repo(Scan),redemptionRepository:repo(Redemption)});
     const dealer=await repo(Dealer).save(repo(Dealer).create({name:'QA Network Dealer',phone:`QA-${randomUUID()}`,dealerCode:`QA-${randomUUID()}`,town:'QA',district:'QA',state:'QA',address:'QA',walletBalance:75,bonusPoints:5}));
+    await repo(Scan).save(repo(Scan).create({userId:dealer.id,userName:dealer.name,role:'dealer',productId:product.id,productName:product.name,points:0}));
     await repo(Electrician).update(a.id,{dealerId:dealer.id,status:'active'});
     await repo(Electrician).update(b.id,{dealerId:null,fallbackDealerCode:dealer.dealerCode.toLowerCase(),status:'inactive'});
     const network=await mobile.getDealerElectricians(dealer.id,1,50);
@@ -93,7 +94,14 @@ const { MobileService } = require('/app/dist/modules/mobile/mobile.service');
     const dealerWallet=await mobile.getWallet(dealer.id,'dealer');
     assert.equal(dealerProfile.electricianCount,network.total);assert.equal(dealerWallet.activeElectricianCount,1);
     assert.equal(dealerProfile.totalPoints,75);assert.equal(dealerWallet.totalPoints,75);assert.equal(dealerProfile.bonusPoints,5);
+    assert.equal(dealerWallet.totalScans,1);
     results.push('Dealer profile, network and wallet counts match; active members counted separately; transferable points are separate from commission');
+
+    const customer=await repo(AppUser).save(repo(AppUser).create({name:'QA Scanning Customer',phone:`QA-${randomUUID()}`,userCode:`QA-${randomUUID()}`,walletBalance:20,totalPoints:30}));
+    await repo(Scan).save(repo(Scan).create({userId:customer.id,userName:customer.name,role:'user',productId:product.id,productName:product.name,points:0}));
+    const customerWallet=await mobile.getWallet(customer.id,'user');
+    assert.equal(customerWallet.totalScans,1);assert.equal(customerWallet.totalPoints,30);
+    results.push('Dealer and customer wallets remain readable with scan history despite having no stored totalScans column');
 
     const gift=await repo(Product).save(repo(Product).create({name:'QA Gift',sub:'QA',category:'gift',subCategory:'electrician',price:0,points:100,stock:1,isActive:true}));
     await assert.rejects(()=>mobile.redeemReward(a.id,'electrician',{schemeId:gift.id,shippingAddress:''}),/complete delivery address/);

@@ -584,7 +584,10 @@ export class MobileService {
     const actualScanCount = await scanRepo.count({ where: { userId } });
 
     // Keep user row in sync if it drifted
-    if (Number((user as any)?.totalScans ?? 0) !== actualScanCount) {
+    if (
+      (normalizedRole === UserRole.ELECTRICIAN || normalizedRole === UserRole.COUNTERBOY) &&
+      Number((user as any)?.totalScans ?? 0) !== actualScanCount
+    ) {
       await this.updateUserByRole(userId, role, { totalScans: actualScanCount });
     }
 
