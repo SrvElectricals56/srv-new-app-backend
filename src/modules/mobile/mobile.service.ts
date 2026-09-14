@@ -1882,14 +1882,15 @@ export class MobileService {
     });
   }
 
-  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress: string }) {
-    const shippingAddress = data.shippingAddress?.trim();
-    if (!shippingAddress || shippingAddress.length < 10) {
+  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress?: string }) {
+    const hasExplicitAddress = data.shippingAddress !== undefined;
+    if (hasExplicitAddress && (typeof data.shippingAddress !== 'string' || data.shippingAddress.trim().length < 10)) {
       throw new BadRequestException('Enter a complete delivery address before confirming the gift order');
     }
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!product) throw new NotFoundException('Reward scheme not found');
 
@@ -1908,6 +1909,15 @@ export class MobileService {
 
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
+
+      // Installed clients predating address entry omit this field. Use their
+      // saved delivery address, while retaining explicit addresses from newer clients.
+      const shippingAddress = hasExplicitAddress
+        ? data.shippingAddress!.trim()
+        : String((user as any).address ?? '').trim();
+      if (shippingAddress.length < 10) {
+        throw new BadRequestException('Please save your complete delivery address in Profile before confirming the gift order');
+      }
 
       const pointsRequired = Number(product.points ?? 0);
 
