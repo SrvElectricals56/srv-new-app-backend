@@ -168,7 +168,7 @@ describe('MobileAuthService session revocation', () => {
       role: 'electrician',
       tokenVersion: 1,
     });
-    jest.spyOn(context.service as any, 'findUserByPhone').mockResolvedValue({
+    context.electricianRepository.findOne.mockReset().mockResolvedValue({
       id: 'electrician-id',
       phone: signupData.phone,
       role: 'electrician',

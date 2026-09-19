@@ -195,13 +195,16 @@ export class GiftService {
 
     const userIds = [...new Set(data.map((order) => order.userId).filter(Boolean))];
     const owners = userIds.length ? await this.productRepository.query(
-      `SELECT id::text, phone, 'electrician' AS role FROM "electricians" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'dealer' AS role FROM "dealers" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'user' AS role FROM "app_users" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'counterboy' AS role FROM "counterboys" WHERE id::text = ANY($1::text[])`,
+      `SELECT e.id::text, e.phone, 'electrician' AS role, COALESCE(d.name, e."fallbackDealerName") AS "dealerName"
+       FROM electricians e LEFT JOIN dealers d ON d.id = e."dealerId" WHERE e.id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, 'dealer', name FROM dealers WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, 'user', NULL FROM app_users WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT c.id::text, c.phone, 'counterboy', d.name FROM counterboys c
+       LEFT JOIN dealers d ON d.id::text = c."dealerId"::text WHERE c.id::text = ANY($1::text[])`,
       [userIds],
     ) : [];
     const phoneMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.phone]));
+    const dealerMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.dealerName]));
 
     return {
       data: data.map((o) => ({
@@ -210,7 +213,7 @@ export class GiftService {
         userName: o.userName,
         userPhone: phoneMap.get(`${o.role}:${o.userId}`) ?? null,
         userCode: o.userCode ?? '',
-        dealerName: o.dealerName ?? '—',
+        dealerName: dealerMap.get(`${o.role}:${o.userId}`) || o.dealerName || '—',
         giftName: o.giftName,
         giftImage: o.giftImage ?? '',
         pointsUsed: o.pointsUsed,

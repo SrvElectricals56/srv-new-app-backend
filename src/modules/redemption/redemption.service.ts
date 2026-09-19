@@ -61,15 +61,15 @@ export class RedemptionService {
     return 'Silver';
   }
 
-  private buildUserBalanceUpdate(role: UserRole, balanceAfter: number) {
+  private buildUserBalanceUpdate(role: UserRole, balanceAfter: number, totalPoints: number) {
     const updateData: Record<string, any> = {
       walletBalance: balanceAfter,
     };
 
     if (role !== UserRole.DEALER) {
-      updateData.totalPoints = balanceAfter;
+      updateData.totalPoints = totalPoints;
       if (role === UserRole.ELECTRICIAN) {
-        updateData.tier = this.calculateElectricianTier(balanceAfter);
+        updateData.tier = this.calculateElectricianTier(totalPoints);
       }
     }
 
@@ -101,7 +101,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+        this.buildUserBalanceUpdate(redemption.role, balanceAfter, Number((user as any).totalPoints ?? 0) + refundPoints) as any,
       );
     }
 
@@ -159,7 +159,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+        this.buildUserBalanceUpdate(redemption.role, balanceAfter, Math.max(0, Number((user as any).totalPoints ?? 0) - lockedPoints)) as any,
       );
     }
 
@@ -207,7 +207,18 @@ export class RedemptionService {
     status?: RedemptionStatus,
     role?: UserRole,
     userId?: string,
+    from?: string,
+    to?: string,
+    search?: string,
   ) {
+    page = Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
+    limit = Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.floor(limit))) : 20;
+    for (const date of [from, to]) {
+      if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date)) {
+        throw new BadRequestException('Use a valid YYYY-MM-DD date');
+      }
+    }
+    if (from && to && from > to) throw new BadRequestException('Start date must be before end date');
     const skip = (page - 1) * limit;
     const queryBuilder = this.redemptionRepository.createQueryBuilder('redemption');
 
@@ -223,6 +234,20 @@ export class RedemptionService {
       queryBuilder.andWhere('redemption.userId = :userId', { userId });
     }
 
+    if (from) queryBuilder.andWhere(`redemption.requestedAt >= CAST(:from AS date)::timestamp AT TIME ZONE 'Asia/Kolkata'`, { from });
+    if (to) queryBuilder.andWhere(`redemption.requestedAt < (CAST(:to AS date) + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'`, { to });
+    if (search?.trim()) {
+      queryBuilder.andWhere(`(redemption."userName" ILIKE :search OR redemption."userId" ILIKE :search
+        OR redemption.type ILIKE :search OR redemption."rejectionReason" ILIKE :search
+        OR EXISTS (SELECT 1 FROM (
+          SELECT id::text, 'electrician' AS role, name, phone, "electricianCode" AS code FROM electricians
+          UNION ALL SELECT id::text, 'dealer', name, phone, "dealerCode" FROM dealers
+          UNION ALL SELECT id::text, 'user', name, phone, "userCode" FROM app_users
+          UNION ALL SELECT id::text, 'counterboy', name, phone, "counterboyCode" FROM counterboys
+        ) u WHERE u.id = redemption."userId" AND u.role = redemption.role::text
+          AND (u.name ILIKE :search OR u.phone ILIKE :search OR u.code ILIKE :search)))`, { search: `%${search.trim()}%` });
+    }
+    const summaryQuery = queryBuilder.clone();
     queryBuilder
       .orderBy('redemption.requestedAt', 'DESC')
       .skip(skip)
@@ -247,15 +272,10 @@ export class RedemptionService {
       idsByRole.get(UserRole.COUNTERBOY)?.length
         ? this.counterboyRepository.find({ where: { id: In(idsByRole.get(UserRole.COUNTERBOY)!) }, select: ['id', 'name', 'phone', 'counterboyCode'] })
         : Promise.resolve([]),
-      this.redemptionRepository
-        .createQueryBuilder('summary')
-        .select('summary.status', 'status')
+      summaryQuery.select('redemption.status', 'status')
         .addSelect('COUNT(*)::int', 'count')
-        .addSelect('COALESCE(SUM(summary.amount), 0)', 'amount')
-        .where(role ? 'summary.role = :summaryRole' : '1=1', role ? { summaryRole: role } : {})
-        .andWhere(userId ? 'summary.userId = :summaryUserId' : '1=1', userId ? { summaryUserId: userId } : {})
-        .groupBy('summary.status')
-        .getRawMany(),
+        .addSelect('COALESCE(SUM(redemption.amount), 0)', 'amount')
+        .groupBy('redemption.status').getRawMany(),
     ]);
     const userMap = new Map<string, { name: string; phone: string; code?: string | null }>();
     electricians.forEach((user) => userMap.set(`${UserRole.ELECTRICIAN}:${user.id}`, { name: user.name, phone: user.phone, code: user.electricianCode }));
@@ -371,6 +391,10 @@ export class RedemptionService {
       .getOne();
     if (!dealer) return;
 
+    const alreadyCredited = await manager.getRepository(Wallet).findOne({ where: {
+      referenceId: redemption.id, source: TransactionSource.COMMISSION, type: TransactionType.CREDIT,
+    } });
+    if (alreadyCredited) return;
     const commission = Math.round(Number(redemption.points) * 0.05);
     if (commission <= 0) return;
 

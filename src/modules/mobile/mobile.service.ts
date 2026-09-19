@@ -457,14 +457,14 @@ export class MobileService {
     user: any,
     role: UserRole,
     newBalance: number,
-    _pointsDelta: number,
+    pointsDelta: number,
   ) {
     const updateData: Record<string, any> = {
       walletBalance: newBalance,
     };
 
     if (role !== UserRole.DEALER) {
-      const syncedPoints = Math.max(0, Number(newBalance ?? 0));
+      const syncedPoints = Math.max(0, Number(user.totalPoints ?? 0) + pointsDelta);
       updateData.totalPoints = syncedPoints;
 
       if (role === UserRole.ELECTRICIAN) {
@@ -584,15 +584,19 @@ export class MobileService {
     const actualScanCount = await scanRepo.count({ where: { userId } });
 
     // Keep user row in sync if it drifted
-    if (Number((user as any)?.totalScans ?? 0) !== actualScanCount) {
+    if (
+      (normalizedRole === UserRole.ELECTRICIAN || normalizedRole === UserRole.COUNTERBOY) &&
+      Number((user as any)?.totalScans ?? 0) !== actualScanCount
+    ) {
       await this.updateUserByRole(userId, role, { totalScans: actualScanCount });
     }
 
+    const network = normalizedRole === UserRole.DEALER ? await this.getDealerElectricians(userId, 1, 1) : null;
     const balance = Number((user as any)?.walletBalance ?? 0);
-    // Dealers earn via bonusPoints (commission from electrician activity), not walletBalance
+    // Dealer commission is separate from the transferable points wallet.
     const isDealer = normalizedRole === UserRole.DEALER;
     const totalPoints = isDealer
-      ? Number((user as any)?.bonusPoints ?? 0)
+      ? balance
       : Number((user as any)?.totalPoints ?? 0);
 
     return {
@@ -606,6 +610,8 @@ export class MobileService {
       totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
       totalPoints,
       totalScans: actualScanCount,
+      electricianCount: network?.total ?? 0,
+      activeElectricianCount: network?.activeElectricianCount ?? 0,
     };
   }
 
@@ -1383,8 +1389,8 @@ export class MobileService {
         .select('COUNT(DISTINCT electrician.id)', 'count')
         .where(`(
           electrician.dealerId = :dealerId
-          OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
-          OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+          OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
             = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
         )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
         .getRawOne(),
@@ -1488,7 +1494,7 @@ export class MobileService {
       const newScans = Number(userRecord.totalScans ?? 0) + 1;
       const newWallet = balanceBefore + points;
       const updateData: Record<string, any> = {
-        totalPoints: newWallet,
+        totalPoints: Number(userRecord.totalPoints ?? 0) + points,
         totalScans: newScans,
         walletBalance: newWallet,
         lastActivityAt: new Date(),
@@ -1500,7 +1506,7 @@ export class MobileService {
         userRole === UserRole.USER
       ) {
         updateData.tier = this.tierService.calculateElectricianTier(
-          newWallet,
+          updateData.totalPoints,
         ) as any;
       }
 
@@ -1677,6 +1683,8 @@ export class MobileService {
       totalredeemedwallet_amount: summary.totalredeemedwallet_amount,
       totalPoints: summary.totalPoints,
       totalScans: summary.totalScans,
+      electricianCount: summary.electricianCount,
+      activeElectricianCount: summary.activeElectricianCount,
       transactions: {
         data: enrichedTransactions,
         total,
@@ -1874,14 +1882,15 @@ export class MobileService {
     });
   }
 
-  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress: string }) {
-    const shippingAddress = data.shippingAddress?.trim();
-    if (!shippingAddress || shippingAddress.length < 10) {
+  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress?: string }) {
+    const hasExplicitAddress = data.shippingAddress !== undefined;
+    if (hasExplicitAddress && (typeof data.shippingAddress !== 'string' || data.shippingAddress.trim().length < 10)) {
       throw new BadRequestException('Enter a complete delivery address before confirming the gift order');
     }
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!product) throw new NotFoundException('Reward scheme not found');
 
@@ -1900,6 +1909,15 @@ export class MobileService {
 
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
+
+      // Installed clients predating address entry omit this field. Use their
+      // saved delivery address, while retaining explicit addresses from newer clients.
+      const shippingAddress = hasExplicitAddress
+        ? data.shippingAddress!.trim()
+        : String((user as any).address ?? '').trim();
+      if (shippingAddress.length < 10) {
+        throw new BadRequestException('Please save your complete delivery address in Profile before confirming the gift order');
+      }
 
       const pointsRequired = Number(product.points ?? 0);
 
@@ -2268,10 +2286,12 @@ export class MobileService {
       ])
       .where(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone });
+
+    const activeElectricianCount = await qb.clone().andWhere('electrician.status = :activeStatus', { activeStatus: 'active' }).getCount();
 
     if (search) {
       qb.andWhere(
@@ -2282,7 +2302,7 @@ export class MobileService {
 
     qb.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return { data, total, activeElectricianCount, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async getDealerElectriciansCallList(dealerId: string) {
@@ -2328,8 +2348,8 @@ export class MobileService {
       .where('electrician.id = :electricianId', { electricianId })
       .andWhere(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
       .getOne();
