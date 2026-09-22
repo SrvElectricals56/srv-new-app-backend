@@ -519,6 +519,15 @@ export class ElectricianService {
     } as Electrician & { dealerName?: string | null; dealerPhone?: string | null; dealerCode?: string | null }, scanActivity.get(electrician.id));
   }
 
+  async approveAllKyc() {
+    const result = await this.electricianRepository.createQueryBuilder()
+      .update()
+      .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
+      .where('"kycStatus" <> :status', { status: 'verified' })
+      .execute();
+    return { approved: result.affected ?? 0 };
+  }
+
   async update(id: string, updateElectricianDto: UpdateElectricianDto) {
     const electrician = await this.findOne(id);
 
@@ -556,7 +565,10 @@ export class ElectricianService {
     if (data.kycStatus === KYCStatus.REJECTED && !data.kycRejectionReason?.trim()) {
       data.kycRejectionReason = 'Rejected by admin';
     }
-    data.kycStatus = electricianKycStatus({ ...electrician, ...data });
+    // An explicit admin decision must survive unrelated profile edits.
+    if (data.kycStatus && data.kycStatus !== KYCStatus.REJECTED) {
+      data.kycRejectionReason = null;
+    }
     this.normalizeIndependentPointFields(data);
 
     if (passwordHash) {

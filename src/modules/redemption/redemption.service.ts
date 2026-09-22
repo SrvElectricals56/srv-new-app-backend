@@ -336,6 +336,7 @@ export class RedemptionService {
 
     const reason = rejectionReason?.trim() || 'Rejected by admin';
 
+    let changed = false;
     await this.dataSource.transaction(async (manager) => {
       const redemption = await manager.getRepository(Redemption)
         .createQueryBuilder('redemption')
@@ -347,6 +348,8 @@ export class RedemptionService {
         throw new NotFoundException('Redemption not found');
       }
 
+      if (redemption.status === nextStatus) return;
+      changed = true;
       await this.syncWalletForStatusChange(redemption, nextStatus, reason, manager);
 
       if (
@@ -366,7 +369,7 @@ export class RedemptionService {
     });
 
     const updated = await this.findOne(id);
-    await this.sendRedemptionNotification(updated, nextStatus);
+    if (changed) await this.sendRedemptionNotification(updated, nextStatus);
     return updated;
   }
 

@@ -116,6 +116,13 @@ export class ElectricianController {
     return this.electricianService.getTop(from, to, sortBy, parseInt(limit));
   }
 
+  @Post('kyc/approve-all')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Approve all unverified KYC records across every page' })
+  approveAllKyc() {
+    return this.electricianService.approveAllKyc();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get electrician by ID' })
   @ApiResponse({ status: 200, description: 'Electrician details' })

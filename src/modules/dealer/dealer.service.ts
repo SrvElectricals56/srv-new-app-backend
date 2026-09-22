@@ -427,6 +427,15 @@ export class DealerService {
       .getRawMany();
   }
 
+  async approveAllKyc() {
+    const result = await this.dealerRepository.createQueryBuilder()
+      .update()
+      .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
+      .where('"kycStatus" <> :status', { status: 'verified' })
+      .execute();
+    return { approved: result.affected ?? 0 };
+  }
+
   async update(id: string, updateDealerDto: UpdateDealerDto) {
     const dealer = await this.findOne(id);
 

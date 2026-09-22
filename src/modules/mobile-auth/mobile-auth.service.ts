@@ -1312,10 +1312,6 @@ export class MobileAuthService {
       }
     }
 
-    if (role === 'electrician' && data.aadharFrontImage !== undefined) {
-      updateData.kycStatus = String(data.aadharFrontImage ?? '').trim() ? 'verified' : 'pending';
-      updateData.kycRejectionReason = null;
-    }
 
     if (Object.keys(updateData).length > 0) {
       switch (role) {

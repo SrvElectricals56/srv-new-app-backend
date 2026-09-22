@@ -125,6 +125,13 @@ export class DealerController {
     return this.dealerService.removeSubDealer(id);
   }
 
+  @Post('kyc/approve-all')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Approve all unverified KYC records across every page' })
+  approveAllKyc() {
+    return this.dealerService.approveAllKyc();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get dealer by ID' })
   @ApiResponse({ status: 200, description: 'Dealer details' })
