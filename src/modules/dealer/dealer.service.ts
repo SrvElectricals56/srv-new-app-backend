@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, EntityManager } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { CreateDealerDto } from './dto/create-dealer.dto';
 import { UpdateDealerDto } from './dto/update-dealer.dto';
@@ -107,7 +107,7 @@ export class DealerService {
                 sd."firstSeenAt", sd."lastSeenAt"
          FROM "sub_dealers" sd
          LEFT JOIN "electricians" e
-           ON RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+           ON e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
             = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
          WHERE NOT EXISTS (
            SELECT 1 FROM "dealers" registered
@@ -187,7 +187,7 @@ export class DealerService {
               e."fallbackDealerName", e."fallbackDealerPhone", e."fallbackDealerCode",
               e."totalPoints", e."totalScans", e."walletBalance", e."joinedDate"
        FROM "electricians" e
-       WHERE ($1::text IS NOT NULL AND
+       WHERE ($1::text IS NOT NULL AND e."dealerId" IS NULL AND
               RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
                 = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10))
           OR ($2::text IS NOT NULL AND e."dealerId" IS NULL AND e."fallbackDealerCode" = $2)
@@ -204,6 +204,73 @@ export class DealerService {
       identifier: phone ?? dealerCode,
       identifierType: phone ? 'phone' : 'legacy_code',
     };
+  }
+
+  async getTransferTarget(phone: string, manager: EntityManager = this.dealerRepository.manager) {
+    if (typeof phone !== 'string' || !/^(?:\+91[ -]?|91[ -]?|0)?[6-9][0-9]{9}$/.test(phone.trim())) {
+      throw new BadRequestException('Enter a valid 10-digit dealer mobile number');
+    }
+    const normalized = phone.replace(/\D/g, '').slice(-10);
+    const registered = await manager.query(
+      `SELECT "id", "name", "phone", 'dealer' AS "type" FROM "dealers"
+       WHERE RIGHT(regexp_replace("phone", '\\D', '', 'g'), 10) = $1`, [normalized],
+    );
+    const targets = registered.length ? registered : await manager.query(
+      `SELECT "id", "name", "phone", 'sub_dealer' AS "type" FROM "sub_dealers"
+       WHERE RIGHT(regexp_replace("phone", '\\D', '', 'g'), 10) = $1`, [normalized],
+    );
+    if (!targets.length) throw new NotFoundException('No dealer or SRV sub dealer found with this phone number');
+    if (targets.length !== 1) throw new ConflictException('Multiple dealers match this phone number. Correct duplicate records first.');
+    return targets[0] as { id: string; name: string; phone: string; type: 'dealer' | 'sub_dealer' };
+  }
+
+  async transferSubDealer(id: string, phone: string, targetId: string) {
+    return this.dealerRepository.manager.transaction(async (manager) => {
+      // Lock association tables in a fixed order to serialize transfers and signups.
+      await manager.query('LOCK TABLE "dealers", "sub_dealers", "electricians" IN SHARE ROW EXCLUSIVE MODE');
+      const target = await this.getTransferTarget(phone, manager);
+      if (target.id !== targetId) throw new ConflictException('Destination changed. Check the dealer phone number again.');
+      const sources = await manager.query('SELECT "phone" FROM "sub_dealers" WHERE "id"::text = $1', [id]);
+      const sourcePhone = sources[0]?.phone ?? null;
+      const codes = sourcePhone ? [] : await manager.query(
+        `SELECT "fallbackDealerCode" AS "code" FROM "electricians"
+         WHERE "dealerId" IS NULL AND ('legacy-code-' || md5("fallbackDealerCode")) = $1 LIMIT 1`, [id],
+      );
+      const sourceCode = codes[0]?.code ?? null;
+      if (!sourcePhone && !sourceCode) throw new NotFoundException('Sub dealer not found');
+      if (target.id === id || (sourcePhone && sourcePhone.replace(/\D/g, '').slice(-10) === phone.replace(/\D/g, '').slice(-10))) {
+        throw new BadRequestException('Choose a different dealer phone number');
+      }
+      const result = await manager.query(
+        `UPDATE "electricians" SET "dealerId" = $3::uuid,
+           "fallbackDealerName" = $4, "fallbackDealerPhone" = $5,
+           "fallbackDealerCode" = NULL, "updatedAt" = now()
+         WHERE "dealerId" IS NULL AND (
+           ($1::text IS NOT NULL AND RIGHT(regexp_replace(COALESCE("fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace($1, '\\D', '', 'g'), 10))
+           OR ($2::text IS NOT NULL AND "fallbackDealerCode" = $2))
+         RETURNING "id"`,
+        [sourcePhone, sourceCode, target.type === 'dealer' ? target.id : null,
+          target.type === 'sub_dealer' ? target.name : null,
+          target.type === 'sub_dealer' ? target.phone : null],
+      );
+      const moved = Array.isArray(result[0]) ? result[0] : result;
+      if (!moved.length) throw new ConflictException('No electricians remain linked to this sub dealer. Refresh the list.');
+      if (target.type === 'dealer') {
+        await manager.query(
+          `UPDATE "dealers" SET "electricianCount" = (SELECT COUNT(*) FROM "electricians" WHERE "dealerId" = $1),
+           "updatedAt" = now() WHERE "id" = $1`, [target.id],
+        );
+      } else {
+        await manager.query(
+          `UPDATE "sub_dealers" SET "electricianCount" = (SELECT COUNT(*) FROM "electricians"
+           WHERE "dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE("fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace($2, '\\D', '', 'g'), 10)), "lastSeenAt" = now() WHERE "id" = $1`, [target.id, target.phone],
+        );
+      }
+      if (sourcePhone) await manager.query('DELETE FROM "sub_dealers" WHERE "id"::text = $1', [id]);
+      return { movedElectricians: moved.length, dealer: target };
+    });
   }
 
   async removeSubDealer(id: string) {

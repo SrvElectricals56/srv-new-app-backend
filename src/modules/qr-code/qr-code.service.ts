@@ -634,12 +634,15 @@ export class QrCodeService {
           b."productName",
           p."sku" AS "productSku",
           b."generatedDate",
+          b."createdBy",
+          COALESCE(NULLIF(btrim(a."name"), ''), 'Not recorded') AS "generatedBy",
           b."points",
           b."qty",
           b."usedQty",
           b."activeQty"
         FROM "qr_code_batches" b
         LEFT JOIN "products" p ON p."id"::text = b."productId"::text
+        LEFT JOIN "admins" a ON a."id"::text = b."createdBy"::text
         ${whereSql}
         ORDER BY b."batchNo" DESC NULLS LAST, b."generatedDate" DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
