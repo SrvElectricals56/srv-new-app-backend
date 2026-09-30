@@ -2453,7 +2453,7 @@ export class MobileService {
       },
       withdrawals: withdrawals.map((withdrawal) => {
         const commission = commissionByWithdrawal.get(withdrawal.id);
-        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * settings.dealerCommissionRate / 100);
+        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * settings.dealerCommissionRate) / 100;
         return {
           id: withdrawal.id,
           amount: Number(withdrawal.amount ?? withdrawal.points ?? 0),

@@ -403,7 +403,7 @@ export class RedemptionService {
     if (alreadyCredited) return;
     const setting = await manager.getRepository(Settings).findOne({ where: { key: 'dealerCommissionRate' } });
     const rate = numericSetting({ dealerCommissionRate: setting?.value }, 'dealerCommissionRate', 5);
-    const commission = Math.round(Number(redemption.points) * rate / 100);
+    const commission = Math.round(Number(redemption.points) * rate) / 100;
     if (commission <= 0) return;
 
     const balanceBefore = Number(dealer.walletBalance ?? 0);
