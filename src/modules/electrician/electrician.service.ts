@@ -57,14 +57,14 @@ export class ElectricianService {
     return points;
   }
 
-  private normalizeIndependentPointFields(data: Record<string, any>) {
+  private async normalizeIndependentPointFields(data: Record<string, any>) {
     const totalProvided = data.totalPoints !== undefined;
     const walletProvided = data.walletBalance !== undefined;
     if (!totalProvided && !walletProvided) return;
 
     if (totalProvided) {
       data.totalPoints = this.parsePoints(data.totalPoints);
-      data.tier = this.tierService.calculateElectricianTier(data.totalPoints);
+      data.tier = await this.tierService.calculateElectricianTier(data.totalPoints);
     }
     if (walletProvided) data.walletBalance = this.parsePoints(data.walletBalance);
   }
@@ -247,10 +247,10 @@ export class ElectricianService {
       data.kycRejectionReason = 'Rejected by admin';
     }
     data.kycStatus = electricianKycStatus(data);
-    this.normalizeIndependentPointFields(data);
+    await this.normalizeIndependentPointFields(data);
     if (data.totalPoints === undefined) {
       data.totalPoints = 0;
-      data.tier = this.tierService.calculateElectricianTier(0);
+      data.tier = await this.tierService.calculateElectricianTier(0);
     }
     if (data.walletBalance === undefined) data.walletBalance = 0;
 
@@ -569,7 +569,7 @@ export class ElectricianService {
     if (data.kycStatus && data.kycStatus !== KYCStatus.REJECTED) {
       data.kycRejectionReason = null;
     }
-    this.normalizeIndependentPointFields(data);
+    await this.normalizeIndependentPointFields(data);
 
     if (passwordHash) {
       data.passwordHash = passwordHash;
@@ -1079,7 +1079,7 @@ export class ElectricianService {
           const { id, joinedDate, updatedAt, ...updateData } = mapped;
           if (updateData.totalPoints !== undefined) {
             const points = Number(updateData.totalPoints);
-            updateData.tier = this.tierService.calculateElectricianTier(points);
+            updateData.tier = await this.tierService.calculateElectricianTier(points);
           }
           await this.electricianRepository.update(existing.id, updateData);
           updated++;
@@ -1093,7 +1093,7 @@ export class ElectricianService {
             phone: data.phone,
           });
           const points = Number(data.totalPoints ?? 0);
-          data.tier = this.tierService.calculateElectricianTier(points);
+          data.tier = await this.tierService.calculateElectricianTier(points);
           const entity = this.electricianRepository.create(data);
           await this.electricianRepository.save(entity as any);
           if (data.dealerId) await this.tierService.syncDealerTier(data.dealerId);

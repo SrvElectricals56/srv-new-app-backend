@@ -1,12 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { UpdateSettingDto } from './dto/update-setting.dto';
 import { PointsConfigDto } from './dto/points-config.dto';
 import { Settings } from '../../database/entities/settings.entity';
 import { PointsConfig } from '../../database/entities/points-config.entity';
 import { Product } from '../../database/entities/product.entity';
+import { numericSetting, validateAppSetting } from '../../common/utils/app-settings.util';
 
 @Injectable()
 export class SettingsService {
@@ -302,29 +303,34 @@ export class SettingsService {
 
   async update(key: string, updateSettingDto: UpdateSettingDto, adminId: string) {
     const { value, description } = updateSettingDto;
+    validateAppSetting(key, value);
 
-    const existingSetting = await this.settingsRepository.findOne({
-      where: { key },
+    await this.dataSource.transaction(async manager => {
+      const repository = manager.getRepository(Settings);
+      const existingSetting = await repository.findOne({
+        where: { key },
+      });
+
+      if (existingSetting) {
+        await repository.update(existingSetting.id, {
+          value,
+          description,
+          updatedBy: adminId,
+          updatedAt: new Date(),
+        });
+      } else {
+        const newSetting = repository.create({
+          id: randomUUID(),
+          key,
+          value,
+          description,
+          updatedBy: adminId,
+          updatedAt: new Date(),
+        });
+        await repository.save(newSetting);
+      }
+      await this.syncConfiguredTiers(manager, [key]);
     });
-
-    if (existingSetting) {
-      await this.settingsRepository.update(existingSetting.id, {
-        value,
-        description,
-        updatedBy: adminId,
-        updatedAt: new Date(),
-      });
-    } else {
-      const newSetting = this.settingsRepository.create({
-        id: randomUUID(),
-        key,
-        value,
-        description,
-        updatedBy: adminId,
-        updatedAt: new Date(),
-      });
-      await this.settingsRepository.save(newSetting);
-    }
 
     return this.findOne(key);
   }
@@ -335,6 +341,7 @@ export class SettingsService {
     }
 
     const entries = Object.entries(settings);
+    entries.forEach(([key, value]) => validateAppSetting(key, value));
     if (!entries.length) {
       throw new BadRequestException('At least one setting is required');
     }
@@ -367,12 +374,34 @@ export class SettingsService {
           }));
         }
       }
+      await this.syncConfiguredTiers(manager, entries.map(([key]) => key));
     });
 
     return {
       message: 'App settings saved successfully',
       updated: entries.length,
     };
+  }
+
+  private async syncConfiguredTiers(manager: EntityManager, keys: string[]) {
+    const groups = [
+      { table: 'electricians', keys: ['silverMin', 'goldMin', 'platinumMin', 'diamondMin'], defaults: [0, 1001, 5001, 10001], metric: 'e."totalPoints"' },
+      { table: 'dealers', keys: ['dealerSilverMin', 'dealerGoldMin', 'dealerPlatinumMin', 'dealerDiamondMin'], defaults: [0, 11, 26, 51], metric: '(SELECT COUNT(*) FROM electricians member WHERE member."dealerId" = e.id)' },
+    ].filter(group => group.keys.some(key => keys.includes(key)));
+    if (!groups.length) return;
+    const map = Object.fromEntries((await manager.getRepository(Settings).find()).map(row => [row.key, row.value]));
+    for (const group of groups) {
+      const limits = group.keys.map((key, i) => numericSetting(map, key, group.defaults[i]));
+      if (limits[0] !== 0 || limits.some((value, i) => i > 0 && value <= limits[i - 1])) {
+        throw new BadRequestException('Tier thresholds must start at 0 and increase from Silver to Diamond');
+      }
+      // Only fixed identifiers from the groups above are interpolated.
+      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::${group.table}_tier_enum
+        FROM (SELECT e.id, CASE WHEN ${group.metric} >= $3 THEN 'Diamond'
+          WHEN ${group.metric} >= $2 THEN 'Platinum' WHEN ${group.metric} >= $1 THEN 'Gold'
+          ELSE 'Silver' END AS tier FROM ${group.table} e) next
+        WHERE e.id = next.id AND e.tier::text IS DISTINCT FROM next.tier`, limits.slice(1));
+    }
   }
 
   async configurePoints(pointsConfigDto: PointsConfigDto, adminId: string) {

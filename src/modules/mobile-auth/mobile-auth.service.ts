@@ -20,6 +20,8 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Scan } from '../../database/entities/scan.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { Settings } from '../../database/entities/settings.entity';
+import { pointSettings } from '../../common/utils/app-settings.util';
 import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
 import { ElectricianSubCategory, TransactionSource, TransactionType, UserRole, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
@@ -136,7 +138,7 @@ export class MobileAuthService {
       );
     } else {
       const totalPoints = Number(before.totalPoints ?? 0) + points;
-      const tier = this.tierService.calculateElectricianTier(totalPoints);
+      const tier = await this.tierService.calculateElectricianTier(totalPoints);
       await manager.query(
         `UPDATE "${table}"
          SET "walletBalance" = $2,
@@ -156,7 +158,7 @@ export class MobileAuthService {
       amount: points,
       balanceBefore,
       balanceAfter,
-      description: `Referral reward: ${member.name} and ${otherMember.name} received ${points} points`,
+      description: `Referral reward: ${member.name} received ${points} points for referral with ${otherMember.name}`,
       referenceId: otherMember.id,
       referenceType: 'referral',
     }));
@@ -173,19 +175,23 @@ export class MobileAuthService {
       throw new BadRequestException('You cannot use your own referral code.');
     }
 
+    const rows = await manager.getRepository(Settings).find();
+    const settings = Object.fromEntries(rows.map(row => [row.key, row.value]));
+    if (settings.referralEnabled === 'false') return;
+    const rewards = pointSettings(settings);
     const rewardId = randomUUID();
     const inserted = await manager.query(
       `INSERT INTO "referral_rewards"
         (id, "referrerUserId", "referrerRole", "refereeUserId", "refereeRole", "referralCode", points, "createdAt")
-       VALUES ($1,$2,$3,$4,$5,$6,20,now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,now())
        ON CONFLICT ("refereeUserId", "refereeRole") DO NOTHING
        RETURNING id`,
-      [rewardId, referrer.id, referrer.role, referee.id, referee.role, referrer.code],
+      [rewardId, referrer.id, referrer.role, referee.id, referee.role, referrer.code, rewards.referrerBonus],
     );
     if (!inserted.length) return;
 
-    await this.creditReferralMember(manager, referrer, referee, 20);
-    await this.creditReferralMember(manager, referee, referrer, 20);
+    if (rewards.referrerBonus > 0) await this.creditReferralMember(manager, referrer, referee, rewards.referrerBonus);
+    if (rewards.refereeBonus > 0) await this.creditReferralMember(manager, referee, referrer, rewards.refereeBonus);
   }
 
   private shouldDeliverSms(): boolean {
@@ -1300,13 +1306,17 @@ export class MobileAuthService {
 
     // If any KYC document is being submitted, set kycStatus to pending
     const kycDocFields = ['aadharFrontImage', 'panDocument', 'gstDocument'];
-    const hasKycDoc = kycDocFields.some(k => data[k] !== undefined && data[k] !== null && data[k] !== '');
+    const hasKycDoc = kycDocFields.some(k => data[k] !== undefined);
     if (hasKycDoc) {
       // Move to pending for any status except already pending
       // This covers: not_submitted, rejected, AND verified (re-verification after doc change)
       const currentUser = await this.getProfile(userId, role);
       const currentKycStatus = (currentUser as any).kycStatus;
-      if (currentKycStatus !== 'pending') {
+      const documentsChanged = kycDocFields.some(k =>
+        data[k] !== undefined && (data[k] || null) !== ((currentUser as any)[k] || null),
+      );
+      const resubmitting = currentKycStatus !== 'verified' && kycDocFields.some(k => Boolean(data[k]));
+      if ((documentsChanged || resubmitting) && currentKycStatus !== 'pending') {
         updateData.kycStatus = 'pending';
         updateData.kycRejectionReason = null;
       }

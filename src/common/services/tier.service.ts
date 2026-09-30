@@ -19,6 +19,8 @@ import { Repository } from 'typeorm';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Dealer } from '../../database/entities/dealer.entity';
 import { MemberTier } from '../enums';
+import { Settings } from '../../database/entities/settings.entity';
+import { numericSetting } from '../utils/app-settings.util';
 
 @Injectable()
 export class TierService {
@@ -27,21 +29,25 @@ export class TierService {
     private electricianRepo: Repository<Electrician>,
     @InjectRepository(Dealer)
     private dealerRepo: Repository<Dealer>,
+    @InjectRepository(Settings)
+    private settingsRepo: Repository<Settings>,
   ) {}
 
   // ─── Tier calculation helpers ─────────────────────────────────────────────
 
-  calculateElectricianTier(points: number): MemberTier {
-    if (points >= 10000) return MemberTier.DIAMOND;
-    if (points >= 5001) return MemberTier.PLATINUM;
-    if (points >= 1001) return MemberTier.GOLD;
+  async calculateElectricianTier(points: number): Promise<MemberTier> {
+    const map = Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
+    if (points >= numericSetting(map, 'diamondMin', 10001)) return MemberTier.DIAMOND;
+    if (points >= numericSetting(map, 'platinumMin', 5001)) return MemberTier.PLATINUM;
+    if (points >= numericSetting(map, 'goldMin', 1001)) return MemberTier.GOLD;
     return MemberTier.SILVER;
   }
 
-  calculateDealerTier(electricianCount: number): MemberTier {
-    if (electricianCount >= 501) return MemberTier.DIAMOND;
-    if (electricianCount >= 301) return MemberTier.PLATINUM;
-    if (electricianCount >= 101) return MemberTier.GOLD;
+  async calculateDealerTier(electricianCount: number): Promise<MemberTier> {
+    const map = Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
+    if (electricianCount >= numericSetting(map, 'dealerDiamondMin', 51)) return MemberTier.DIAMOND;
+    if (electricianCount >= numericSetting(map, 'dealerPlatinumMin', 26)) return MemberTier.PLATINUM;
+    if (electricianCount >= numericSetting(map, 'dealerGoldMin', 11)) return MemberTier.GOLD;
     return MemberTier.SILVER;
   }
 
@@ -57,7 +63,7 @@ export class TierService {
     });
     if (!electrician) return MemberTier.SILVER;
 
-    const newTier = this.calculateElectricianTier(electrician.totalPoints);
+    const newTier = await this.calculateElectricianTier(electrician.totalPoints);
     if (newTier !== electrician.tier) {
       await this.electricianRepo.update(electricianId, { tier: newTier });
     }
@@ -72,7 +78,7 @@ export class TierService {
     newTotalPoints: number,
     newWalletBalance?: number,
   ): Promise<MemberTier> {
-    const newTier = this.calculateElectricianTier(newTotalPoints);
+    const newTier = await this.calculateElectricianTier(newTotalPoints);
     const update: Partial<Electrician> = {
       totalPoints: newTotalPoints,
       tier: newTier,
@@ -94,7 +100,7 @@ export class TierService {
     const count = await this.electricianRepo.count({
       where: { dealerId },
     });
-    const newTier = this.calculateDealerTier(count);
+    const newTier = await this.calculateDealerTier(count);
 
     await this.dealerRepo.update(dealerId, {
       electricianCount: count,
@@ -119,12 +125,12 @@ export class TierService {
     const electricians = await this.electricianRepo.find({
       select: ['id', 'totalPoints', 'tier'],
     });
-    const updates = electricians
-      .map((e) => ({
+    const updates = (await Promise.all(electricians
+      .map(async (e) => ({
         id: e.id,
-        newTier: this.calculateElectricianTier(e.totalPoints),
+        newTier: await this.calculateElectricianTier(e.totalPoints),
         currentTier: e.tier,
-      }))
+      }))))
       .filter((e) => e.newTier !== e.currentTier);
 
     await Promise.all(

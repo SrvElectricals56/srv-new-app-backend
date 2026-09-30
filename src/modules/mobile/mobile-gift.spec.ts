@@ -7,6 +7,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 describe('Gift redemption compatibility with installed apps', () => {
   function setup() {
     const service: any = Object.create(MobileService.prototype);
+    service.getAppSettings = jest.fn().mockResolvedValue({ giftsEnabled: true });
     const product = { id: 'gift', name: 'Gift', category: 'gift', subCategory: 'electrician', points: 100, stock: 1 };
     const user = { id: 'owner', name: 'Test', walletBalance: 500, totalPoints: 650, address: '  House 42, Main Road, Ludhiana  ' };
     const repos = new Map<any, any>();

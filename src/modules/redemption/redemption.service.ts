@@ -8,6 +8,8 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { Settings } from '../../database/entities/settings.entity';
+import { numericSetting } from '../../common/utils/app-settings.util';
 import { NotificationStatus, RedemptionStatus, TransactionSource, TransactionType, UserRole } from '../../common/enums';
 import { Notification } from '../../database/entities/notification.entity';
 
@@ -54,14 +56,15 @@ export class RedemptionService {
       .getOne();
   }
 
-  private calculateElectricianTier(points: number) {
-    if (points >= 10000) return 'Diamond';
-    if (points >= 5001) return 'Platinum';
-    if (points >= 1001) return 'Gold';
+  private async calculateElectricianTier(points: number, manager: EntityManager) {
+    const map = Object.fromEntries((await manager.getRepository(Settings).find()).map(row => [row.key, row.value]));
+    if (points >= numericSetting(map, 'diamondMin', 10001)) return 'Diamond';
+    if (points >= numericSetting(map, 'platinumMin', 5001)) return 'Platinum';
+    if (points >= numericSetting(map, 'goldMin', 1001)) return 'Gold';
     return 'Silver';
   }
 
-  private buildUserBalanceUpdate(role: UserRole, balanceAfter: number, totalPoints: number) {
+  private async buildUserBalanceUpdate(role: UserRole, balanceAfter: number, totalPoints: number, manager: EntityManager) {
     const updateData: Record<string, any> = {
       walletBalance: balanceAfter,
     };
@@ -69,7 +72,7 @@ export class RedemptionService {
     if (role !== UserRole.DEALER) {
       updateData.totalPoints = totalPoints;
       if (role === UserRole.ELECTRICIAN) {
-        updateData.tier = this.calculateElectricianTier(totalPoints);
+        updateData.tier = await this.calculateElectricianTier(totalPoints, manager);
       }
     }
 
@@ -101,7 +104,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        this.buildUserBalanceUpdate(redemption.role, balanceAfter, Number((user as any).totalPoints ?? 0) + refundPoints) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Number((user as any).totalPoints ?? 0) + refundPoints, manager) as any,
       );
     }
 
@@ -159,7 +162,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        this.buildUserBalanceUpdate(redemption.role, balanceAfter, Math.max(0, Number((user as any).totalPoints ?? 0) - lockedPoints)) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Math.max(0, Number((user as any).totalPoints ?? 0) - lockedPoints), manager) as any,
       );
     }
 
@@ -398,7 +401,9 @@ export class RedemptionService {
       referenceId: redemption.id, source: TransactionSource.COMMISSION, type: TransactionType.CREDIT,
     } });
     if (alreadyCredited) return;
-    const commission = Math.round(Number(redemption.points) * 0.05);
+    const setting = await manager.getRepository(Settings).findOne({ where: { key: 'dealerCommissionRate' } });
+    const rate = numericSetting({ dealerCommissionRate: setting?.value }, 'dealerCommissionRate', 5);
+    const commission = Math.round(Number(redemption.points) * rate / 100);
     if (commission <= 0) return;
 
     const balanceBefore = Number(dealer.walletBalance ?? 0);
@@ -424,7 +429,7 @@ export class RedemptionService {
         amount: commission,
         balanceBefore,
         balanceAfter,
-        description: `5% commission on electrician withdrawal - ${electrician.name}`,
+        description: `${rate}% commission on electrician withdrawal - ${electrician.name}`,
         referenceId: redemption.id,
         referenceType: 'redemption',
       }),

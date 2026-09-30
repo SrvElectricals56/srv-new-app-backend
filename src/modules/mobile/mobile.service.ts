@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { pointSettings } from '../../common/utils/app-settings.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
@@ -453,7 +454,7 @@ export class MobileService {
       .getOne();
   }
 
-  private buildTransferBalanceUpdate(
+  private async buildTransferBalanceUpdate(
     user: any,
     role: UserRole,
     newBalance: number,
@@ -468,7 +469,7 @@ export class MobileService {
       updateData.totalPoints = syncedPoints;
 
       if (role === UserRole.ELECTRICIAN) {
-        updateData.tier = this.tierService.calculateElectricianTier(syncedPoints);
+        updateData.tier = await this.tierService.calculateElectricianTier(syncedPoints);
       }
     }
 
@@ -1110,6 +1111,9 @@ export class MobileService {
     }
     return {
       maintenanceMode: map['maintenanceMode'] === 'true',
+      ...pointSettings(map),
+      dealerBonusRate: pointSettings(map).dealerCommissionRate,
+      transferPointsEnabled: map['transferPointsEnabled'] !== 'false',
       maintenanceMessage: map['maintenanceMessage'] ?? 'App is under maintenance. Please try again later.',
       supportPhone: map['supportPhone'] ?? '+91 88376 84004',
       supportEmail: map['supportEmail'] ?? 'info@srvelectricals.com',
@@ -1411,6 +1415,8 @@ export class MobileService {
   // ── Scan ───────────────────────────────────────────────────────────────────
 
   async submitScan(userId: string, role: string, qrCode: string, mode: 'single' | 'multi') {
+    const settings = await this.getAppSettings();
+    if (!settings.scanEnabled) throw new BadRequestException('Scanning is currently disabled');
     const qrCandidates = extractQrCodeCandidates(qrCode);
     if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
@@ -1455,6 +1461,18 @@ export class MobileService {
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
       const userRecord = user as any;
+
+      if (settings.maxPointsPerDay > 0) {
+        // The account lock above serializes concurrent scans for this user.
+        const earned = await manager.getRepository(Scan).createQueryBuilder('scan')
+          .select('COALESCE(SUM(scan.points), 0)', 'points')
+          .where('scan.userId = :userId AND scan.role = :role', { userId, role: userRole })
+          .andWhere("(scan.scannedAt AT TIME ZONE 'Asia/Kolkata')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date")
+          .getRawOne();
+        if (Number(earned?.points ?? 0) + points > settings.maxPointsPerDay) {
+          throw new BadRequestException(`Daily scan limit is ${settings.maxPointsPerDay} points`);
+        }
+      }
 
       const scan = manager.getRepository(Scan).create({
         userId,
@@ -1505,7 +1523,7 @@ export class MobileService {
         userRole === UserRole.COUNTERBOY ||
         userRole === UserRole.USER
       ) {
-        updateData.tier = this.tierService.calculateElectricianTier(
+        updateData.tier = await this.tierService.calculateElectricianTier(
           updateData.totalPoints,
         ) as any;
       }
@@ -1725,6 +1743,10 @@ export class MobileService {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Amount must be greater than 0');
     }
+    const settings = await this.getAppSettings();
+    if (amount < settings.minRedemptionPoints) {
+      throw new BadRequestException(`Minimum withdrawal is ${settings.minRedemptionPoints} points`);
+    }
 
     const normalizedRole = this.normalizeRole(role);
 
@@ -1851,7 +1873,7 @@ export class MobileService {
       await this.updateUserByRole(
         userId,
         role,
-        this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -amount),
+        await this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -amount),
         manager,
       );
 
@@ -1883,6 +1905,8 @@ export class MobileService {
   }
 
   async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress?: string }) {
+    const settings = await this.getAppSettings();
+    if (!settings.giftsEnabled) throw new BadRequestException('Gift redemption is currently disabled');
     const hasExplicitAddress = data.shippingAddress !== undefined;
     if (hasExplicitAddress && (typeof data.shippingAddress !== 'string' || data.shippingAddress.trim().length < 10)) {
       throw new BadRequestException('Enter a complete delivery address before confirming the gift order');
@@ -1962,7 +1986,7 @@ export class MobileService {
         await this.updateUserByRole(
           userId,
           role,
-          this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -pointsRequired),
+          await this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -pointsRequired),
           manager,
         );
       }
@@ -2034,6 +2058,11 @@ export class MobileService {
     if (!Number.isFinite(data.points) || data.points <= 0) {
       throw new BadRequestException('Points must be greater than 0');
     }
+    const settings = await this.getAppSettings();
+    if (!settings.transferPointsEnabled) throw new BadRequestException('Points transfers are currently disabled');
+    if (data.points < settings.minTransferPoints) {
+      throw new BadRequestException(`Minimum transfer is ${settings.minTransferPoints} points`);
+    }
 
     return this.dataSource.transaction(async (manager) => {
       const normalizedRole = this.normalizeRole(role);
@@ -2080,7 +2109,7 @@ export class MobileService {
       await this.updateUserByRole(
         userId,
         role,
-        this.buildTransferBalanceUpdate(
+        await this.buildTransferBalanceUpdate(
           sender,
           normalizedRole,
           senderNewBalance,
@@ -2091,7 +2120,7 @@ export class MobileService {
       await this.updateUserByRole(
         receiver.id,
         receiverData.role,
-        this.buildTransferBalanceUpdate(
+        await this.buildTransferBalanceUpdate(
           receiver,
           receiverData.role,
           receiverNewBalance,
@@ -2327,6 +2356,7 @@ export class MobileService {
     page: number = 1,
     limit: number = 50,
   ) {
+    const settings = await this.getAppSettings();
     const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
     const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 100) : 50;
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
@@ -2423,7 +2453,7 @@ export class MobileService {
       },
       withdrawals: withdrawals.map((withdrawal) => {
         const commission = commissionByWithdrawal.get(withdrawal.id);
-        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * 0.05);
+        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * settings.dealerCommissionRate / 100);
         return {
           id: withdrawal.id,
           amount: Number(withdrawal.amount ?? withdrawal.points ?? 0),
@@ -2442,6 +2472,8 @@ export class MobileService {
   }
 
   async addElectrician(dealerId: string, body: any) {
+    const settings = await this.getAppSettings();
+    if (!settings.dealerCanAddElectrician) throw new BadRequestException('Adding electricians is currently disabled');
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new NotFoundException('Dealer not found');
 

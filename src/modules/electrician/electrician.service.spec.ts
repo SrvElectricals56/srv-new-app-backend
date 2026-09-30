@@ -22,24 +22,24 @@ describe('ElectricianService admin point fields', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('updates total points without changing wallet balance', () => {
+  it('updates total points without changing wallet balance', async () => {
     const data: Record<string, unknown> = { totalPoints: 1500 };
-    normalize(data);
+    await normalize(data);
     expect(data).toEqual({ totalPoints: 1500, tier: 'Gold' });
     expect(data).not.toHaveProperty('walletBalance');
   });
 
-  it('updates wallet balance without changing total points or tier', () => {
+  it('updates wallet balance without changing total points or tier', async () => {
     const data: Record<string, unknown> = { walletBalance: 275 };
-    normalize(data);
+    await normalize(data);
     expect(data).toEqual({ walletBalance: 275 });
     expect(data).not.toHaveProperty('totalPoints');
     expect(data).not.toHaveProperty('tier');
   });
 
-  it('rejects negative values independently', () => {
-    expect(() => normalize({ walletBalance: -1 })).toThrow(BadRequestException);
-    expect(() => normalize({ totalPoints: -1 })).toThrow(BadRequestException);
+  it('rejects negative values independently', async () => {
+    await expect(normalize({ walletBalance: -1 })).rejects.toThrow(BadRequestException);
+    await expect(normalize({ totalPoints: -1 })).rejects.toThrow(BadRequestException);
   });
 });
 
