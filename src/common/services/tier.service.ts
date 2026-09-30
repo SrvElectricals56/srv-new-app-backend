@@ -35,16 +35,16 @@ export class TierService {
 
   // ─── Tier calculation helpers ─────────────────────────────────────────────
 
-  async calculateElectricianTier(points: number): Promise<MemberTier> {
-    const map = Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
+  async calculateElectricianTier(points: number, settings?: Record<string, string>): Promise<MemberTier> {
+    const map = settings ?? Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
     if (points >= numericSetting(map, 'diamondMin', 10001)) return MemberTier.DIAMOND;
     if (points >= numericSetting(map, 'platinumMin', 5001)) return MemberTier.PLATINUM;
     if (points >= numericSetting(map, 'goldMin', 1001)) return MemberTier.GOLD;
     return MemberTier.SILVER;
   }
 
-  async calculateDealerTier(electricianCount: number): Promise<MemberTier> {
-    const map = Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
+  async calculateDealerTier(electricianCount: number, settings?: Record<string, string>): Promise<MemberTier> {
+    const map = settings ?? Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
     if (electricianCount >= numericSetting(map, 'dealerDiamondMin', 51)) return MemberTier.DIAMOND;
     if (electricianCount >= numericSetting(map, 'dealerPlatinumMin', 26)) return MemberTier.PLATINUM;
     if (electricianCount >= numericSetting(map, 'dealerGoldMin', 11)) return MemberTier.GOLD;
@@ -96,11 +96,11 @@ export class TierService {
    * Recalculate & persist tier for one dealer based on actual electrician count in DB.
    * Also keeps electricianCount column in sync.
    */
-  async syncDealerTier(dealerId: string): Promise<MemberTier> {
+  async syncDealerTier(dealerId: string, settings?: Record<string, string>): Promise<MemberTier> {
     const count = await this.electricianRepo.count({
       where: { dealerId },
     });
-    const newTier = await this.calculateDealerTier(count);
+    const newTier = await this.calculateDealerTier(count, settings);
 
     await this.dealerRepo.update(dealerId, {
       electricianCount: count,
@@ -114,21 +114,23 @@ export class TierService {
    * Sync ALL dealers' tiers in one pass (useful for bulk operations / cron).
    */
   async syncAllDealerTiers(): Promise<void> {
+    const settings = Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
     const dealers = await this.dealerRepo.find({ select: ['id'] });
-    await Promise.all(dealers.map((d) => this.syncDealerTier(d.id)));
+    await Promise.all(dealers.map((d) => this.syncDealerTier(d.id, settings)));
   }
 
   /**
    * Sync ALL electricians' tiers in one pass.
    */
   async syncAllElectricianTiers(): Promise<void> {
+    const settings = Object.fromEntries((await this.settingsRepo.find()).map(row => [row.key, row.value]));
     const electricians = await this.electricianRepo.find({
       select: ['id', 'totalPoints', 'tier'],
     });
     const updates = (await Promise.all(electricians
       .map(async (e) => ({
         id: e.id,
-        newTier: await this.calculateElectricianTier(e.totalPoints),
+        newTier: await this.calculateElectricianTier(e.totalPoints, settings),
         currentTier: e.tier,
       }))))
       .filter((e) => e.newTier !== e.currentTier);
