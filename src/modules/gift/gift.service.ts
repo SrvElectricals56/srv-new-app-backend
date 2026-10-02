@@ -277,6 +277,25 @@ export class GiftService {
     return saved;
   }
 
+  private async findLinkedRedemption(order: GiftOrder): Promise<Redemption | null> {
+    const candidates = await this.redemptionRepository.find({
+      where: {
+        userId: order.userId,
+        role: order.role,
+        points: order.pointsUsed,
+        type: 'gift',
+        giftProductId: order.giftProductId,
+      },
+      order: { requestedAt: 'DESC' },
+    });
+    const orderedAt = new Date(order.orderedAt).getTime();
+    return candidates
+      .filter((candidate) => candidate.status !== RedemptionStatus.REJECTED
+        && Math.abs(new Date(candidate.requestedAt).getTime() - orderedAt) < 5 * 60 * 1000)
+      .sort((a, b) => Math.abs(new Date(a.requestedAt).getTime() - orderedAt)
+        - Math.abs(new Date(b.requestedAt).getTime() - orderedAt))[0] ?? null;
+  }
+
   async updateOrderStatus(id: string, status: string, extra?: { shippingAddress?: string; rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string }) {
     const order = await this.giftOrderRepository.findOne({ where: { id } });
 
@@ -287,6 +306,10 @@ export class GiftService {
     const validStatuses = Object.values(GiftOrderStatus);
     if (!validStatuses.includes(status as GiftOrderStatus)) {
       throw new BadRequestException(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+    }
+    if ((order.status === GiftOrderStatus.REJECTED || order.status === GiftOrderStatus.DELIVERED)
+      && status !== order.status) {
+      throw new BadRequestException('A completed gift order cannot change status');
     }
 
     const updateData: Partial<GiftOrder> = {
@@ -323,15 +346,7 @@ export class GiftService {
     if (status === GiftOrderStatus.REJECTED && order.status !== GiftOrderStatus.REJECTED) {
       await this.productRepository.increment({ id: order.giftProductId }, 'stock', 1);
 
-      const redemption = await this.redemptionRepository.findOne({
-        where: {
-          userId: order.userId,
-          points: order.pointsUsed,
-          type: 'gift',
-          giftProductId: order.giftProductId,
-        },
-        order: { requestedAt: 'DESC' },
-      });
+      const redemption = await this.findLinkedRedemption(order);
       if (redemption) {
         await this.redemptionService.reject(
           redemption.id,
@@ -344,15 +359,7 @@ export class GiftService {
     await this.giftOrderRepository.update(id, updateData);
 
     if (status !== GiftOrderStatus.REJECTED) {
-      const linkedRedemption = await this.redemptionRepository.findOne({
-        where: {
-          userId: order.userId,
-          points: order.pointsUsed,
-          type: 'gift',
-          giftProductId: order.giftProductId,
-        },
-        order: { requestedAt: 'DESC' },
-      });
+      const linkedRedemption = await this.findLinkedRedemption(order);
 
       if (linkedRedemption) {
         const nextRedemptionStatus =
@@ -387,6 +394,9 @@ export class GiftService {
   async deleteOrder(id: string) {
     const order = await this.giftOrderRepository.findOne({ where: { id } });
     if (!order) throw new NotFoundException('Gift order not found');
+    if (order.status !== GiftOrderStatus.REJECTED) {
+      throw new BadRequestException('Reject and refund the gift order before deleting it');
+    }
     await this.giftOrderRepository.remove(order);
     return { message: 'Gift order deleted successfully' };
   }

@@ -43,6 +43,15 @@ describe('Gift redemption compatibility with installed apps', () => {
     expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 99, New Delivery Road' }));
   });
 
+  it('allows a 75-point gift with exactly 75 wallet points', async () => {
+    const { service, product, user, repos } = setup();
+    product.points = 75;
+    user.walletBalance = 75;
+    const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
+    expect(result.walletBalance).toBe(0);
+    expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ pointsUsed: 75 }));
+  });
+
   it.each(['', 'short', null])('rejects a legacy request with an incomplete profile address (%s) without debiting', async address => {
     const { service, user, repos } = setup();
     user.address = address;

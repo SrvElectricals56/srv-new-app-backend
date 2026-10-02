@@ -1258,10 +1258,10 @@ export class MobileService {
       // 'user' role in app = 'customer' in admin panel — treat as aliases
       // 'counterboy' shares gifts with 'electrician' — both earn by scanning
       const normalizedRole = role === 'user' ? 'customer' : role;
-      qb.andWhere('(LOWER(p.subCategory) = :role OR LOWER(p.subCategory) = :all)', {
-        role: normalizedRole.toLowerCase(),
-        all: 'all',
-      });
+      const allowedRoles = normalizedRole.toLowerCase() === 'counterboy'
+        ? ['counterboy', 'electrician', 'all', 'both']
+        : [normalizedRole.toLowerCase(), 'all', 'both'];
+      qb.andWhere('LOWER(p.subCategory) IN (:...allowedRoles)', { allowedRoles });
     }
 
     qb.orderBy('p.createdAt', 'DESC');
@@ -1923,7 +1923,8 @@ export class MobileService {
       const expectedProductRole = normalizedRole === UserRole.USER
         ? 'customer'
         : String(normalizedRole).toLowerCase();
-      if (!productRole || (productRole !== 'all' && productRole !== expectedProductRole)) {
+      if (!productRole || (!['all', 'both', expectedProductRole].includes(productRole)
+        && !(normalizedRole === UserRole.COUNTERBOY && productRole === 'electrician'))) {
         throw new ForbiddenException('This reward is not available for your role');
       }
 
@@ -1944,6 +1945,9 @@ export class MobileService {
       }
 
       const pointsRequired = Number(product.points ?? 0);
+      if (!Number.isFinite(pointsRequired) || pointsRequired <= 0) {
+        throw new BadRequestException('This gift has no valid point cost');
+      }
 
       // Gift purchases use the user's reward wallet for every role. Dealer
       // bonusPoints are a separate cash-withdrawal balance and must not block
@@ -2256,12 +2260,17 @@ export class MobileService {
       const directGiftName = (redemption as any).giftName;
       const directGiftImage = this.normalizeUploadUrl((redemption as any).giftImage) ?? (redemption as any).giftImage ?? null;
 
-      const matchIndex = unmatchedGiftOrders.findIndex((order) => {
-        const samePoints = Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0);
+      const requestedAt = redemption.requestedAt ? new Date(redemption.requestedAt).getTime() : 0;
+      const matchIndex = unmatchedGiftOrders.reduce((bestIndex, order, index) => {
         const orderedAt = order.orderedAt ? new Date(order.orderedAt).getTime() : 0;
-        const requestedAt = redemption.requestedAt ? new Date(redemption.requestedAt).getTime() : 0;
-        return samePoints && Math.abs(orderedAt - requestedAt) < 5 * 60 * 1000;
-      });
+        const matches = Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0)
+          && (!directGiftProductId || order.giftProductId === directGiftProductId)
+          && Math.abs(orderedAt - requestedAt) < 5 * 60 * 1000;
+        if (!matches) return bestIndex;
+        if (bestIndex < 0) return index;
+        const bestTime = new Date(unmatchedGiftOrders[bestIndex].orderedAt).getTime();
+        return Math.abs(orderedAt - requestedAt) < Math.abs(bestTime - requestedAt) ? index : bestIndex;
+      }, -1);
 
       const order = matchIndex >= 0 ? unmatchedGiftOrders.splice(matchIndex, 1)[0] : undefined;
       return {
