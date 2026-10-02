@@ -2039,6 +2039,7 @@ export class MobileService {
           dealerName,
           role: normalizedRole,
           giftProductId: product.id,
+          redemptionId: redemption.id,
           giftName: product.name,
           giftImage,
           pointsUsed: pointsRequired,
@@ -2261,9 +2262,11 @@ export class MobileService {
       const directGiftImage = this.normalizeUploadUrl((redemption as any).giftImage) ?? (redemption as any).giftImage ?? null;
 
       const requestedAt = redemption.requestedAt ? new Date(redemption.requestedAt).getTime() : 0;
-      const matchIndex = unmatchedGiftOrders.reduce((bestIndex, order, index) => {
+      const linkedIndex = unmatchedGiftOrders.findIndex((order) => order.redemptionId === redemption.id);
+      const matchIndex = linkedIndex >= 0 ? linkedIndex : unmatchedGiftOrders.reduce((bestIndex, order, index) => {
         const orderedAt = order.orderedAt ? new Date(order.orderedAt).getTime() : 0;
-        const matches = Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0)
+        const matches = !order.redemptionId
+          && Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0)
           && (!directGiftProductId || order.giftProductId === directGiftProductId)
           && Math.abs(orderedAt - requestedAt) < 5 * 60 * 1000;
         if (!matches) return bestIndex;

@@ -29,7 +29,7 @@ describe('Gift redemption compatibility with installed apps', () => {
     const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
     expect(result.walletBalance).toBe(400);
     expect(repos.get(GiftOrder).save).toHaveBeenCalledTimes(1);
-    expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 42, Main Road, Ludhiana', pointsUsed: 100 }));
+    expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 42, Main Road, Ludhiana', pointsUsed: 100, redemptionId: expect.any(String) }));
     expect(repos.get(Wallet).save).toHaveBeenCalledTimes(1);
     expect(repos.get(Wallet).save).toHaveBeenCalledWith(expect.objectContaining({ balanceBefore: 500, balanceAfter: 400, amount: 100 }));
     expect(service.updateUserByRole).toHaveBeenCalledWith('owner', 'electrician', expect.objectContaining({ walletBalance: 400, totalPoints: 550 }), expect.anything());

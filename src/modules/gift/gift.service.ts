@@ -278,6 +278,9 @@ export class GiftService {
   }
 
   private async findLinkedRedemption(order: GiftOrder): Promise<Redemption | null> {
+    if (order.redemptionId) {
+      return this.redemptionRepository.findOne({ where: { id: order.redemptionId } });
+    }
     const candidates = await this.redemptionRepository.find({
       where: {
         userId: order.userId,
