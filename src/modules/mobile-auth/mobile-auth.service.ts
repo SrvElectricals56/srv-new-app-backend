@@ -27,6 +27,7 @@ import { ElectricianSubCategory, TransactionSource, TransactionType, UserRole, U
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
+import { buildSmsRetrieverMessage } from '../../common/utils/sms-retriever-message.util';
 import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 // In-memory OTP store (production mein Redis use karein)
@@ -210,9 +211,13 @@ export class MobileAuthService {
     const senderId =
       this.configService.get<string>('SMS_SENDER_ID')?.trim() ||
       this.configService.get<string>('SENDER_ID')?.trim();
-    const templateId =
+    const legacyTemplateId =
       this.configService.get<string>('SMS_TEMPLATE_ID')?.trim() ||
       this.configService.get<string>('TEMPLATE_ID')?.trim();
+    const retrieverTemplateId = this.configService.get<string>('SMS_RETRIEVER_TEMPLATE_ID')?.trim();
+    const retrieverAppHash = this.configService.get<string>('SMS_RETRIEVER_APP_HASH')?.trim();
+    const useRetrieverTemplate = Boolean(retrieverTemplateId && retrieverAppHash);
+    const templateId = useRetrieverTemplate ? retrieverTemplateId : legacyTemplateId;
     const endpoint = this.configService.get<string>('SMS_API_URL')?.trim() || COMBIRDS_SMS_ENDPOINT;
 
     if (!apiKey || !senderId || !templateId) {
@@ -220,7 +225,9 @@ export class MobileAuthService {
     }
 
     const name = String(recipientName ?? 'SRV').trim().replace(/[^A-Za-z .'-]/g, '').slice(0, 40) || 'SRV';
-    const message = APPROVED_OTP_MESSAGE.replace('{{name}}', name).replace('{{otp}}', otp);
+    const message = useRetrieverTemplate
+      ? buildSmsRetrieverMessage(otp, retrieverAppHash!)
+      : APPROVED_OTP_MESSAGE.replace('{{name}}', name).replace('{{otp}}', otp);
 
     try {
       await axios.post(

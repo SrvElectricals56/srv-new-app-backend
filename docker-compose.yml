@@ -3,7 +3,6 @@ services:
     # Keep the image major version aligned with the existing postgres_data
     # volume. PostgreSQL data directories cannot be opened by a different major.
     image: postgres:15-alpine
-    container_name: srv_admin_postgres
     restart: unless-stopped
     command:
       - postgres
@@ -15,7 +14,7 @@ services:
       - log_min_duration_statement=1000
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?4268}
       POSTGRES_DB: ${DB_DATABASE:-srv_admin}
     ports:
       # Database administration is host-local. Remote access should use SSH.
@@ -23,9 +22,6 @@ services:
     shm_size: 256mb
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/upadted.sql:/docker-entrypoint-initdb.d/01-upadted.sql:ro
-      - ./docker/postgres/02-drop-prisma-metadata.sql:/docker-entrypoint-initdb.d/02-drop-prisma-metadata.sql:ro
-      - ./docker/postgres/03-create-current-tables.sql:/docker-entrypoint-initdb.d/03-create-current-tables.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_DATABASE:-srv_admin}']
       interval: 10s
@@ -34,7 +30,6 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:9.17
-    container_name: srv_admin_pgadmin
     restart: unless-stopped
     ports:
       - '127.0.0.1:5050:8080'
@@ -64,7 +59,6 @@ services:
 
   backend:
     build: .
-    container_name: srv_admin_backend
     restart: unless-stopped
     init: true
     ports:
@@ -124,7 +118,6 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
         SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
-    container_name: srv_admin_frontend
     restart: unless-stopped
     init: true
     environment:
@@ -151,7 +144,6 @@ services:
     build:
       context: ../srv-new-app-frontend
       dockerfile: ../srv-new-app-backend/docker/expo-app.Dockerfile
-    container_name: srv_mobile_app
     restart: unless-stopped
     environment:
       CI: 1

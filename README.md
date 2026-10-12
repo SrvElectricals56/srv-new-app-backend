@@ -1,6 +1,6 @@
 # SRV Admin Stack
 
-This repository is the Docker entry point for the SRV backend, PostgreSQL database, pgAdmin, the admin frontend in `../ADMIN-FRONTEND`, and the Expo app in `../NEW APP`.
+This repository is the Docker entry point for the SRV backend, PostgreSQL database, pgAdmin, the admin frontend in `../srv-new-adminpanel`, and the Expo app in `../srv-new-app-frontend`.
 
 ## Services
 
@@ -16,10 +16,10 @@ This repository is the Docker entry point for the SRV backend, PostgreSQL databa
 ## Run Everything
 
 ```powershell
-docker compose up --build
+docker compose up -d --build
 ```
 
-PostgreSQL imports `sql/upadted.sql` automatically when the `postgres_data` volume is first created. pgAdmin is preconfigured with the `SRV Docker Postgres` server; use `DB_PASSWORD` from `.env` if pgAdmin asks for it. Database and pgAdmin ports bind only to loopback and are not exposed to the LAN.
+On a new database volume, the backend creates the schema through TypeORM migrations. This repository does not include a SQL data dump, so a new volume has no application records. Existing data must be restored or imported separately. pgAdmin is preconfigured with the `SRV Docker Postgres` server; use `DB_PASSWORD` from `.env` if pgAdmin asks for it. Database and pgAdmin ports bind only to loopback and are not exposed to the LAN.
 
 See [DATABASE_UI.md](DATABASE_UI.md) for local and production pgAdmin instructions. Production pgAdmin is an opt-in tool profile that is reachable only through an SSH tunnel.
 
@@ -39,24 +39,19 @@ docker compose stop backend
 npm run start:dev
 ```
 
-Keep `DB_SYNCHRONIZE=false` in `.env`. The imported SQL dump already defines the live schema, and the Docker init scripts add the current missing TypeORM tables.
+Keep `DB_SYNCHRONIZE=false` in `.env`. The backend runs migrations at startup.
 
-`DB_HOST=postgres` is only valid inside Docker Compose. For a backend started directly from Windows/VS Code, use `DB_HOST=127.0.0.1` with local PostgreSQL on `5432`, or `DB_HOST=localhost` with Docker PostgreSQL exposed on `5433`. The backend now fails fast with a clear configuration error if these modes are mixed.
+`DB_HOST=postgres` is only valid inside Docker Compose. For a backend started directly from Windows/VS Code, use `DB_HOST=127.0.0.1` with local PostgreSQL on `5432`, or with Docker PostgreSQL exposed on `5433` and `DB_PORT=5433`. The backend fails fast if these modes are mixed.
 
 For deployment, set `NEXT_PUBLIC_API_URL` and `EXPO_PUBLIC_API_URL` to the real public API origin, for example `https://api.your-domain.com/api/v1`. The local default uses `127.0.0.1` only to avoid Windows/WSL `localhost` routing conflicts during development.
 
-## Reload The SQL Dump
+## Database Data
 
-Postgres only runs files in `docker-entrypoint-initdb.d` on a fresh data directory. To reload `sql/upadted.sql` from scratch:
-
-```powershell
-docker compose down -v
-docker compose up --build
-```
+`docker compose down` stops the stack while preserving its PostgreSQL volume. Avoid deleting the volume when you need to keep local data. To load existing data into a new stack, restore a PostgreSQL backup before starting the backend migrations.
 
 ## Mobile App
 
-The Expo app in `../NEW APP` is included in Docker as `mobile-app` and is available as a web preview at:
+The Expo app in `../srv-new-app-frontend` is included in Docker as `mobile-app` and is available as a web preview at:
 
 ```text
 http://localhost:8081

@@ -79,7 +79,7 @@ export class DealerService {
          OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
              = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
        )
-       WHERE d."id" = ANY($1::uuid[])
+       WHERE d."id"::text = ANY($1::text[])
        GROUP BY d."id"`,
       [dealerIds],
     );
@@ -242,7 +242,7 @@ export class DealerService {
         throw new BadRequestException('Choose a different dealer phone number');
       }
       const result = await manager.query(
-        `UPDATE "electricians" SET "dealerId" = $3::uuid,
+        `UPDATE "electricians" SET "dealerId" = $3,
            "fallbackDealerName" = $4, "fallbackDealerPhone" = $5,
            "fallbackDealerCode" = NULL, "updatedAt" = now()
          WHERE "dealerId" IS NULL AND (
