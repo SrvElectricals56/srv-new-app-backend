@@ -7,6 +7,7 @@ import { Wallet } from '../../database/entities/wallet.entity';
 describe('Gift redemption compatibility with installed apps', () => {
   function setup() {
     const service: any = Object.create(MobileService.prototype);
+    service.getAppSettings = jest.fn().mockResolvedValue({ giftsEnabled: true });
     const product = { id: 'gift', name: 'Gift', category: 'gift', subCategory: 'electrician', points: 100, stock: 1 };
     const user = { id: 'owner', name: 'Test', walletBalance: 500, totalPoints: 650, address: '  House 42, Main Road, Ludhiana  ' };
     const repos = new Map<any, any>();
@@ -28,7 +29,7 @@ describe('Gift redemption compatibility with installed apps', () => {
     const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
     expect(result.walletBalance).toBe(400);
     expect(repos.get(GiftOrder).save).toHaveBeenCalledTimes(1);
-    expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 42, Main Road, Ludhiana', pointsUsed: 100 }));
+    expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 42, Main Road, Ludhiana', pointsUsed: 100, redemptionId: expect.any(String) }));
     expect(repos.get(Wallet).save).toHaveBeenCalledTimes(1);
     expect(repos.get(Wallet).save).toHaveBeenCalledWith(expect.objectContaining({ balanceBefore: 500, balanceAfter: 400, amount: 100 }));
     expect(service.updateUserByRole).toHaveBeenCalledWith('owner', 'electrician', expect.objectContaining({ walletBalance: 400, totalPoints: 550 }), expect.anything());
@@ -40,6 +41,15 @@ describe('Gift redemption compatibility with installed apps', () => {
     const { service, repos } = setup();
     await service.redeemReward('owner', 'electrician', { schemeId: 'gift', shippingAddress: '  House 99, New Delivery Road  ' });
     expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 99, New Delivery Road' }));
+  });
+
+  it('allows a 75-point gift with exactly 75 wallet points', async () => {
+    const { service, product, user, repos } = setup();
+    product.points = 75;
+    user.walletBalance = 75;
+    const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
+    expect(result.walletBalance).toBe(0);
+    expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ pointsUsed: 75 }));
   });
 
   it.each(['', 'short', null])('rejects a legacy request with an incomplete profile address (%s) without debiting', async address => {

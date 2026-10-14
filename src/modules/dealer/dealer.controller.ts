@@ -13,6 +13,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagg
 import { DealerService } from './dealer.service';
 import { CreateDealerDto } from './dto/create-dealer.dto';
 import { UpdateDealerDto } from './dto/update-dealer.dto';
+import { TransferSubDealerDto } from './dto/transfer-sub-dealer.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -118,11 +119,30 @@ export class DealerController {
     return this.dealerService.getSubDealerElectricians(id);
   }
 
+  @Get('sub-dealers/transfer-target')
+  @Roles(AdminRole.SUPER_ADMIN)
+  getTransferTarget(@Query('phone') phone: string) {
+    return this.dealerService.getTransferTarget(phone);
+  }
+
+  @Post('sub-dealers/:id/transfer')
+  @Roles(AdminRole.SUPER_ADMIN)
+  transferSubDealer(@Param('id') id: string, @Body() dto: TransferSubDealerDto) {
+    return this.dealerService.transferSubDealer(id, dto.phone, dto.targetId);
+  }
+
   @Delete('sub-dealers/:id')
   @Roles(AdminRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Delete an unregistered sub dealer and unlink associated electricians' })
   removeSubDealer(@Param('id') id: string) {
     return this.dealerService.removeSubDealer(id);
+  }
+
+  @Post('kyc/approve-all')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Approve all unverified KYC records across every page' })
+  approveAllKyc() {
+    return this.dealerService.approveAllKyc();
   }
 
   @Get(':id')

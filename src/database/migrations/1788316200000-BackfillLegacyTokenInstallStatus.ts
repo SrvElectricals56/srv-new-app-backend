@@ -35,7 +35,7 @@ export class BackfillLegacyTokenInstallStatus1788316200000 implements MigrationI
               ),
               "appInstalled" = true
           FROM token_evidence evidence
-          WHERE target.id = evidence."targetId";
+          WHERE target.id::text = evidence."targetId"::text;
         END IF;
 
         IF to_regclass('public.mobile_push_tokens') IS NOT NULL THEN

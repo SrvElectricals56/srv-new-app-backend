@@ -15,7 +15,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
         AND redemption."processedAt" IS NOT DISTINCT FROM redemption."updatedAt"
         AND NOT EXISTS (
           SELECT 1 FROM "legacy_entity_map" map
-          WHERE map."targetTable" = 'redemptions' AND map."targetId" = redemption.id
+          WHERE map."targetTable" = 'redemptions' AND map."targetId"::text = redemption.id::text
         )
     `);
 
@@ -52,7 +52,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
           JOIN legacy_mysql.tbl_users source ON source.user_id = map."sourceId"
           WHERE map."sourceTable" = 'tbl_users' AND map."targetTable" = 'electricians'
             AND map."sourceId" = COALESCE(NULLIF(map.metadata->>'canonicalSourceId', '')::bigint, map."sourceId")
-            AND target.id = map."targetId";
+            AND target.id::text = map."targetId"::text;
 
           UPDATE "dealers" target
           SET "kycStatus" = CASE source.kyc_status::text
@@ -65,7 +65,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
           JOIN legacy_mysql.tbl_users source ON source.user_id = map."sourceId"
           WHERE map."sourceTable" = 'tbl_users' AND map."targetTable" = 'dealers'
             AND map."sourceId" = COALESCE(NULLIF(map.metadata->>'canonicalSourceId', '')::bigint, map."sourceId")
-            AND target.id = map."targetId";
+            AND target.id::text = map."targetId"::text;
 
           UPDATE "app_users" target
           SET "kycStatus" = CASE source.kyc_status::text
@@ -78,7 +78,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
           JOIN legacy_mysql.tbl_users source ON source.user_id = map."sourceId"
           WHERE map."sourceTable" = 'tbl_users' AND map."targetTable" = 'app_users'
             AND map."sourceId" = COALESCE(NULLIF(map.metadata->>'canonicalSourceId', '')::bigint, map."sourceId")
-            AND target.id = map."targetId";
+            AND target.id::text = map."targetId"::text;
 
           WITH install_evidence AS (
             SELECT map."targetTable", map."targetId", MIN(source.created_at) AS installed_at
@@ -97,7 +97,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
                 COALESCE(target."firstAppLoginAt", evidence.installed_at), evidence.installed_at
               )
           FROM install_evidence evidence
-          WHERE evidence."targetTable" = 'electricians' AND target.id = evidence."targetId"
+          WHERE evidence."targetTable" = 'electricians' AND target.id::text = evidence."targetId"::text
             AND evidence.installed_at IS NOT NULL;
 
           WITH install_evidence AS (
@@ -116,7 +116,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
                 COALESCE(target."firstAppLoginAt", evidence.installed_at), evidence.installed_at
               )
           FROM install_evidence evidence
-          WHERE target.id = evidence."targetId" AND evidence.installed_at IS NOT NULL;
+          WHERE target.id::text = evidence."targetId"::text AND evidence.installed_at IS NOT NULL;
 
           WITH install_evidence AS (
             SELECT map."targetId", MIN(source.created_at) AS installed_at
@@ -134,7 +134,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
                 COALESCE(target."firstAppLoginAt", evidence.installed_at), evidence.installed_at
               )
           FROM install_evidence evidence
-          WHERE target.id = evidence."targetId" AND evidence.installed_at IS NOT NULL;
+          WHERE target.id::text = evidence."targetId"::text AND evidence.installed_at IS NOT NULL;
         END IF;
 
         IF to_regclass('legacy_mysql.tbl_withdrawal') IS NOT NULL THEN
@@ -150,7 +150,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
           FROM "legacy_entity_map" map
           JOIN legacy_mysql.tbl_withdrawal source ON source.w_id = map."sourceId"
           WHERE map."sourceTable" = 'tbl_withdrawal' AND map."targetTable" = 'redemptions'
-            AND target.id = map."targetId";
+            AND target.id::text = map."targetId"::text;
         END IF;
 
         IF to_regclass('legacy_mysql.tbl_user_redeem') IS NOT NULL THEN
@@ -165,7 +165,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
           FROM "legacy_entity_map" map
           JOIN legacy_mysql.tbl_user_redeem source ON source.user_redeem_id = map."sourceId"
           WHERE map."sourceTable" = 'tbl_user_redeem' AND map."targetTable" = 'gift_orders'
-            AND target.id = map."targetId";
+            AND target.id::text = map."targetId"::text;
         END IF;
 
         IF to_regclass('legacy_mysql.tbl_wallet_history') IS NOT NULL THEN
@@ -175,7 +175,7 @@ export class ReconcileLegacyAppAndWorkflowState1787390000000 implements Migratio
             AND map."targetTable" = 'wallet_transactions'
             AND source.wallet_id = map."sourceId"
             AND COALESCE(source.wallet_status::text, '1') <> '1'
-            AND target.id = map."targetId";
+            AND target.id::text = map."targetId"::text;
 
           DELETE FROM "legacy_entity_map" map
           USING legacy_mysql.tbl_wallet_history source

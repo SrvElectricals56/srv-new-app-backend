@@ -44,6 +44,9 @@ export class GiftOrder {
   @Column()
   giftProductId: string;
 
+  @Column({ type: 'uuid', nullable: true })
+  redemptionId: string | null;
+
   @Column()
   giftName: string;
 
