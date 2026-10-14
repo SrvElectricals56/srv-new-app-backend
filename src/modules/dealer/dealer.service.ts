@@ -479,7 +479,7 @@ export class DealerService {
     return { message: 'Dealer deleted successfully' };
   }
 
-  async getDealerElectricians(id: string, page: number = 1, limit: number = 20) {
+  async getDealerElectricians(id: string, page: number = 1, limit: number = 20, search?: string) {
     const skip = (page - 1) * limit;
     const dealer = await this.dealerRepository.findOne({ where: { id } });
     if (!dealer) throw new NotFoundException('Dealer not found');
@@ -489,12 +489,127 @@ export class DealerService {
         OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
         OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
-      )`, { dealerId: id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' })
-      .orderBy('electrician.joinedDate', 'DESC')
-      .skip(skip)
-      .take(limit);
+      )`, { dealerId: id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' });
+
+    if (search?.trim()) {
+      query.andWhere(
+        `(electrician.name ILIKE :search
+          OR electrician.phone ILIKE :search
+          OR electrician.electricianCode ILIKE :search
+          OR electrician.city ILIKE :search)`,
+        { search: `%${search.trim()}%` },
+      );
+    }
+
+    query.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
     const [data, total] = await query.getManyAndCount();
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getDealerElectriciansByDealerSearch(
+    dealerSearch: string,
+    page: number = 1,
+    limit: number = 20,
+    electricianSearch?: string,
+  ) {
+    const trimmed = dealerSearch?.trim();
+    if (!trimmed) {
+      return {
+        dealers: [],
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        message: 'Please provide a dealer name, phone number, or dealer code to search',
+      };
+    }
+
+    // Find matching dealers by name, phone, or dealerCode
+    const dealers = await this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select([
+        'dealer.id', 'dealer.name', 'dealer.phone', 'dealer.dealerCode',
+        'dealer.town', 'dealer.state', 'dealer.tier', 'dealer.status',
+      ])
+      .where(
+        `(dealer.name ILIKE :search
+          OR dealer.phone ILIKE :search
+          OR dealer.dealerCode ILIKE :search)`,
+        { search: `%${trimmed}%` },
+      )
+      .orderBy('dealer.name', 'ASC')
+      .getMany();
+
+    if (dealers.length === 0) {
+      return {
+        dealers: [],
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        searchedBy: dealerSearch,
+        message: 'No dealer found matching the provided name, phone number, or dealer code',
+      };
+    }
+
+    // Build combined WHERE covering all matched dealers
+    const skip = (page - 1) * limit;
+    const query = this.electricianRepository.createQueryBuilder('electrician');
+
+    const conditions = dealers.map(
+      (_, i) =>
+        `(electrician."dealerId"::text = :dealerId${i}
+          OR (electrician."dealerId" IS NULL
+              AND NULLIF(btrim(:dealerCode${i}), '') IS NOT NULL
+              AND upper(btrim(electrician."fallbackDealerCode")) = upper(btrim(:dealerCode${i})))
+          OR (electrician."dealerId" IS NULL
+              AND RIGHT(regexp_replace(COALESCE(electrician."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+                = RIGHT(regexp_replace(COALESCE(:dealerPhone${i}, ''), '\\D', '', 'g'), 10))
+        )`,
+    );
+
+    const params: Record<string, string> = {};
+    dealers.forEach((d, i) => {
+      params[`dealerId${i}`] = d.id;
+      params[`dealerCode${i}`] = d.dealerCode ?? '';
+      params[`dealerPhone${i}`] = d.phone ?? '';
+    });
+
+    query.where(`(${conditions.join(' OR ')})`, params);
+
+    if (electricianSearch?.trim()) {
+      query.andWhere(
+        `(electrician.name ILIKE :eSearch
+          OR electrician.phone ILIKE :eSearch
+          OR electrician.electricianCode ILIKE :eSearch
+          OR electrician.city ILIKE :eSearch)`,
+        { eSearch: `%${electricianSearch.trim()}%` },
+      );
+    }
+
+    query.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
+    const [data, total] = await query.getManyAndCount();
+
+    return {
+      dealers: dealers.map((d) => ({
+        id: d.id,
+        name: d.name,
+        phone: d.phone,
+        dealerCode: d.dealerCode,
+        town: d.town,
+        state: d.state,
+        tier: d.tier,
+        status: d.status,
+      })),
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      searchedBy: dealerSearch,
+    };
   }
 
   async getDealerWallet(id: string, page: number = 1, limit: number = 20) {
