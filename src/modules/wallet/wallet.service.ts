@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CreditWalletDto } from './dto/credit-wallet.dto';
 import { DebitWalletDto } from './dto/debit-wallet.dto';
 import { Wallet } from '../../database/entities/wallet.entity';
@@ -59,8 +59,47 @@ export class WalletService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
+    const idsByRole = new Map<UserRole, string[]>();
+    for (const row of data) {
+      idsByRole.set(row.userRole, [...(idsByRole.get(row.userRole) ?? []), row.userId]);
+    }
+    const [electricians, dealers, appUsers, counterboys] = await Promise.all([
+      idsByRole.get(UserRole.ELECTRICIAN)?.length
+        ? this.electricianRepository.find({ where: { id: In(idsByRole.get(UserRole.ELECTRICIAN)!) }, select: ['id', 'name', 'phone', 'electricianCode', 'bankLinked', 'accountHolderName', 'bankAccount', 'ifsc', 'upiId'] })
+        : Promise.resolve([]),
+      idsByRole.get(UserRole.DEALER)?.length
+        ? this.dealerRepository.find({ where: { id: In(idsByRole.get(UserRole.DEALER)!) }, select: ['id', 'name', 'phone', 'dealerCode', 'bankLinked', 'accountHolderName', 'bankAccount', 'ifsc', 'upiId'] })
+        : Promise.resolve([]),
+      idsByRole.get(UserRole.USER)?.length
+        ? this.appUserRepository.find({ where: { id: In(idsByRole.get(UserRole.USER)!) }, select: ['id', 'name', 'phone', 'userCode', 'bankLinked', 'accountHolderName', 'bankAccount', 'ifsc', 'upiId'] })
+        : Promise.resolve([]),
+      idsByRole.get(UserRole.COUNTERBOY)?.length
+        ? this.counterBoyRepository.find({ where: { id: In(idsByRole.get(UserRole.COUNTERBOY)!) }, select: ['id', 'name', 'phone', 'counterboyCode', 'bankLinked', 'accountHolderName', 'bankAccount', 'ifsc', 'upiId'] })
+        : Promise.resolve([]),
+    ]);
+    const accountMap = new Map<string, Record<string, unknown>>();
+    const addAccount = (role: UserRole, user: any, code: string | null | undefined) => {
+      accountMap.set(`${role}:${user.id}`, {
+        userName: user.name,
+        userPhone: user.phone,
+        userCode: code ?? null,
+        bankLinked: Boolean(user.bankLinked),
+        accountHolderName: user.accountHolderName ?? null,
+        bankAccount: user.bankAccount ?? null,
+        ifsc: user.ifsc ?? null,
+        upiId: user.upiId ?? null,
+      });
+    };
+    electricians.forEach((user) => addAccount(UserRole.ELECTRICIAN, user, user.electricianCode));
+    dealers.forEach((user) => addAccount(UserRole.DEALER, user, user.dealerCode));
+    appUsers.forEach((user) => addAccount(UserRole.USER, user, user.userCode));
+    counterboys.forEach((user) => addAccount(UserRole.COUNTERBOY, user, user.counterboyCode));
+
     return {
-      data,
+      data: data.map((row) => ({
+        ...row,
+        ...(accountMap.get(`${row.userRole}:${row.userId}`) ?? {}),
+      })),
       total,
       page,
       limit,

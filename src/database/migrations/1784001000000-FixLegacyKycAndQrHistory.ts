@@ -72,22 +72,8 @@ export class FixLegacyKycAndQrHistory1784001000000 implements MigrationInterface
       ON "qr_codes" ("batchNo" DESC NULLS LAST, "sequenceNo" ASC NULLS LAST, "createdAt" DESC)
     `);
 
-    // Legacy PHP defined status 0 as rejected. Only touch canonical users that
-    // were imported from tbl_users, so genuinely new unsubmitted KYCs remain so.
-    for (const table of ['electricians', 'dealers', 'app_users']) {
-      await queryRunner.query(`
-        UPDATE "${table}" target
-        SET "kycStatus" = 'rejected',
-            "kycRejectionReason" = COALESCE(target."kycRejectionReason", 'Imported legacy KYC status')
-        WHERE target."kycStatus" = 'not_submitted'
-          AND EXISTS (
-            SELECT 1 FROM "legacy_entity_map" map
-            WHERE map."sourceTable" = 'tbl_users'
-              AND map."targetTable" = $1
-              AND map."targetId"::text = target.id::text
-          )
-      `, [table]);
-    }
+    // Legacy KYC state is reconciled from the source row by the dedicated
+    // workflow-state migration. Do not infer a status from import membership.
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

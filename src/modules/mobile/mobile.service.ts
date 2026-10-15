@@ -6,6 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { pointSettings } from '../../common/utils/app-settings.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
@@ -453,22 +454,22 @@ export class MobileService {
       .getOne();
   }
 
-  private buildTransferBalanceUpdate(
+  private async buildTransferBalanceUpdate(
     user: any,
     role: UserRole,
     newBalance: number,
-    _pointsDelta: number,
+    pointsDelta: number,
   ) {
     const updateData: Record<string, any> = {
       walletBalance: newBalance,
     };
 
     if (role !== UserRole.DEALER) {
-      const syncedPoints = Math.max(0, Number(newBalance ?? 0));
+      const syncedPoints = Math.max(0, Number(user.totalPoints ?? 0) + pointsDelta);
       updateData.totalPoints = syncedPoints;
 
       if (role === UserRole.ELECTRICIAN) {
-        updateData.tier = this.tierService.calculateElectricianTier(syncedPoints);
+        updateData.tier = await this.tierService.calculateElectricianTier(syncedPoints);
       }
     }
 
@@ -584,16 +585,20 @@ export class MobileService {
     const actualScanCount = await scanRepo.count({ where: { userId } });
 
     // Keep user row in sync if it drifted
-    if (Number((user as any)?.totalScans ?? 0) !== actualScanCount) {
+    if (
+      (normalizedRole === UserRole.ELECTRICIAN || normalizedRole === UserRole.COUNTERBOY) &&
+      Number((user as any)?.totalScans ?? 0) !== actualScanCount
+    ) {
       await this.updateUserByRole(userId, role, { totalScans: actualScanCount });
     }
 
+    const network = normalizedRole === UserRole.DEALER ? await this.getDealerElectricians(userId, 1, 1) : null;
     const balance = Number((user as any)?.walletBalance ?? 0);
-    // Dealers earn via bonusPoints (commission from electrician activity), not walletBalance
+    // Dealer commission is separate from the transferable points wallet.
     const isDealer = normalizedRole === UserRole.DEALER;
     const totalPoints = isDealer
-      ? Number((user as any)?.bonusPoints ?? 0)
-      : balance;
+      ? balance
+      : Number((user as any)?.totalPoints ?? 0);
 
     return {
       balance,
@@ -606,6 +611,8 @@ export class MobileService {
       totalredeemedwallet_amount: Number(totals?.totalRedeemed ?? 0),
       totalPoints,
       totalScans: actualScanCount,
+      electricianCount: network?.total ?? 0,
+      activeElectricianCount: network?.activeElectricianCount ?? 0,
     };
   }
 
@@ -801,8 +808,23 @@ export class MobileService {
     const addressOf = (row: any) => row.district || row.city || row.town || row.state || row.address || 'Location not added';
 
     if (normalized === 'dealer') {
-      const rows = await this.dealerRepository.find({ where: { status: UserStatus.ACTIVE }, order: { electricianCount: 'DESC', joinedDate: 'ASC' }, take: 5 });
-      return rows.map((row, index) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.electricianCount || 0), valueLabel: 'Associated electricians', address: addressOf(row) }));
+      const rows = await this.dealerRepository.query(
+        `SELECT d.*, COUNT(DISTINCT e."id")::int AS "actualElectricianCount"
+         FROM "dealers" d
+         LEFT JOIN "electricians" e ON (
+           e."dealerId" = d."id"
+           OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
+               AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
+           OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+               = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
+         )
+         WHERE d."status" = $1
+         GROUP BY d."id"
+         ORDER BY COUNT(DISTINCT e."id") DESC, d."joinedDate" ASC
+         LIMIT 5`,
+        [UserStatus.ACTIVE],
+      );
+      return rows.map((row: any, index: number) => ({ rank: index + 1, id: row.id, name: row.name, value: Number(row.actualElectricianCount || 0), valueLabel: 'Associated electricians', address: addressOf(row) }));
     }
 
     if (normalized === 'user' || normalized === 'customer') {
@@ -1089,6 +1111,9 @@ export class MobileService {
     }
     return {
       maintenanceMode: map['maintenanceMode'] === 'true',
+      ...pointSettings(map),
+      dealerBonusRate: pointSettings(map).dealerCommissionRate,
+      transferPointsEnabled: map['transferPointsEnabled'] !== 'false',
       maintenanceMessage: map['maintenanceMessage'] ?? 'App is under maintenance. Please try again later.',
       supportPhone: map['supportPhone'] ?? '+91 88376 84004',
       supportEmail: map['supportEmail'] ?? 'info@srvelectricals.com',
@@ -1233,10 +1258,10 @@ export class MobileService {
       // 'user' role in app = 'customer' in admin panel — treat as aliases
       // 'counterboy' shares gifts with 'electrician' — both earn by scanning
       const normalizedRole = role === 'user' ? 'customer' : role;
-      qb.andWhere('(LOWER(p.subCategory) = :role OR LOWER(p.subCategory) = :all)', {
-        role: normalizedRole.toLowerCase(),
-        all: 'all',
-      });
+      const allowedRoles = normalizedRole.toLowerCase() === 'counterboy'
+        ? ['counterboy', 'electrician', 'all', 'both']
+        : [normalizedRole.toLowerCase(), 'all', 'both'];
+      qb.andWhere('LOWER(p.subCategory) IN (:...allowedRoles)', { allowedRoles });
     }
 
     qb.orderBy('p.createdAt', 'DESC');
@@ -1362,7 +1387,18 @@ export class MobileService {
     if (!dealer.dealerCode?.trim()) {
       throw new BadRequestException('Dealer code is missing for this account. Please contact admin.');
     }
-    const nextElectricianSerial = await this.getNextElectricianSerial(dealer.id, dealer.dealerCode);
+    const [nextElectricianSerial, countRow] = await Promise.all([
+      this.getNextElectricianSerial(dealer.id, dealer.dealerCode),
+      this.electricianRepository.createQueryBuilder('electrician')
+        .select('COUNT(DISTINCT electrician.id)', 'count')
+        .where(`(
+          electrician.dealerId = :dealerId
+          OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+          OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+            = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+        )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
+        .getRawOne(),
+    ]);
     return {
       id: dealer.id,
       name: dealer.name,
@@ -1371,7 +1407,7 @@ export class MobileService {
       town: dealer.town,
       district: dealer.district,
       state: dealer.state,
-      electricianCount: dealer.electricianCount ?? Math.max(0, nextElectricianSerial - 1),
+      electricianCount: Number(countRow?.count ?? 0),
       nextElectricianSerial,
     };
   }
@@ -1379,6 +1415,8 @@ export class MobileService {
   // ── Scan ───────────────────────────────────────────────────────────────────
 
   async submitScan(userId: string, role: string, qrCode: string, mode: 'single' | 'multi') {
+    const settings = await this.getAppSettings();
+    if (!settings.scanEnabled) throw new BadRequestException('Scanning is currently disabled');
     const qrCandidates = extractQrCodeCandidates(qrCode);
     if (!qrCandidates.length) {
       throw new BadRequestException('QR code is required');
@@ -1424,6 +1462,18 @@ export class MobileService {
       if (!user) throw new NotFoundException('User not found');
       const userRecord = user as any;
 
+      if (settings.maxPointsPerDay > 0) {
+        // The account lock above serializes concurrent scans for this user.
+        const earned = await manager.getRepository(Scan).createQueryBuilder('scan')
+          .select('COALESCE(SUM(scan.points), 0)', 'points')
+          .where('scan.userId = :userId AND scan.role = :role', { userId, role: userRole })
+          .andWhere("(scan.scannedAt AT TIME ZONE 'Asia/Kolkata')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date")
+          .getRawOne();
+        if (Number(earned?.points ?? 0) + points > settings.maxPointsPerDay) {
+          throw new BadRequestException(`Daily scan limit is ${settings.maxPointsPerDay} points`);
+        }
+      }
+
       const scan = manager.getRepository(Scan).create({
         userId,
         userName: userRecord.name ?? 'Unknown',
@@ -1462,7 +1512,7 @@ export class MobileService {
       const newScans = Number(userRecord.totalScans ?? 0) + 1;
       const newWallet = balanceBefore + points;
       const updateData: Record<string, any> = {
-        totalPoints: newWallet,
+        totalPoints: Number(userRecord.totalPoints ?? 0) + points,
         totalScans: newScans,
         walletBalance: newWallet,
         lastActivityAt: new Date(),
@@ -1473,8 +1523,8 @@ export class MobileService {
         userRole === UserRole.COUNTERBOY ||
         userRole === UserRole.USER
       ) {
-        updateData.tier = this.tierService.calculateElectricianTier(
-          newWallet,
+        updateData.tier = await this.tierService.calculateElectricianTier(
+          updateData.totalPoints,
         ) as any;
       }
 
@@ -1651,6 +1701,8 @@ export class MobileService {
       totalredeemedwallet_amount: summary.totalredeemedwallet_amount,
       totalPoints: summary.totalPoints,
       totalScans: summary.totalScans,
+      electricianCount: summary.electricianCount,
+      activeElectricianCount: summary.activeElectricianCount,
       transactions: {
         data: enrichedTransactions,
         total,
@@ -1690,6 +1742,10 @@ export class MobileService {
     const amount = Number(data.amount ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Amount must be greater than 0');
+    }
+    const settings = await this.getAppSettings();
+    if (amount < settings.minRedemptionPoints) {
+      throw new BadRequestException(`Minimum withdrawal is ${settings.minRedemptionPoints} points`);
     }
 
     const normalizedRole = this.normalizeRole(role);
@@ -1817,7 +1873,7 @@ export class MobileService {
       await this.updateUserByRole(
         userId,
         role,
-        this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -amount),
+        await this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -amount),
         manager,
       );
 
@@ -1848,10 +1904,17 @@ export class MobileService {
     });
   }
 
-  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string }) {
+  async redeemReward(userId: string, role: string, data: { schemeId: string; note?: string; giftImage?: string; shippingAddress?: string }) {
+    const settings = await this.getAppSettings();
+    if (!settings.giftsEnabled) throw new BadRequestException('Gift redemption is currently disabled');
+    const hasExplicitAddress = data.shippingAddress !== undefined;
+    if (hasExplicitAddress && (typeof data.shippingAddress !== 'string' || data.shippingAddress.trim().length < 10)) {
+      throw new BadRequestException('Enter a complete delivery address before confirming the gift order');
+    }
     return this.dataSource.transaction(async (manager) => {
       const product = await manager.getRepository(Product).findOne({
         where: { id: data.schemeId, category: 'gift', isActive: true },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!product) throw new NotFoundException('Reward scheme not found');
 
@@ -1860,7 +1923,8 @@ export class MobileService {
       const expectedProductRole = normalizedRole === UserRole.USER
         ? 'customer'
         : String(normalizedRole).toLowerCase();
-      if (!productRole || (productRole !== 'all' && productRole !== expectedProductRole)) {
+      if (!productRole || (!['all', 'both', expectedProductRole].includes(productRole)
+        && !(normalizedRole === UserRole.COUNTERBOY && productRole === 'electrician'))) {
         throw new ForbiddenException('This reward is not available for your role');
       }
 
@@ -1871,7 +1935,19 @@ export class MobileService {
       const user = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!user) throw new NotFoundException('User not found');
 
+      // Installed clients predating address entry omit this field. Use their
+      // saved delivery address, while retaining explicit addresses from newer clients.
+      const shippingAddress = hasExplicitAddress
+        ? data.shippingAddress!.trim()
+        : String((user as any).address ?? '').trim();
+      if (shippingAddress.length < 10) {
+        throw new BadRequestException('Please save your complete delivery address in Profile before confirming the gift order');
+      }
+
       const pointsRequired = Number(product.points ?? 0);
+      if (!Number.isFinite(pointsRequired) || pointsRequired <= 0) {
+        throw new BadRequestException('This gift has no valid point cost');
+      }
 
       // Gift purchases use the user's reward wallet for every role. Dealer
       // bonusPoints are a separate cash-withdrawal balance and must not block
@@ -1914,7 +1990,7 @@ export class MobileService {
         await this.updateUserByRole(
           userId,
           role,
-          this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -pointsRequired),
+          await this.buildTransferBalanceUpdate(user, normalizedRole, newBalance, -pointsRequired),
           manager,
         );
       }
@@ -1963,11 +2039,12 @@ export class MobileService {
           dealerName,
           role: normalizedRole,
           giftProductId: product.id,
+          redemptionId: redemption.id,
           giftName: product.name,
           giftImage,
           pointsUsed: pointsRequired,
           status: GiftOrderStatus.PENDING,
-          shippingAddress: (user as any).address ?? undefined,
+          shippingAddress,
         }),
       );
 
@@ -1985,6 +2062,11 @@ export class MobileService {
   async transferPoints(userId: string, role: string, data: { receiverPhone: string; points: number }) {
     if (!Number.isFinite(data.points) || data.points <= 0) {
       throw new BadRequestException('Points must be greater than 0');
+    }
+    const settings = await this.getAppSettings();
+    if (!settings.transferPointsEnabled) throw new BadRequestException('Points transfers are currently disabled');
+    if (data.points < settings.minTransferPoints) {
+      throw new BadRequestException(`Minimum transfer is ${settings.minTransferPoints} points`);
     }
 
     return this.dataSource.transaction(async (manager) => {
@@ -2032,7 +2114,7 @@ export class MobileService {
       await this.updateUserByRole(
         userId,
         role,
-        this.buildTransferBalanceUpdate(
+        await this.buildTransferBalanceUpdate(
           sender,
           normalizedRole,
           senderNewBalance,
@@ -2043,7 +2125,7 @@ export class MobileService {
       await this.updateUserByRole(
         receiver.id,
         receiverData.role,
-        this.buildTransferBalanceUpdate(
+        await this.buildTransferBalanceUpdate(
           receiver,
           receiverData.role,
           receiverNewBalance,
@@ -2179,12 +2261,19 @@ export class MobileService {
       const directGiftName = (redemption as any).giftName;
       const directGiftImage = this.normalizeUploadUrl((redemption as any).giftImage) ?? (redemption as any).giftImage ?? null;
 
-      const matchIndex = unmatchedGiftOrders.findIndex((order) => {
-        const samePoints = Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0);
+      const requestedAt = redemption.requestedAt ? new Date(redemption.requestedAt).getTime() : 0;
+      const linkedIndex = unmatchedGiftOrders.findIndex((order) => order.redemptionId === redemption.id);
+      const matchIndex = linkedIndex >= 0 ? linkedIndex : unmatchedGiftOrders.reduce((bestIndex, order, index) => {
         const orderedAt = order.orderedAt ? new Date(order.orderedAt).getTime() : 0;
-        const requestedAt = redemption.requestedAt ? new Date(redemption.requestedAt).getTime() : 0;
-        return samePoints && Math.abs(orderedAt - requestedAt) < 5 * 60 * 1000;
-      });
+        const matches = !order.redemptionId
+          && Number(order.pointsUsed ?? 0) === Number(redemption.points ?? 0)
+          && (!directGiftProductId || order.giftProductId === directGiftProductId)
+          && Math.abs(orderedAt - requestedAt) < 5 * 60 * 1000;
+        if (!matches) return bestIndex;
+        if (bestIndex < 0) return index;
+        const bestTime = new Date(unmatchedGiftOrders[bestIndex].orderedAt).getTime();
+        return Math.abs(orderedAt - requestedAt) < Math.abs(bestTime - requestedAt) ? index : bestIndex;
+      }, -1);
 
       const order = matchIndex >= 0 ? unmatchedGiftOrders.splice(matchIndex, 1)[0] : undefined;
       return {
@@ -2238,10 +2327,12 @@ export class MobileService {
       ])
       .where(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone });
+
+    const activeElectricianCount = await qb.clone().andWhere('electrician.status = :activeStatus', { activeStatus: 'active' }).getCount();
 
     if (search) {
       qb.andWhere(
@@ -2252,7 +2343,7 @@ export class MobileService {
 
     qb.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
     const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return { data, total, activeElectricianCount, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async getDealerElectriciansCallList(dealerId: string) {
@@ -2277,6 +2368,7 @@ export class MobileService {
     page: number = 1,
     limit: number = 50,
   ) {
+    const settings = await this.getAppSettings();
     const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
     const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 100) : 50;
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
@@ -2298,8 +2390,8 @@ export class MobileService {
       .where('electrician.id = :electricianId', { electricianId })
       .andWhere(`(
         electrician.dealerId = :dealerId
-        OR (electrician.dealerId IS NULL AND electrician.fallbackDealerCode = :dealerCode)
-        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
       )`, { dealerId, dealerCode: dealer.dealerCode, dealerPhone: dealer.phone })
       .getOne();
@@ -2373,7 +2465,7 @@ export class MobileService {
       },
       withdrawals: withdrawals.map((withdrawal) => {
         const commission = commissionByWithdrawal.get(withdrawal.id);
-        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * 0.05);
+        const expectedBonus = Math.round(Number(withdrawal.points ?? withdrawal.amount ?? 0) * settings.dealerCommissionRate) / 100;
         return {
           id: withdrawal.id,
           amount: Number(withdrawal.amount ?? withdrawal.points ?? 0),
@@ -2392,6 +2484,8 @@ export class MobileService {
   }
 
   async addElectrician(dealerId: string, body: any) {
+    const settings = await this.getAppSettings();
+    if (!settings.dealerCanAddElectrician) throw new BadRequestException('Adding electricians is currently disabled');
     const dealer = await this.dealerRepository.findOne({ where: { id: dealerId } });
     if (!dealer) throw new NotFoundException('Dealer not found');
 

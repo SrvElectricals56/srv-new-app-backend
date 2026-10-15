@@ -1,5 +1,10 @@
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Logger,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
@@ -14,6 +19,17 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
   const configService = app.get(ConfigService);
   const dataSource = app.get(DataSource);
+  const expressApp = app.getHttpAdapter().getInstance();
+  const trustProxyHops = parseInt(
+    configService.get<string>('TRUST_PROXY_HOPS') || '0',
+    10,
+  );
+  if (trustProxyHops > 0) {
+    // Trust only the explicitly configured number of reverse-proxy hops. This
+    // keeps req.ip (and therefore rate limiting) accurate without trusting
+    // arbitrary client-supplied X-Forwarded-For headers.
+    expressApp.set('trust proxy', trustProxyHops);
+  }
 
   // The JSON limit is intentionally smaller than upload limits. Large images,
   // PDFs, and videos must use the guarded multipart upload endpoints.
@@ -57,7 +73,7 @@ async function bootstrap() {
       if (!origin || allowAllCors || corsOrigins.includes(origin) || isAllowedDevOrigin(origin)) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        callback(new ForbiddenException('Origin is not allowed'));
       }
     },
     credentials: configService.get('CORS_CREDENTIALS') === 'true',
@@ -136,7 +152,6 @@ async function bootstrap() {
     });
   }
 
-  const expressApp = app.getHttpAdapter().getInstance();
   expressApp.get('/', (_req: any, res: any) => {
     if (swaggerEnabled) return res.redirect('/api/docs');
     return res.status(200).json({ name: 'SRV Electricals API', status: 'ok' });

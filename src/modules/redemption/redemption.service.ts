@@ -8,6 +8,8 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { Electrician } from '../../database/entities/electrician.entity';
 import { Redemption } from '../../database/entities/redemption.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { Settings } from '../../database/entities/settings.entity';
+import { numericSetting } from '../../common/utils/app-settings.util';
 import { NotificationStatus, RedemptionStatus, TransactionSource, TransactionType, UserRole } from '../../common/enums';
 import { Notification } from '../../database/entities/notification.entity';
 
@@ -54,22 +56,23 @@ export class RedemptionService {
       .getOne();
   }
 
-  private calculateElectricianTier(points: number) {
-    if (points >= 10000) return 'Diamond';
-    if (points >= 5001) return 'Platinum';
-    if (points >= 1001) return 'Gold';
+  private async calculateElectricianTier(points: number, manager: EntityManager) {
+    const map = Object.fromEntries((await manager.getRepository(Settings).find()).map(row => [row.key, row.value]));
+    if (points >= numericSetting(map, 'diamondMin', 10001)) return 'Diamond';
+    if (points >= numericSetting(map, 'platinumMin', 5001)) return 'Platinum';
+    if (points >= numericSetting(map, 'goldMin', 1001)) return 'Gold';
     return 'Silver';
   }
 
-  private buildUserBalanceUpdate(role: UserRole, balanceAfter: number) {
+  private async buildUserBalanceUpdate(role: UserRole, balanceAfter: number, totalPoints: number, manager: EntityManager) {
     const updateData: Record<string, any> = {
       walletBalance: balanceAfter,
     };
 
     if (role !== UserRole.DEALER) {
-      updateData.totalPoints = balanceAfter;
+      updateData.totalPoints = totalPoints;
       if (role === UserRole.ELECTRICIAN) {
-        updateData.tier = this.calculateElectricianTier(balanceAfter);
+        updateData.tier = await this.calculateElectricianTier(totalPoints, manager);
       }
     }
 
@@ -86,7 +89,7 @@ export class RedemptionService {
 
     const isDealerBonus =
       redemption.role === UserRole.DEALER &&
-      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal' || redemption.type === 'gift');
+      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
 
     const balanceBefore = Number(
       isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
@@ -101,7 +104,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Number((user as any).totalPoints ?? 0) + refundPoints, manager) as any,
       );
     }
 
@@ -135,7 +138,7 @@ export class RedemptionService {
 
     const isDealerBonus =
       redemption.role === UserRole.DEALER &&
-      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal' || redemption.type === 'gift');
+      (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
 
     const balanceBefore = Number(
       isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
@@ -159,7 +162,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        this.buildUserBalanceUpdate(redemption.role, balanceAfter) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Math.max(0, Number((user as any).totalPoints ?? 0) - lockedPoints), manager) as any,
       );
     }
 
@@ -207,7 +210,18 @@ export class RedemptionService {
     status?: RedemptionStatus,
     role?: UserRole,
     userId?: string,
+    from?: string,
+    to?: string,
+    search?: string,
   ) {
+    page = Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
+    limit = Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.floor(limit))) : 20;
+    for (const date of [from, to]) {
+      if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date)) {
+        throw new BadRequestException('Use a valid YYYY-MM-DD date');
+      }
+    }
+    if (from && to && from > to) throw new BadRequestException('Start date must be before end date');
     const skip = (page - 1) * limit;
     const queryBuilder = this.redemptionRepository.createQueryBuilder('redemption');
 
@@ -223,6 +237,20 @@ export class RedemptionService {
       queryBuilder.andWhere('redemption.userId = :userId', { userId });
     }
 
+    if (from) queryBuilder.andWhere(`redemption.requestedAt >= CAST(:from AS date)::timestamp AT TIME ZONE 'Asia/Kolkata'`, { from });
+    if (to) queryBuilder.andWhere(`redemption.requestedAt < (CAST(:to AS date) + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'`, { to });
+    if (search?.trim()) {
+      queryBuilder.andWhere(`(redemption."userName" ILIKE :search OR redemption."userId" ILIKE :search
+        OR redemption.type ILIKE :search OR redemption."rejectionReason" ILIKE :search
+        OR EXISTS (SELECT 1 FROM (
+          SELECT id::text, 'electrician' AS role, name, phone, "electricianCode" AS code FROM electricians
+          UNION ALL SELECT id::text, 'dealer', name, phone, "dealerCode" FROM dealers
+          UNION ALL SELECT id::text, 'user', name, phone, "userCode" FROM app_users
+          UNION ALL SELECT id::text, 'counterboy', name, phone, "counterboyCode" FROM counterboys
+        ) u WHERE u.id = redemption."userId" AND u.role = redemption.role::text
+          AND (u.name ILIKE :search OR u.phone ILIKE :search OR u.code ILIKE :search)))`, { search: `%${search.trim()}%` });
+    }
+    const summaryQuery = queryBuilder.clone();
     queryBuilder
       .orderBy('redemption.requestedAt', 'DESC')
       .skip(skip)
@@ -247,15 +275,10 @@ export class RedemptionService {
       idsByRole.get(UserRole.COUNTERBOY)?.length
         ? this.counterboyRepository.find({ where: { id: In(idsByRole.get(UserRole.COUNTERBOY)!) }, select: ['id', 'name', 'phone', 'counterboyCode'] })
         : Promise.resolve([]),
-      this.redemptionRepository
-        .createQueryBuilder('summary')
-        .select('summary.status', 'status')
+      summaryQuery.select('redemption.status', 'status')
         .addSelect('COUNT(*)::int', 'count')
-        .addSelect('COALESCE(SUM(summary.amount), 0)', 'amount')
-        .where(role ? 'summary.role = :summaryRole' : '1=1', role ? { summaryRole: role } : {})
-        .andWhere(userId ? 'summary.userId = :summaryUserId' : '1=1', userId ? { summaryUserId: userId } : {})
-        .groupBy('summary.status')
-        .getRawMany(),
+        .addSelect('COALESCE(SUM(redemption.amount), 0)', 'amount')
+        .groupBy('redemption.status').getRawMany(),
     ]);
     const userMap = new Map<string, { name: string; phone: string; code?: string | null }>();
     electricians.forEach((user) => userMap.set(`${UserRole.ELECTRICIAN}:${user.id}`, { name: user.name, phone: user.phone, code: user.electricianCode }));
@@ -316,6 +339,7 @@ export class RedemptionService {
 
     const reason = rejectionReason?.trim() || 'Rejected by admin';
 
+    let changed = false;
     await this.dataSource.transaction(async (manager) => {
       const redemption = await manager.getRepository(Redemption)
         .createQueryBuilder('redemption')
@@ -327,6 +351,8 @@ export class RedemptionService {
         throw new NotFoundException('Redemption not found');
       }
 
+      if (redemption.status === nextStatus) return;
+      changed = true;
       await this.syncWalletForStatusChange(redemption, nextStatus, reason, manager);
 
       if (
@@ -346,7 +372,7 @@ export class RedemptionService {
     });
 
     const updated = await this.findOne(id);
-    await this.sendRedemptionNotification(updated, nextStatus);
+    if (changed) await this.sendRedemptionNotification(updated, nextStatus);
     return updated;
   }
 
@@ -371,7 +397,13 @@ export class RedemptionService {
       .getOne();
     if (!dealer) return;
 
-    const commission = Math.round(Number(redemption.points) * 0.05);
+    const alreadyCredited = await manager.getRepository(Wallet).findOne({ where: {
+      referenceId: redemption.id, source: TransactionSource.COMMISSION, type: TransactionType.CREDIT,
+    } });
+    if (alreadyCredited) return;
+    const setting = await manager.getRepository(Settings).findOne({ where: { key: 'dealerCommissionRate' } });
+    const rate = numericSetting({ dealerCommissionRate: setting?.value }, 'dealerCommissionRate', 5);
+    const commission = Math.round(Number(redemption.points) * rate) / 100;
     if (commission <= 0) return;
 
     const balanceBefore = Number(dealer.walletBalance ?? 0);
@@ -397,7 +429,7 @@ export class RedemptionService {
         amount: commission,
         balanceBefore,
         balanceAfter,
-        description: `5% commission on electrician withdrawal - ${electrician.name}`,
+        description: `${rate}% commission on electrician withdrawal - ${electrician.name}`,
         referenceId: redemption.id,
         referenceType: 'redemption',
       }),

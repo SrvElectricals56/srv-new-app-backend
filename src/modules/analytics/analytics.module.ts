@@ -10,10 +10,12 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
+import { GiftOrder } from '../../database/entities/gift-order.entity';
+import { ProductOrder } from '../../database/entities/product-order.entity';
 import { TierModule } from '../../common/services/tier.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Electrician, Dealer, Scan, Redemption, Wallet, AppUser, CounterBoy, SupportTicket]), TierModule],
+  imports: [TypeOrmModule.forFeature([Electrician, Dealer, Scan, Redemption, Wallet, AppUser, CounterBoy, SupportTicket, GiftOrder, ProductOrder]), TierModule],
   controllers: [AnalyticsController],
   providers: [AnalyticsService],
   exports: [AnalyticsService],

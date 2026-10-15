@@ -16,8 +16,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV RUNNING_IN_DOCKER=true
 
-COPY --chown=node:node --from=builder /app/package*.json ./
-COPY --chown=node:node --from=builder /app/node_modules ./node_modules
+COPY --chown=node:node package*.json ./
+RUN npm ci --omit=dev
 COPY --chown=node:node --from=builder /app/dist ./dist
 
 RUN mkdir -p uploads && chown node:node uploads

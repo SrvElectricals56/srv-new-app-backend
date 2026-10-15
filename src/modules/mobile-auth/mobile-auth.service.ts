@@ -20,11 +20,15 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { Scan } from '../../database/entities/scan.entity';
 import { Wallet } from '../../database/entities/wallet.entity';
+import { Settings } from '../../database/entities/settings.entity';
+import { pointSettings } from '../../common/utils/app-settings.util';
 import { MobileLoginDto, VerifyOtpDto, MobileUserRole } from './dto/mobile-login.dto';
 import { ElectricianSubCategory, TransactionSource, TransactionType, UserRole, UserStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
+import { buildSmsRetrieverMessage } from '../../common/utils/sms-retriever-message.util';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<
@@ -134,15 +138,16 @@ export class MobileAuthService {
         [member.id, balanceAfter],
       );
     } else {
-      const tier = this.tierService.calculateElectricianTier(balanceAfter);
+      const totalPoints = Number(before.totalPoints ?? 0) + points;
+      const tier = await this.tierService.calculateElectricianTier(totalPoints);
       await manager.query(
         `UPDATE "${table}"
          SET "walletBalance" = $2,
-             "totalPoints" = $2,
+             "totalPoints" = $4,
              tier = $3,
              "updatedAt" = now()
          WHERE id::text = $1`,
-        [member.id, balanceAfter, tier],
+        [member.id, balanceAfter, tier, totalPoints],
       );
     }
 
@@ -154,7 +159,7 @@ export class MobileAuthService {
       amount: points,
       balanceBefore,
       balanceAfter,
-      description: `Referral reward: ${member.name} and ${otherMember.name} received ${points} points`,
+      description: `Referral reward: ${member.name} received ${points} points for referral with ${otherMember.name}`,
       referenceId: otherMember.id,
       referenceType: 'referral',
     }));
@@ -171,19 +176,23 @@ export class MobileAuthService {
       throw new BadRequestException('You cannot use your own referral code.');
     }
 
+    const rows = await manager.getRepository(Settings).find();
+    const settings = Object.fromEntries(rows.map(row => [row.key, row.value]));
+    if (settings.referralEnabled === 'false') return;
+    const rewards = pointSettings(settings);
     const rewardId = randomUUID();
     const inserted = await manager.query(
       `INSERT INTO "referral_rewards"
         (id, "referrerUserId", "referrerRole", "refereeUserId", "refereeRole", "referralCode", points, "createdAt")
-       VALUES ($1,$2,$3,$4,$5,$6,20,now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,now())
        ON CONFLICT ("refereeUserId", "refereeRole") DO NOTHING
        RETURNING id`,
-      [rewardId, referrer.id, referrer.role, referee.id, referee.role, referrer.code],
+      [rewardId, referrer.id, referrer.role, referee.id, referee.role, referrer.code, rewards.referrerBonus],
     );
     if (!inserted.length) return;
 
-    await this.creditReferralMember(manager, referrer, referee, 20);
-    await this.creditReferralMember(manager, referee, referrer, 20);
+    if (rewards.referrerBonus > 0) await this.creditReferralMember(manager, referrer, referee, rewards.referrerBonus);
+    if (rewards.refereeBonus > 0) await this.creditReferralMember(manager, referee, referrer, rewards.refereeBonus);
   }
 
   private shouldDeliverSms(): boolean {
@@ -202,9 +211,13 @@ export class MobileAuthService {
     const senderId =
       this.configService.get<string>('SMS_SENDER_ID')?.trim() ||
       this.configService.get<string>('SENDER_ID')?.trim();
-    const templateId =
+    const legacyTemplateId =
       this.configService.get<string>('SMS_TEMPLATE_ID')?.trim() ||
       this.configService.get<string>('TEMPLATE_ID')?.trim();
+    const retrieverTemplateId = this.configService.get<string>('SMS_RETRIEVER_TEMPLATE_ID')?.trim();
+    const retrieverAppHash = this.configService.get<string>('SMS_RETRIEVER_APP_HASH')?.trim();
+    const useRetrieverTemplate = Boolean(retrieverTemplateId && retrieverAppHash);
+    const templateId = useRetrieverTemplate ? retrieverTemplateId : legacyTemplateId;
     const endpoint = this.configService.get<string>('SMS_API_URL')?.trim() || COMBIRDS_SMS_ENDPOINT;
 
     if (!apiKey || !senderId || !templateId) {
@@ -212,7 +225,9 @@ export class MobileAuthService {
     }
 
     const name = String(recipientName ?? 'SRV').trim().replace(/[^A-Za-z .'-]/g, '').slice(0, 40) || 'SRV';
-    const message = APPROVED_OTP_MESSAGE.replace('{{name}}', name).replace('{{otp}}', otp);
+    const message = useRetrieverTemplate
+      ? buildSmsRetrieverMessage(otp, retrieverAppHash!)
+      : APPROVED_OTP_MESSAGE.replace('{{name}}', name).replace('{{otp}}', otp);
 
     try {
       await axios.post(
@@ -248,7 +263,8 @@ export class MobileAuthService {
     const accessToken = this.jwtService.sign(tokenPayload);
     const refreshToken = this.jwtService.sign(tokenPayload, {
       secret: this.configService.get('JWT_REFRESH_SECRET'),
-      expiresIn: '30d',
+      expiresIn:
+        this.configService.get('JWT_REFRESH_EXPIRES_IN') || '30d',
     });
     return { accessToken, refreshToken };
   }
@@ -434,11 +450,21 @@ export class MobileAuthService {
 
   private async hydrateDealerElectricianCount(dealer: Dealer | null) {
     if (!dealer) return null;
-    const electricianCount = await this.electricianRepository.count({ where: { dealerId: dealer.id } });
+    const row = await this.electricianRepository.createQueryBuilder('electrician')
+      .select('COUNT(DISTINCT electrician.id)', 'count')
+      .addSelect("COUNT(DISTINCT electrician.id) FILTER (WHERE electrician.status = 'active')", 'activeCount')
+      .where(`(
+        electrician.dealerId = :dealerId
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerCode), '') IS NOT NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND NULLIF(btrim(:dealerPhone), '') IS NOT NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId: dealer.id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' })
+      .getRawOne();
+    const electricianCount = Number(row?.count ?? 0);
     if (dealer.electricianCount !== electricianCount) {
       await this.dealerRepository.update(dealer.id, { electricianCount });
     }
-    return { ...dealer, electricianCount };
+    return { ...dealer, electricianCount, activeElectricianCount: Number(row?.activeCount ?? 0) };
   }
 
   /** Find user entity by phone + role */
@@ -474,6 +500,7 @@ export class MobileAuthService {
     }
 
     const user = await query.getOne();
+    if (role === 'user' && (user as AppUser | null)?.googleSubject && !(user as AppUser).phoneVerified) return null;
     if (role === 'dealer') {
       return this.hydrateDealerElectricianCount(user as Dealer | null);
     }
@@ -510,9 +537,9 @@ export class MobileAuthService {
     const now = new Date();
     switch (role) {
       case 'electrician': {
-        const existing = await this.electricianRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.electricianRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -520,9 +547,9 @@ export class MobileAuthService {
         break;
       }
       case 'dealer': {
-        const existing = await this.dealerRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.dealerRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -530,9 +557,9 @@ export class MobileAuthService {
         break;
       }
       case 'user': {
-        const existing = await this.appUserRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.appUserRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -540,9 +567,9 @@ export class MobileAuthService {
         break;
       }
       case 'counterboy': {
-        const existing = await this.counterboyRepository.findOne({ where: { id }, select: ['id', 'appInstalled'] });
+        const existing = await this.counterboyRepository.findOne({ where: { id }, select: ['id', 'appInstalled', 'firstAppLoginAt'] });
         const update: any = { lastActivityAt: now };
-        if (existing && !existing.appInstalled) {
+        if (existing && !existing.firstAppLoginAt) {
           update.appInstalled = true;
           update.firstAppLoginAt = now;
         }
@@ -780,7 +807,9 @@ export class MobileAuthService {
       await this.applyReferralReward(manager, data.referralCode, {
         id: savedDealer.id, name: savedDealer.name, phone: savedDealer.phone, role: UserRole.DEALER,
       });
-      return savedDealer;
+      return data.referralCode?.trim()
+        ? manager.getRepository(Dealer).findOneByOrFail({ id: savedDealer.id })
+        : savedDealer;
     });
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'dealer' };
@@ -808,7 +837,10 @@ export class MobileAuthService {
         }));
       }
       otpStore.delete(signupOtpKey);
-      const existingWithDealer = await this.hydrateElectricianDealer(existingElectrician);
+      const refreshed = data.referralCode?.trim()
+        ? await this.electricianRepository.findOneByOrFail({ id: existingElectrician.id })
+        : existingElectrician;
+      const existingWithDealer = await this.hydrateElectricianDealer(refreshed);
       const tokens = await this.generateTokens({
         sub: existingElectrician.id,
         phone: existingElectrician.phone,
@@ -921,7 +953,9 @@ export class MobileAuthService {
         id: savedElectrician.id, name: savedElectrician.name, phone: savedElectrician.phone, role: UserRole.ELECTRICIAN,
       });
 
-      return savedElectrician;
+      return data.referralCode?.trim()
+        ? manager.getRepository(Electrician).findOneByOrFail({ id: savedElectrician.id })
+        : savedElectrician;
     });
 
     otpStore.delete(signupOtpKey);
@@ -959,6 +993,7 @@ export class MobileAuthService {
     const appUser = this.appUserRepository.create({
       name: data.name,
       phone: data.phone,
+      phoneVerified: true,
       email: data.email,
       city: data.city,
       state: data.state,
@@ -977,7 +1012,8 @@ export class MobileAuthService {
       await this.applyReferralReward(manager, data.referralCode, {
         id: savedUser.id, name: savedUser.name, phone: savedUser.phone, role: UserRole.USER,
       });
-      return savedUser;
+      // Referral credits update the row inside this transaction; return that balance.
+      return manager.getRepository(AppUser).findOneByOrFail({ id: savedUser.id });
     });
     otpStore.delete(signupOtpKey);
     const payload = { sub: saved.id, phone: saved.phone, role: 'user' };
@@ -1018,6 +1054,7 @@ export class MobileAuthService {
       user = await this.appUserRepository.save(user);
     } else {
       user.email = googleUser.email;
+      if (!user.googleSubject) user.phoneVerified = true;
       user.googleSubject = googleUser.sub || user.googleSubject;
       if (googleUser.picture) user.profileImage = googleUser.picture;
       if (!user.name?.trim()) user.name = googleUser.name || 'Customer';
@@ -1162,14 +1199,34 @@ export class MobileAuthService {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
       });
 
-      const user = await this.findUserByPhone(payload.phone, payload.role as MobileUserRole);
-      if (!user) throw new UnauthorizedException('User not found');
+      // A verified profile edit can change the phone after this token was issued.
+      // Google accounts may also have no verified phone yet; the signed subject is stable.
+      const user: any = await this.getRepositoryByRole(payload.role).findOne({ where: { id: payload.sub } });
+      if (
+        !user ||
+        user.id !== payload.sub ||
+        user.status === UserStatus.SUSPENDED ||
+        (user.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)
+      ) {
+        throw new UnauthorizedException('Session expired');
+      }
 
       const tokens = await this.generateTokens({ sub: user.id, phone: user.phone, role: payload.role });
       return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken };
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+  }
+
+  async logout(userId: string, role: MobileUserRole) {
+    const repository = this.getRepositoryByRole(role);
+    const result = await (repository as any).increment(
+      { id: userId },
+      'tokenVersion',
+      1,
+    );
+    if (!result?.affected) throw new UnauthorizedException('User not found');
+    return { success: true, message: 'Logged out successfully' };
   }
 
   // ── Profile ────────────────────────────────────────────────────────────────
@@ -1222,6 +1279,19 @@ export class MobileAuthService {
       'aadharFrontImage', 'panDocument', 'gstDocument'];
 
     const updateData: any = {};
+    let phoneProofKey: string | undefined;
+    if (role === 'user' && data.phone !== undefined) {
+      const account = await this.appUserRepository.findOne({ where: { id: userId } });
+      if (!account) throw new NotFoundException('User not found');
+      const phone = this.normalizePhone(String(data.phone));
+      if (phone && (phone !== account.phone || (account.googleSubject && !account.phoneVerified))) {
+        if (!/^[6-9]\d{9}$/.test(phone)) throw new BadRequestException('Please enter a valid Indian mobile number');
+        phoneProofKey = this.ensureSignupOtpVerified(phone, 'user', data.phoneVerificationToken);
+        await this.crossRolePhoneService.assertPhoneAvailableForRole(phone, 'user');
+        updateData.phone = phone;
+        updateData.phoneVerified = true;
+      }
+    }
     commonFields.forEach(k => { if (data[k] !== undefined) updateData[k] = data[k]; });
     if (role === 'user' || role === 'counterboy') {
       ['language', 'darkMode', 'pushEnabled'].forEach(k => {
@@ -1243,17 +1313,22 @@ export class MobileAuthService {
 
     // If any KYC document is being submitted, set kycStatus to pending
     const kycDocFields = ['aadharFrontImage', 'panDocument', 'gstDocument'];
-    const hasKycDoc = kycDocFields.some(k => data[k] !== undefined && data[k] !== null && data[k] !== '');
+    const hasKycDoc = kycDocFields.some(k => data[k] !== undefined);
     if (hasKycDoc) {
       // Move to pending for any status except already pending
       // This covers: not_submitted, rejected, AND verified (re-verification after doc change)
       const currentUser = await this.getProfile(userId, role);
       const currentKycStatus = (currentUser as any).kycStatus;
-      if (currentKycStatus !== 'pending') {
+      const documentsChanged = kycDocFields.some(k =>
+        data[k] !== undefined && (data[k] || null) !== ((currentUser as any)[k] || null),
+      );
+      const resubmitting = currentKycStatus !== 'verified' && kycDocFields.some(k => Boolean(data[k]));
+      if ((documentsChanged || resubmitting) && currentKycStatus !== 'pending') {
         updateData.kycStatus = 'pending';
         updateData.kycRejectionReason = null;
       }
     }
+
 
     if (Object.keys(updateData).length > 0) {
       switch (role) {
@@ -1282,6 +1357,7 @@ export class MobileAuthService {
       );
     }
 
+    if (phoneProofKey) otpStore.delete(phoneProofKey);
     return this.getProfile(userId, role);
   }
 
@@ -1359,7 +1435,7 @@ export class MobileAuthService {
   // ── Format User Profile ────────────────────────────────────────────────────
 
   private getEffectivePoints(user: any) {
-    return Number(user?.walletBalance ?? user?.totalPoints ?? 0);
+    return Number(user?.totalPoints ?? user?.walletBalance ?? 0);
   }
 
   formatUserProfile(user: any, role: string) {
@@ -1403,7 +1479,7 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'electrician',
         };
@@ -1423,7 +1499,9 @@ export class MobileAuthService {
           gstNumber: user.gstNumber,
           tier: user.tier,
           electricianCount: user.electricianCount,
+          activeElectricianCount: user.activeElectricianCount ?? 0,
           walletBalance: user.walletBalance,
+          totalPoints: Number(user.walletBalance ?? 0),
           bonusPoints: Number((user as any).bonusPoints ?? 0),
           bonusStatus: (user as any).bonusStatus ?? 'pending',
           status: user.status,
@@ -1443,7 +1521,7 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'dealer',
         };
@@ -1454,7 +1532,8 @@ export class MobileAuthService {
           name: user.name,
           // Google-only customer records use an internal unique placeholder because
           // the legacy schema requires a phone. Never present it as a verified number.
-          phone: user.googleSubject ? '' : user.phone,
+          phone: user.googleSubject && !user.phoneVerified ? '' : user.phone,
+          phoneVerified: Boolean(user.phoneVerified || !user.googleSubject),
           email: user.email,
           userCode: user.userCode,
           city: user.city,
@@ -1482,7 +1561,7 @@ export class MobileAuthService {
           gstDocument: user.gstDocument ?? null,
           kycRejectionReason: user.kycRejectionReason ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'user',
         };
@@ -1524,7 +1603,7 @@ export class MobileAuthService {
           panDocument: user.panDocument ?? null,
           gstDocument: user.gstDocument ?? null,
           hasPassword: !!user.passwordHash,
-          appInstalled: user.appInstalled ?? false,
+          appInstalled: hasRecordedAppInstall(user.firstAppLoginAt),
           firstAppLoginAt: user.firstAppLoginAt ?? null,
           role: 'counterboy',
         };

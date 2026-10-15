@@ -22,6 +22,9 @@ export class AppUser {
   @Column({ unique: true })
   phone: string;
 
+  @Column({ default: false })
+  phoneVerified: boolean;
+
   @Column({ unique: true })
   userCode: string;
 

@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserStatus, MemberTier, AdminRole, KYCStatus } from '../../common/enums';
+import { ElectricianActivityStatus } from '../../common/utils/electrician-activity.util';
 
 @ApiTags('Electrician Management')
 @ApiBearerAuth('JWT-auth')
@@ -52,6 +53,8 @@ export class ElectricianController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('kycStatus') kycStatus?: KYCStatus,
+    @Query('dateField') dateField?: 'joined' | 'installed',
+    @Query('activityStatus') activityStatus?: ElectricianActivityStatus,
     @Query('includeMedia') includeMedia?: string,
   ) {
     return this.electricianService.findAll(
@@ -60,7 +63,7 @@ export class ElectricianController {
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       welcomeBonus === 'true' ? true : undefined,
-      dateFrom, dateTo, kycStatus, includeMedia === 'true',
+      dateFrom, dateTo, kycStatus, dateField, activityStatus, includeMedia === 'true',
     );
   }
 
@@ -111,6 +114,13 @@ export class ElectricianController {
     @Query('limit') limit = '10',
   ) {
     return this.electricianService.getTop(from, to, sortBy, parseInt(limit));
+  }
+
+  @Post('kyc/approve-all')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Approve all unverified KYC records across every page' })
+  approveAllKyc() {
+    return this.electricianService.approveAllKyc();
   }
 
   @Get(':id')

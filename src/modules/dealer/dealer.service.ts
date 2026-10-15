@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, EntityManager } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { CreateDealerDto } from './dto/create-dealer.dto';
 import { UpdateDealerDto } from './dto/update-dealer.dto';
@@ -14,6 +14,7 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserStatus, MemberTier, UserRole } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
 export class DealerService {
@@ -54,16 +55,35 @@ export class DealerService {
               return {
                 ...electricianRest,
                 hasPassword: Boolean(electricianPasswordHash),
-                appInstalled: Boolean((electrician as any).appInstalled),
+                appInstalled: hasRecordedAppInstall((electrician as any).firstAppLoginAt),
                 firstAppLoginAt: (electrician as any).firstAppLoginAt ?? null,
               };
             }),
           }
         : {}),
       hasPassword: Boolean(passwordHash),
-      appInstalled: Boolean((dealer as any).appInstalled),
+      appInstalled: hasRecordedAppInstall((dealer as any).firstAppLoginAt),
       firstAppLoginAt: (dealer as any).firstAppLoginAt ?? null,
     };
+  }
+
+  private async getActualElectricianCounts(dealerIds: string[]): Promise<Map<string, number>> {
+    if (!dealerIds.length) return new Map();
+    const rows = await this.dealerRepository.query(
+      `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "electricianCount"
+       FROM "dealers" d
+       LEFT JOIN "electricians" e ON (
+         e."dealerId"::text = d."id"::text
+         OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
+             AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
+         OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
+       )
+       WHERE d."id"::text = ANY($1::text[])
+       GROUP BY d."id"`,
+      [dealerIds],
+    );
+    return new Map(rows.map((row: any) => [row.dealerId, Number(row.electricianCount ?? 0)]));
   }
 
   private async tableExists(tableName: string): Promise<boolean> {
@@ -87,7 +107,7 @@ export class DealerService {
                 sd."firstSeenAt", sd."lastSeenAt"
          FROM "sub_dealers" sd
          LEFT JOIN "electricians" e
-           ON RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+           ON e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
             = RIGHT(regexp_replace(COALESCE(sd."phone", ''), '\\D', '', 'g'), 10)
          WHERE NOT EXISTS (
            SELECT 1 FROM "dealers" registered
@@ -167,7 +187,7 @@ export class DealerService {
               e."fallbackDealerName", e."fallbackDealerPhone", e."fallbackDealerCode",
               e."totalPoints", e."totalScans", e."walletBalance", e."joinedDate"
        FROM "electricians" e
-       WHERE ($1::text IS NOT NULL AND
+       WHERE ($1::text IS NOT NULL AND e."dealerId" IS NULL AND
               RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
                 = RIGHT(regexp_replace(COALESCE($1, ''), '\\D', '', 'g'), 10))
           OR ($2::text IS NOT NULL AND e."dealerId" IS NULL AND e."fallbackDealerCode" = $2)
@@ -184,6 +204,73 @@ export class DealerService {
       identifier: phone ?? dealerCode,
       identifierType: phone ? 'phone' : 'legacy_code',
     };
+  }
+
+  async getTransferTarget(phone: string, manager: EntityManager = this.dealerRepository.manager) {
+    if (typeof phone !== 'string' || !/^(?:\+91[ -]?|91[ -]?|0)?[6-9][0-9]{9}$/.test(phone.trim())) {
+      throw new BadRequestException('Enter a valid 10-digit dealer mobile number');
+    }
+    const normalized = phone.replace(/\D/g, '').slice(-10);
+    const registered = await manager.query(
+      `SELECT "id", "name", "phone", 'dealer' AS "type" FROM "dealers"
+       WHERE RIGHT(regexp_replace("phone", '\\D', '', 'g'), 10) = $1`, [normalized],
+    );
+    const targets = registered.length ? registered : await manager.query(
+      `SELECT "id", "name", "phone", 'sub_dealer' AS "type" FROM "sub_dealers"
+       WHERE RIGHT(regexp_replace("phone", '\\D', '', 'g'), 10) = $1`, [normalized],
+    );
+    if (!targets.length) throw new NotFoundException('No dealer or SRV sub dealer found with this phone number');
+    if (targets.length !== 1) throw new ConflictException('Multiple dealers match this phone number. Correct duplicate records first.');
+    return targets[0] as { id: string; name: string; phone: string; type: 'dealer' | 'sub_dealer' };
+  }
+
+  async transferSubDealer(id: string, phone: string, targetId: string) {
+    return this.dealerRepository.manager.transaction(async (manager) => {
+      // Lock association tables in a fixed order to serialize transfers and signups.
+      await manager.query('LOCK TABLE "dealers", "sub_dealers", "electricians" IN SHARE ROW EXCLUSIVE MODE');
+      const target = await this.getTransferTarget(phone, manager);
+      if (target.id !== targetId) throw new ConflictException('Destination changed. Check the dealer phone number again.');
+      const sources = await manager.query('SELECT "phone" FROM "sub_dealers" WHERE "id"::text = $1', [id]);
+      const sourcePhone = sources[0]?.phone ?? null;
+      const codes = sourcePhone ? [] : await manager.query(
+        `SELECT "fallbackDealerCode" AS "code" FROM "electricians"
+         WHERE "dealerId" IS NULL AND ('legacy-code-' || md5("fallbackDealerCode")) = $1 LIMIT 1`, [id],
+      );
+      const sourceCode = codes[0]?.code ?? null;
+      if (!sourcePhone && !sourceCode) throw new NotFoundException('Sub dealer not found');
+      if (target.id === id || (sourcePhone && sourcePhone.replace(/\D/g, '').slice(-10) === phone.replace(/\D/g, '').slice(-10))) {
+        throw new BadRequestException('Choose a different dealer phone number');
+      }
+      const result = await manager.query(
+        `UPDATE "electricians" SET "dealerId" = $3,
+           "fallbackDealerName" = $4, "fallbackDealerPhone" = $5,
+           "fallbackDealerCode" = NULL, "updatedAt" = now()
+         WHERE "dealerId" IS NULL AND (
+           ($1::text IS NOT NULL AND RIGHT(regexp_replace(COALESCE("fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace($1, '\\D', '', 'g'), 10))
+           OR ($2::text IS NOT NULL AND "fallbackDealerCode" = $2))
+         RETURNING "id"`,
+        [sourcePhone, sourceCode, target.type === 'dealer' ? target.id : null,
+          target.type === 'sub_dealer' ? target.name : null,
+          target.type === 'sub_dealer' ? target.phone : null],
+      );
+      const moved = Array.isArray(result[0]) ? result[0] : result;
+      if (!moved.length) throw new ConflictException('No electricians remain linked to this sub dealer. Refresh the list.');
+      if (target.type === 'dealer') {
+        await manager.query(
+          `UPDATE "dealers" SET "electricianCount" = (SELECT COUNT(*) FROM "electricians" WHERE "dealerId" = $1),
+           "updatedAt" = now() WHERE "id" = $1`, [target.id],
+        );
+      } else {
+        await manager.query(
+          `UPDATE "sub_dealers" SET "electricianCount" = (SELECT COUNT(*) FROM "electricians"
+           WHERE "dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE("fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace($2, '\\D', '', 'g'), 10)), "lastSeenAt" = now() WHERE "id" = $1`, [target.id, target.phone],
+        );
+      }
+      if (sourcePhone) await manager.query('DELETE FROM "sub_dealers" WHERE "id"::text = $1', [id]);
+      return { movedElectricians: moved.length, dealer: target };
+    });
   }
 
   async removeSubDealer(id: string) {
@@ -277,6 +364,7 @@ export class DealerService {
     appInstalled?: boolean,
     dateFrom?: string,
     dateTo?: string,
+    dateField?: 'joined' | 'installed',
     includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
@@ -329,11 +417,17 @@ export class DealerService {
       queryBuilder.andWhere('dealer.bankLinked = :bankLinked', { bankLinked });
     }
 
-    if (appInstalled !== undefined) {
-      queryBuilder.andWhere('dealer.appInstalled = :appInstalled', { appInstalled });
+    if (appInstalled === true) {
+      queryBuilder.andWhere('dealer.firstAppLoginAt IS NOT NULL');
+    } else if (appInstalled === false) {
+      queryBuilder.andWhere('dealer.firstAppLoginAt IS NULL');
     }
 
-    const filteredDateColumn = appInstalled === true
+    const filterByInstallDate = dateField === 'installed' || appInstalled === true;
+    if (filterByInstallDate) {
+      queryBuilder.andWhere('dealer.firstAppLoginAt IS NOT NULL');
+    }
+    const filteredDateColumn = filterByInstallDate
       ? 'dealer.firstAppLoginAt'
       : 'dealer.joinedDate';
     if (dateFrom) {
@@ -350,12 +444,16 @@ export class DealerService {
       );
     }
 
-    queryBuilder.orderBy('dealer.joinedDate', 'DESC').skip(skip).take(limit);
+    queryBuilder.orderBy(filteredDateColumn, 'DESC').addOrderBy('dealer.id', 'ASC').skip(skip).take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
+    const actualCounts = await this.getActualElectricianCounts(data.map((dealer) => dealer.id));
 
     return {
-      data: data.map((dealer) => this.serialize(dealer)),
+      data: data.map((dealer) => this.serialize({
+        ...dealer,
+        electricianCount: actualCounts.get(dealer.id) ?? 0,
+      } as Dealer)),
       total,
       page,
       limit,
@@ -378,8 +476,11 @@ export class DealerService {
     if (!dealer) {
       throw new NotFoundException('Dealer not found');
     }
-
-    return this.serialize(dealer);
+    const actualCounts = await this.getActualElectricianCounts([dealer.id]);
+    return this.serialize({
+      ...dealer,
+      electricianCount: actualCounts.get(dealer.id) ?? 0,
+    } as Dealer);
   }
 
   async getOptions() {
@@ -391,6 +492,15 @@ export class DealerService {
       .addSelect('dealer.phone', 'phone')
       .orderBy('dealer.name', 'ASC')
       .getRawMany();
+  }
+
+  async approveAllKyc() {
+    const result = await this.dealerRepository.createQueryBuilder()
+      .update()
+      .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
+      .where('"kycStatus" <> :status', { status: 'verified' })
+      .execute();
+    return { approved: result.affected ?? 0 };
   }
 
   async update(id: string, updateDealerDto: UpdateDealerDto) {
@@ -445,15 +555,137 @@ export class DealerService {
     return { message: 'Dealer deleted successfully' };
   }
 
-  async getDealerElectricians(id: string, page: number = 1, limit: number = 20) {
+  async getDealerElectricians(id: string, page: number = 1, limit: number = 20, search?: string) {
     const skip = (page - 1) * limit;
-    const [data, total] = await this.electricianRepository.findAndCount({
-      where: { dealerId: id },
-      skip,
-      take: limit,
-      order: { joinedDate: 'DESC' },
-    });
+    const dealer = await this.dealerRepository.findOne({ where: { id } });
+    if (!dealer) throw new NotFoundException('Dealer not found');
+    const query = this.electricianRepository.createQueryBuilder('electrician')
+      .where(`(
+        electrician."dealerId"::text = :dealerId
+        OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
+        OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
+          = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
+      )`, { dealerId: id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' });
+
+    if (search?.trim()) {
+      query.andWhere(
+        `(electrician.name ILIKE :search
+          OR electrician.phone ILIKE :search
+          OR electrician.electricianCode ILIKE :search
+          OR electrician.city ILIKE :search)`,
+        { search: `%${search.trim()}%` },
+      );
+    }
+
+    query.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
+    const [data, total] = await query.getManyAndCount();
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getDealerElectriciansByDealerSearch(
+    dealerSearch: string,
+    page: number = 1,
+    limit: number = 20,
+    electricianSearch?: string,
+  ) {
+    const trimmed = dealerSearch?.trim();
+    if (!trimmed) {
+      return {
+        dealers: [],
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        message: 'Please provide a dealer name, phone number, or dealer code to search',
+      };
+    }
+
+    // Find matching dealers by name, phone, or dealerCode
+    const dealers = await this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select([
+        'dealer.id', 'dealer.name', 'dealer.phone', 'dealer.dealerCode',
+        'dealer.town', 'dealer.state', 'dealer.tier', 'dealer.status',
+      ])
+      .where(
+        `(dealer.name ILIKE :search
+          OR dealer.phone ILIKE :search
+          OR dealer.dealerCode ILIKE :search)`,
+        { search: `%${trimmed}%` },
+      )
+      .orderBy('dealer.name', 'ASC')
+      .getMany();
+
+    if (dealers.length === 0) {
+      return {
+        dealers: [],
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        searchedBy: dealerSearch,
+        message: 'No dealer found matching the provided name, phone number, or dealer code',
+      };
+    }
+
+    // Build combined WHERE covering all matched dealers
+    const skip = (page - 1) * limit;
+    const query = this.electricianRepository.createQueryBuilder('electrician');
+
+    const conditions = dealers.map(
+      (_, i) =>
+        `(electrician."dealerId"::text = :dealerId${i}
+          OR (electrician."dealerId" IS NULL
+              AND NULLIF(btrim(:dealerCode${i}), '') IS NOT NULL
+              AND upper(btrim(electrician."fallbackDealerCode")) = upper(btrim(:dealerCode${i})))
+          OR (electrician."dealerId" IS NULL
+              AND RIGHT(regexp_replace(COALESCE(electrician."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+                = RIGHT(regexp_replace(COALESCE(:dealerPhone${i}, ''), '\\D', '', 'g'), 10))
+        )`,
+    );
+
+    const params: Record<string, string> = {};
+    dealers.forEach((d, i) => {
+      params[`dealerId${i}`] = d.id;
+      params[`dealerCode${i}`] = d.dealerCode ?? '';
+      params[`dealerPhone${i}`] = d.phone ?? '';
+    });
+
+    query.where(`(${conditions.join(' OR ')})`, params);
+
+    if (electricianSearch?.trim()) {
+      query.andWhere(
+        `(electrician.name ILIKE :eSearch
+          OR electrician.phone ILIKE :eSearch
+          OR electrician.electricianCode ILIKE :eSearch
+          OR electrician.city ILIKE :eSearch)`,
+        { eSearch: `%${electricianSearch.trim()}%` },
+      );
+    }
+
+    query.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
+    const [data, total] = await query.getManyAndCount();
+
+    return {
+      dealers: dealers.map((d) => ({
+        id: d.id,
+        name: d.name,
+        phone: d.phone,
+        dealerCode: d.dealerCode,
+        town: d.town,
+        state: d.state,
+        tier: d.tier,
+        status: d.status,
+      })),
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      searchedBy: dealerSearch,
+    };
   }
 
   async getDealerWallet(id: string, page: number = 1, limit: number = 20) {
@@ -948,17 +1180,22 @@ export class DealerService {
     }
     toDate.setHours(23, 59, 59, 999);
 
-    const results = await this.electricianRepository
-      .createQueryBuilder('e')
-      .select('e.dealerId', 'dealerId')
-      .addSelect('COUNT(*)', 'periodElectricians')
-      .where('e.joinedDate >= :from', { from: fromDate })
-      .andWhere('e.joinedDate <= :to', { to: toDate })
-      .andWhere('e.dealerId IS NOT NULL')
-      .groupBy('e.dealerId')
-      .orderBy('COUNT(*)', 'DESC')
-      .limit(limit)
-      .getRawMany();
+    const results = await this.dealerRepository.query(
+      `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "periodElectricians"
+       FROM "dealers" d
+       JOIN "electricians" e ON (
+         e."dealerId"::text = d."id"::text
+         OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
+             AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
+         OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+             = RIGHT(regexp_replace(COALESCE(d."phone", ''), '\\D', '', 'g'), 10))
+       )
+       WHERE e."joinedDate" >= $1 AND e."joinedDate" <= $2
+       GROUP BY d."id"
+       ORDER BY COUNT(DISTINCT e."id") DESC
+       LIMIT $3`,
+      [fromDate, toDate, limit],
+    );
 
     if (results.length === 0) return [];
 
@@ -969,6 +1206,7 @@ export class DealerService {
       .getMany();
 
     const dealerMap = new Map(dealers.map(d => [d.id, d]));
+    const actualCounts = await this.getActualElectricianCounts(dealerIds);
 
     return results.map(r => {
       const d = dealerMap.get(r.dealerId);
@@ -980,7 +1218,7 @@ export class DealerService {
         town: d?.town ?? '',
         state: d?.state ?? '',
         tier: d?.tier ?? 'Silver',
-        electricianCount: d?.electricianCount ?? 0,
+        electricianCount: actualCounts.get(r.dealerId) ?? 0,
         monthlyTarget: d?.monthlyTarget ?? 0,
         achievedTarget: d?.achievedTarget ?? 0,
         periodElectricians: Number(r.periodElectricians),
@@ -995,8 +1233,8 @@ export class DealerService {
       .addSelect('COUNT(*) FILTER (WHERE d.status = :active)::int', 'active')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :pending)::int', 'pending')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :inactive)::int', 'inactive')
-      .addSelect('COUNT(*) FILTER (WHERE d.appInstalled = true)::int', 'installed')
-      .addSelect('COUNT(*) FILTER (WHERE d.appInstalled = false)::int', 'notInstalled')
+      .addSelect('COUNT(*) FILTER (WHERE d.firstAppLoginAt IS NOT NULL)::int', 'installed')
+      .addSelect('COUNT(*) FILTER (WHERE d.firstAppLoginAt IS NULL)::int', 'notInstalled')
       .setParameters({
         active: UserStatus.ACTIVE,
         pending: UserStatus.PENDING,

@@ -10,21 +10,37 @@ export class FixElectricianScanActivityStatus1787031000000 implements MigrationI
       ON "scans" ("userId", "scannedAt" DESC)
       WHERE "role" = 'electrician'
     `);
+    // Legacy imports use the shared "UserStatus" enum while clean installs use
+    // electricians_status_enum. Assigning enum literals directly keeps this
+    // migration compatible with both schemas; hard-casting to either enum does
+    // not.
     await queryRunner.query(`
       UPDATE "electricians" AS e
-      SET "status" = CASE
-            WHEN e."joinedDate" >= now() - interval '30 days'
-              OR EXISTS (
-                SELECT 1 FROM "scans" AS s
-                WHERE s."role" = 'electrician'
-                  AND s."userId" = e.id::text
-                  AND s."scannedAt" >= now() - interval '30 days'
-              )
-            THEN 'active'::electricians_status_enum
-            ELSE 'inactive'::electricians_status_enum
-          END,
-          "updatedAt" = now()
+      SET "status" = 'active', "updatedAt" = now()
       WHERE e."status" NOT IN ('pending', 'suspended')
+        AND (
+          e."joinedDate" >= now() - interval '30 days'
+          OR EXISTS (
+            SELECT 1 FROM "scans" AS s
+            WHERE s."role" = 'electrician'
+              AND s."userId" = e.id::text
+              AND s."scannedAt" >= now() - interval '30 days'
+          )
+        )
+    `);
+    await queryRunner.query(`
+      UPDATE "electricians" AS e
+      SET "status" = 'inactive', "updatedAt" = now()
+      WHERE e."status" NOT IN ('pending', 'suspended')
+        AND NOT (
+          e."joinedDate" >= now() - interval '30 days'
+          OR EXISTS (
+            SELECT 1 FROM "scans" AS s
+            WHERE s."role" = 'electrician'
+              AND s."userId" = e.id::text
+              AND s."scannedAt" >= now() - interval '30 days'
+          )
+        )
     `);
   }
 

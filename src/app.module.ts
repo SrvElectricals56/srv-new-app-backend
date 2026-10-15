@@ -35,6 +35,7 @@ import { AppIcon } from './database/entities/app-icon.entity';
 import { AppActivityEvent } from './database/entities/app-activity-event.entity';
 import { AdminPermission } from './database/entities/admin-permission.entity';
 import { existsSync } from 'fs';
+import { validateEnvironment } from './config/environment.validation';
 
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -100,6 +101,8 @@ function getDatabaseHost(configService: ConfigService) {
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      cache: true,
+      validate: validateEnvironment,
     }),
 
     // Database
@@ -140,8 +143,11 @@ function getDatabaseHost(configService: ConfigService) {
         // Bound every stage of PostgreSQL access so a transient managed-DB
         // network issue cannot consume the whole pool and wedge the API.
         extra: {
-          max: parseInt(configService.get<string>('DB_POOL_MAX', '20')),
-          min: parseInt(configService.get<string>('DB_POOL_MIN', '2')),
+          // The managed production cluster has a small shared connection
+          // budget. Keep the default pool bounded so parallel dashboard calls
+          // queue inside this process instead of exhausting PostgreSQL.
+          max: parseInt(configService.get<string>('DB_POOL_MAX', '5')),
+          min: parseInt(configService.get<string>('DB_POOL_MIN', '1')),
           connectionTimeoutMillis: parseInt(
             configService.get<string>('DB_CONNECTION_TIMEOUT_MS', '5000'),
           ),

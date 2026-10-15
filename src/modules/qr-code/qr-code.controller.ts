@@ -186,6 +186,14 @@ export class QrCodeController {
     return this.qrCodeService.regenerate(id, admin);
   }
 
+  @Post(':id/reverse-usage')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)
+  @ApiOperation({ summary: 'Reverse a used QR, roll back awarded points, and make the same code reusable' })
+  @ApiResponse({ status: 201, description: 'QR usage reversed and code reactivated' })
+  reverseUsage(@Param('id') id: string, @CurrentUser() admin: any) {
+    return this.qrCodeService.reverseUsage(id, admin);
+  }
+
   @Get(':id/first-scan')
   @ApiOperation({ summary: 'Get first scanner details for a QR code' })
   @ApiResponse({ status: 200, description: 'First QR scan details' })

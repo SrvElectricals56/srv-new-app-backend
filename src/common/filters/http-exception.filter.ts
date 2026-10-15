@@ -53,7 +53,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         } else if (detail.includes('sku')) {
           message = 'This SKU already exists';
         } else {
-          message = `Duplicate entry: ${detail}`;
+          message = 'A record with these details already exists';
         }
       } else if (err.code === '23503') {
         // Foreign key violation
@@ -66,8 +66,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else if (err.code === '23502') {
         // Not null violation
         status = HttpStatus.BAD_REQUEST;
-        const column = err.column || 'field';
-        message = `Required field missing: ${column}`;
+        message = 'A required field is missing';
       } else {
         this.logger.error(
           `DB Error ${err.code ?? 'UNKNOWN'} on ${request.method} ${request.url}: ${err.message}`,

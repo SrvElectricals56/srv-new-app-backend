@@ -195,13 +195,17 @@ export class GiftService {
 
     const userIds = [...new Set(data.map((order) => order.userId).filter(Boolean))];
     const owners = userIds.length ? await this.productRepository.query(
-      `SELECT id::text, phone, 'electrician' AS role FROM "electricians" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'dealer' AS role FROM "dealers" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'user' AS role FROM "app_users" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'counterboy' AS role FROM "counterboys" WHERE id::text = ANY($1::text[])`,
+      `SELECT e.id::text, e.phone, e."electricianCode" AS code, 'electrician' AS role, COALESCE(d.name, e."fallbackDealerName") AS "dealerName"
+       FROM electricians e LEFT JOIN dealers d ON d.id::text = e."dealerId"::text WHERE e.id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, "dealerCode" AS code, 'dealer', name FROM dealers WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, "userCode" AS code, 'user', NULL::text FROM app_users WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT c.id::text, c.phone, c."counterboyCode" AS code, 'counterboy', d.name FROM counterboys c
+       LEFT JOIN dealers d ON d.id::text = c."dealerId"::text WHERE c.id::text = ANY($1::text[])`,
       [userIds],
     ) : [];
     const phoneMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.phone]));
+    const codeMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.code]));
+    const dealerMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.dealerName]));
 
     return {
       data: data.map((o) => ({
@@ -209,8 +213,8 @@ export class GiftService {
         type: o.role === ('user' as any) ? 'customer' : o.role,
         userName: o.userName,
         userPhone: phoneMap.get(`${o.role}:${o.userId}`) ?? null,
-        userCode: o.userCode ?? '',
-        dealerName: o.dealerName ?? '—',
+        userCode: o.userCode || codeMap.get(`${o.role}:${o.userId}`) || '',
+        dealerName: dealerMap.get(`${o.role}:${o.userId}`) || o.dealerName || '—',
         giftName: o.giftName,
         giftImage: o.giftImage ?? '',
         pointsUsed: o.pointsUsed,
@@ -274,7 +278,29 @@ export class GiftService {
     return saved;
   }
 
-  async updateOrderStatus(id: string, status: string, extra?: { rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string }) {
+  private async findLinkedRedemption(order: GiftOrder): Promise<Redemption | null> {
+    if (order.redemptionId) {
+      return this.redemptionRepository.findOne({ where: { id: order.redemptionId } });
+    }
+    const candidates = await this.redemptionRepository.find({
+      where: {
+        userId: order.userId,
+        role: order.role,
+        points: order.pointsUsed,
+        type: 'gift',
+        giftProductId: order.giftProductId,
+      },
+      order: { requestedAt: 'DESC' },
+    });
+    const orderedAt = new Date(order.orderedAt).getTime();
+    return candidates
+      .filter((candidate) => candidate.status !== RedemptionStatus.REJECTED
+        && Math.abs(new Date(candidate.requestedAt).getTime() - orderedAt) < 5 * 60 * 1000)
+      .sort((a, b) => Math.abs(new Date(a.requestedAt).getTime() - orderedAt)
+        - Math.abs(new Date(b.requestedAt).getTime() - orderedAt))[0] ?? null;
+  }
+
+  async updateOrderStatus(id: string, status: string, extra?: { shippingAddress?: string; rejectionReason?: string; trackingNumber?: string; courierName?: string; deliveryNotes?: string; processedBy?: string }) {
     const order = await this.giftOrderRepository.findOne({ where: { id } });
 
     if (!order) {
@@ -285,11 +311,20 @@ export class GiftService {
     if (!validStatuses.includes(status as GiftOrderStatus)) {
       throw new BadRequestException(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
     }
+    if ((order.status === GiftOrderStatus.REJECTED || order.status === GiftOrderStatus.DELIVERED)
+      && status !== order.status) {
+      throw new BadRequestException('A completed gift order cannot change status');
+    }
 
     const updateData: Partial<GiftOrder> = {
       status: status as GiftOrderStatus,
     };
 
+    const shippingAddress = extra?.shippingAddress?.trim();
+    if (status === GiftOrderStatus.APPROVED && !shippingAddress && !order.shippingAddress?.trim()) {
+      throw new BadRequestException('Enter a complete shipping address before approving this gift order');
+    }
+    if (shippingAddress) updateData.shippingAddress = shippingAddress;
     if (extra?.rejectionReason) updateData.rejectionReason = extra.rejectionReason;
     if (extra?.trackingNumber) updateData.trackingNumber = extra.trackingNumber;
     if (extra?.courierName) updateData.courierName = extra.courierName;
@@ -315,15 +350,7 @@ export class GiftService {
     if (status === GiftOrderStatus.REJECTED && order.status !== GiftOrderStatus.REJECTED) {
       await this.productRepository.increment({ id: order.giftProductId }, 'stock', 1);
 
-      const redemption = await this.redemptionRepository.findOne({
-        where: {
-          userId: order.userId,
-          points: order.pointsUsed,
-          type: 'gift',
-          giftProductId: order.giftProductId,
-        },
-        order: { requestedAt: 'DESC' },
-      });
+      const redemption = await this.findLinkedRedemption(order);
       if (redemption) {
         await this.redemptionService.reject(
           redemption.id,
@@ -336,15 +363,7 @@ export class GiftService {
     await this.giftOrderRepository.update(id, updateData);
 
     if (status !== GiftOrderStatus.REJECTED) {
-      const linkedRedemption = await this.redemptionRepository.findOne({
-        where: {
-          userId: order.userId,
-          points: order.pointsUsed,
-          type: 'gift',
-          giftProductId: order.giftProductId,
-        },
-        order: { requestedAt: 'DESC' },
-      });
+      const linkedRedemption = await this.findLinkedRedemption(order);
 
       if (linkedRedemption) {
         const nextRedemptionStatus =
@@ -379,6 +398,9 @@ export class GiftService {
   async deleteOrder(id: string) {
     const order = await this.giftOrderRepository.findOne({ where: { id } });
     if (!order) throw new NotFoundException('Gift order not found');
+    if (order.status !== GiftOrderStatus.REJECTED) {
+      throw new BadRequestException('Reject and refund the gift order before deleting it');
+    }
     await this.giftOrderRepository.remove(order);
     return { message: 'Gift order deleted successfully' };
   }

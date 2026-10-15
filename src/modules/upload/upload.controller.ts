@@ -12,7 +12,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nes
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import { stat, unlink } from 'fs/promises';
+import { stat, unlink, open } from 'fs/promises';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 const sharp: any = require('sharp');
@@ -44,7 +44,7 @@ export class UploadController {
     maxWidth: number,
     maxHeight: number,
   ) {
-    const baseName = file.filename.slice(0, -extname(file.filename).length);
+    const baseName = file.filename.slice(0, file.filename.length - extname(file.filename).length);
     const optimizedFilename = `${baseName}-optimized.webp`;
     const optimizedPath = join(file.destination, optimizedFilename);
 
@@ -70,6 +70,25 @@ export class UploadController {
       // otherwise valid image. Uploading must remain reliable for admins.
       return { filename: file.filename, size: file.size };
     }
+  }
+
+  private async prepareKycDocument(file: Express.Multer.File) {
+    if (file.mimetype === 'application/pdf') {
+      const handle = await open(file.path, 'r');
+      const header = Buffer.alloc(5);
+      try { await handle.read(header, 0, 5, 0); } finally { await handle.close(); }
+      if (header.toString() !== '%PDF-') {
+        await unlink(file.path).catch(() => undefined);
+        throw new BadRequestException('Upload a valid PDF document');
+      }
+      return { filename: file.filename, size: file.size };
+    }
+    const result = await this.optimizeImage(file, 2400, 2400);
+    if (result.filename === file.filename) {
+      await unlink(file.path).catch(() => undefined);
+      throw new BadRequestException('Unable to read this image. Please upload a valid JPG, PNG or WebP image.');
+    }
+    return result;
   }
 
   private getBaseUrl() {
@@ -259,6 +278,27 @@ export class UploadController {
     return { url, filename: file.filename, originalName: file.originalname, size: file.size };
   }
 
+  @Post('kyc-document')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: AADHAR_DIR,
+      filename: (_req, file, cb) => cb(null, `kyc-${crypto.randomUUID()}${extname(file.originalname).toLowerCase()}`),
+    }),
+    fileFilter: (_req, file, cb) => {
+      if (!/^(image\/(jpeg|jpg|png|gif|webp|heic|heif)|application\/pdf)$/.test(file.mimetype)) {
+        return cb(new BadRequestException('Upload an image or PDF document'), false);
+      }
+      cb(null, true);
+    },
+    limits: { fileSize: 10 * 1024 * 1024 },
+  }))
+  async uploadKycDocument(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const result = await this.prepareKycDocument(file);
+    return { url: this.buildFileUrl(req, `aadhar/${result.filename}`), filename: result.filename };
+  }
+
   // ── Mobile-only endpoint (MobileJwtGuard — validates against mobile users) ──
 
   @Post('aadhar-image')
@@ -281,7 +321,7 @@ export class UploadController {
         },
       }),
       fileFilter: (_req, file, cb) => {
-        if (!file.mimetype.match(/^(image\/(jpeg|jpg|png|gif|webp)|application\/pdf)$/)) {
+        if (!file.mimetype.match(/^(image\/(jpeg|jpg|png|gif|webp|heic|heif)|application\/pdf)$/)) {
           return cb(new BadRequestException('Only image files or PDF are allowed'), false);
         }
         cb(null, true);
@@ -289,9 +329,10 @@ export class UploadController {
       limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  uploadAadharImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
+  async uploadAadharImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
-    const imageUrl = `${this.getBaseUrl()}/uploads/aadhar/${file.filename}`;
-    return { url: imageUrl, filename: file.filename, originalName: file.originalname, size: file.size };
+    const result = await this.prepareKycDocument(file);
+    const imageUrl = `${this.getBaseUrl().replace(/\/$/, '')}/uploads/aadhar/${result.filename}`;
+    return { url: imageUrl, filename: result.filename, originalName: file.originalname, size: result.size };
   }
 }

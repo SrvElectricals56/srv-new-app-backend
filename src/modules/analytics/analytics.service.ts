@@ -9,7 +9,9 @@ import { Wallet } from '../../database/entities/wallet.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { SupportTicket } from '../../database/entities/support-ticket.entity';
-import { UserRole, RedemptionStatus, UserStatus, KYCStatus } from '../../common/enums';
+import { GiftOrder, GiftOrderStatus } from '../../database/entities/gift-order.entity';
+import { ProductOrder, ProductOrderStatus } from '../../database/entities/product-order.entity';
+import { UserRole, RedemptionStatus, UserStatus, KYCStatus, SupportTicketStatus } from '../../common/enums';
 
 @Injectable()
 export class AnalyticsService {
@@ -30,6 +32,10 @@ export class AnalyticsService {
     private counterBoyRepository: Repository<CounterBoy>,
     @InjectRepository(SupportTicket)
     private supportTicketRepository: Repository<SupportTicket>,
+    @InjectRepository(GiftOrder)
+    private giftOrderRepository: Repository<GiftOrder>,
+    @InjectRepository(ProductOrder)
+    private productOrderRepository: Repository<ProductOrder>,
   ) {}
 
   async getDashboard() {
@@ -59,6 +65,13 @@ export class AnalyticsService {
       dealerKyc,
       appUserKyc,
       counterboyKyc,
+      pendingElectricianRedemptions,
+      pendingDealerRedemptions,
+      pendingGiftOrders,
+      pendingProductOrders,
+      actionableProductOrders,
+      openEnquiries,
+      pendingDealerApprovals,
     ] = await Promise.all([
       this.electricianRepository.count(),
       this.dealerRepository.count(),
@@ -85,6 +98,33 @@ export class AnalyticsService {
       this.getKycCounts(this.dealerRepository),
       this.getKycCounts(this.appUserRepository),
       this.getKycCounts(this.counterBoyRepository),
+      this.redemptionRepository.count({ where: { status: RedemptionStatus.PENDING, role: UserRole.ELECTRICIAN } }),
+      this.redemptionRepository.count({ where: { status: RedemptionStatus.PENDING, role: UserRole.DEALER } }),
+      this.giftOrderRepository.count({ where: { status: GiftOrderStatus.PENDING } }),
+      this.productOrderRepository.createQueryBuilder('product_order')
+        .where('product_order.status = :pending', { pending: ProductOrderStatus.PENDING })
+        .andWhere('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
+        .getCount(),
+      this.productOrderRepository.createQueryBuilder('product_order')
+        .where('(product_order.paymentMethod <> :razorpay OR product_order.paymentStatus = :paid)', { razorpay: 'razorpay', paid: 'paid' })
+        .andWhere(`(
+          product_order.status = :newOrder
+          OR (product_order."customerActionAt" IS NOT NULL AND (
+            product_order.status IN (:...customerRequestStatuses) OR product_order."refundStatus" = :refundPending
+          ))
+        )`, {
+          newOrder: ProductOrderStatus.PENDING,
+          customerRequestStatuses: [
+            ProductOrderStatus.CANCELLED,
+            ProductOrderStatus.RETURNED,
+          ],
+          refundPending: 'pending',
+        })
+        .getCount(),
+      this.supportTicketRepository.createQueryBuilder('ticket')
+        .where('ticket.status IN (:...statuses)', { statuses: [SupportTicketStatus.OPEN, SupportTicketStatus.IN_PROGRESS] })
+        .getCount(),
+      this.dealerRepository.count({ where: { status: UserStatus.PENDING } }),
     ]);
 
     const growthRate = totalScansYesterday > 0 
@@ -118,6 +158,17 @@ export class AnalyticsService {
       pendingRedemptions,
       totalRedemptions,
       growthRate: Math.round(growthRate * 100) / 100,
+      notifications: {
+        pendingElectricianRedemptions,
+        pendingDealerRedemptions,
+        pendingGiftOrders,
+        pendingProductOrders,
+        actionableProductOrders,
+        openEnquiries,
+        pendingElectricianKyc: electricianKyc.pending,
+        pendingDealerKyc: dealerKyc.pending,
+        pendingDealerApprovals,
+      },
     };
   }
 

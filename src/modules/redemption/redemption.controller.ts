@@ -33,8 +33,11 @@ export class RedemptionController {
     @Query('status') status?: RedemptionStatus,
     @Query('role') role?: UserRole,
     @Query('userId') userId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('search') search?: string,
   ) {
-    return this.redemptionService.findAll(parseInt(page), parseInt(limit), status, role, userId);
+    return this.redemptionService.findAll(parseInt(page), parseInt(limit), status, role, userId, from, to, search);
   }
 
   @Get(':id')

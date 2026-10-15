@@ -25,6 +25,8 @@ function createService(options: {
     fallbackDealerPhone: signupData.dealerPhone,
   };
   const electricianRepository = {
+    increment: jest.fn().mockResolvedValue({ affected: 1 }),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
     findOne: jest
       .fn()
       .mockResolvedValueOnce(options.existingElectrician ?? null)
@@ -48,7 +50,7 @@ function createService(options: {
     assertPhoneAvailableForRole: jest.fn().mockResolvedValue(undefined),
     findPrimaryRegistrationByPhone: jest.fn().mockResolvedValue(null),
   };
-  const jwtService = {
+  const jwtService: any = {
     verify: jest.fn(() => ({
       purpose: 'signup_otp',
       phone: signupData.phone,
@@ -154,5 +156,67 @@ describe('MobileAuthService electrician signup', () => {
     expect(context.dataSource.transaction).toHaveBeenCalledTimes(1);
     expect(context.transactionalElectricianRepository.save).toHaveBeenCalledTimes(1);
     expect(context.jwtService.sign).not.toHaveBeenCalled();
+  });
+});
+
+describe('MobileAuthService session revocation', () => {
+  it('rejects a refresh token issued before tokenVersion changed', async () => {
+    const context = createService();
+    context.jwtService.verify.mockReturnValueOnce({
+      sub: 'electrician-id',
+      phone: signupData.phone,
+      role: 'electrician',
+      tokenVersion: 1,
+    });
+    context.electricianRepository.findOne.mockReset().mockResolvedValue({
+      id: 'electrician-id',
+      phone: signupData.phone,
+      role: 'electrician',
+      status: UserStatus.ACTIVE,
+      tokenVersion: 2,
+    });
+
+    await expect(context.service.refreshToken('old-refresh-token')).rejects.toThrow(
+      'Invalid refresh token',
+    );
+  });
+
+  it('increments tokenVersion during authenticated logout', async () => {
+    const context = createService();
+
+    await expect(
+      context.service.logout('electrician-id', 'electrician'),
+    ).resolves.toEqual({
+      success: true,
+      message: 'Logged out successfully',
+    });
+    expect(context.electricianRepository.increment).toHaveBeenCalledWith(
+      { id: 'electrician-id' },
+      'tokenVersion',
+      1,
+    );
+  });
+});
+
+describe('MobileAuthService app-install tracking', () => {
+  it('records first login when a stale imported install flag has no timestamp', async () => {
+    const context = createService({
+      existingElectrician: {
+        id: 'electrician-id',
+        appInstalled: true,
+        firstAppLoginAt: null,
+      },
+    });
+
+    await (context.service as any).touchActivity('electrician-id', 'electrician');
+
+    expect(context.electricianRepository.update).toHaveBeenCalledWith(
+      'electrician-id',
+      expect.objectContaining({
+        appInstalled: true,
+        firstAppLoginAt: expect.any(Date),
+        lastActivityAt: expect.any(Date),
+      }),
+    );
   });
 });

@@ -14,7 +14,12 @@ import { AppActivityEvent, AppActivityEventType } from '../../database/entities/
 import { UserStatus, MemberTier, UserRole, ElectricianSubCategory, KYCStatus } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
-import { getElectricianActivityStatus } from '../../common/utils/electrician-activity.util';
+import {
+  ElectricianActivityStatus,
+  getElectricianActivityStatus,
+} from '../../common/utils/electrician-activity.util';
+import { electricianKycStatus } from '../../common/utils/electrician-kyc.util';
+import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
 
 @Injectable()
 export class ElectricianService {
@@ -52,52 +57,37 @@ export class ElectricianService {
     return points;
   }
 
-  private synchronizePoints(
-    data: Record<string, any>,
-    current?: Pick<Electrician, 'totalPoints' | 'walletBalance' | 'status'>,
-  ) {
+  private async normalizeIndependentPointFields(data: Record<string, any>) {
     const totalProvided = data.totalPoints !== undefined;
     const walletProvided = data.walletBalance !== undefined;
     if (!totalProvided && !walletProvided) return;
 
-    const incomingTotal = totalProvided ? this.parsePoints(data.totalPoints) : undefined;
-    const incomingWallet = walletProvided ? this.parsePoints(data.walletBalance) : undefined;
-    let points: number | undefined;
-
-    if (!current) {
-      if (incomingTotal !== undefined && incomingWallet !== undefined && incomingTotal !== incomingWallet) {
-        if (incomingTotal === 0) points = incomingWallet;
-        else if (incomingWallet === 0) points = incomingTotal;
-        else throw new BadRequestException('Total points and wallet balance must match');
-      } else {
-        points = incomingTotal ?? incomingWallet ?? 0;
-      }
-    } else if (incomingTotal !== undefined && incomingWallet !== undefined) {
-      const totalChanged = incomingTotal !== Number(current.totalPoints);
-      const walletChanged = incomingWallet !== Number(current.walletBalance);
-
-      if (!totalChanged && !walletChanged) return;
-      if (totalChanged && !walletChanged) points = incomingTotal;
-      else if (walletChanged && !totalChanged) points = incomingWallet;
-      else if (incomingTotal === incomingWallet) points = incomingTotal;
-      else throw new BadRequestException('Total points and wallet balance must match');
-    } else {
-      points = incomingTotal ?? incomingWallet;
+    if (totalProvided) {
+      data.totalPoints = this.parsePoints(data.totalPoints);
+      data.tier = await this.tierService.calculateElectricianTier(data.totalPoints);
     }
+    if (walletProvided) data.walletBalance = this.parsePoints(data.walletBalance);
+  }
 
-    data.totalPoints = points;
-    data.walletBalance = points;
-    data.tier = this.tierService.calculateElectricianTier(points ?? 0);
+  private async getRedemptionCounts(ids: string[]): Promise<Map<string, number>> {
+    if (!ids.length) return new Map();
+    const rows = await this.electricianRepository.query(
+      `SELECT "userId", COUNT(*)::int AS count FROM redemptions
+       WHERE role = $1 AND "userId" = ANY($2::text[]) GROUP BY "userId"`,
+      [UserRole.ELECTRICIAN, ids],
+    );
+    return new Map(rows.map((row: any) => [row.userId, Number(row.count)]));
   }
 
   private async getScanActivity(
     electricianIds: string[],
-  ): Promise<Map<string, { lastScanAt: Date | null; scansLast7Days: number }>> {
-    if (electricianIds.length === 0) return new Map<string, { lastScanAt: Date | null; scansLast7Days: number }>();
+  ): Promise<Map<string, { lastScanAt: Date | null; scansLast7Days: number; totalScans: number }>> {
+    if (electricianIds.length === 0) return new Map();
 
     const rows = await this.scanRepository.query(
       `SELECT "userId",
               MAX("scannedAt") AS "lastScanAt",
+              COUNT(*)::int AS "totalScans",
               COUNT(*) FILTER (WHERE "scannedAt" >= now() - interval '7 days')::int AS "scansLast7Days"
        FROM "scans"
        WHERE "role" = $1 AND "userId" = ANY($2::text[])
@@ -105,16 +95,18 @@ export class ElectricianService {
       [UserRole.ELECTRICIAN, electricianIds],
     );
 
-    return new Map<string, { lastScanAt: Date | null; scansLast7Days: number }>(rows.map((row: any) => [row.userId, {
+    return new Map(rows.map((row: any) => [row.userId, {
       lastScanAt: row.lastScanAt ? new Date(row.lastScanAt) : null,
       scansLast7Days: Number(row.scansLast7Days ?? 0),
+      totalScans: Number(row.totalScans ?? 0),
     }]));
   }
 
-  private withScanActivity(electrician: Electrician, activity?: { lastScanAt: Date | null; scansLast7Days: number }) {
+  private withScanActivity(electrician: Electrician, activity?: { lastScanAt: Date | null; scansLast7Days: number; totalScans: number }) {
     const lastScanAt = activity?.lastScanAt ?? null;
     return {
       ...this.serialize(electrician),
+      totalScans: activity?.totalScans ?? 0,
       lastScanAt,
       scansLast7Days: activity?.scansLast7Days ?? 0,
       activityStatus: getElectricianActivityStatus({
@@ -145,7 +137,7 @@ export class ElectricianService {
           }
         : {}),
       hasPassword: Boolean(passwordHash),
-      appInstalled: Boolean((electrician as any).appInstalled),
+      appInstalled: hasRecordedAppInstall((electrician as any).firstAppLoginAt),
       firstAppLoginAt: (electrician as any).firstAppLoginAt ?? null,
     };
   }
@@ -250,13 +242,17 @@ export class ElectricianService {
       throw new ConflictException('Electrician with this code already exists');
     }
 
-    // Points and wallet represent the same spendable balance throughout the app.
-    this.synchronizePoints(data);
+    // Ranking points and spendable wallet balance are separate admin fields.
+    if (data.kycStatus === KYCStatus.REJECTED && !data.kycRejectionReason?.trim()) {
+      data.kycRejectionReason = 'Rejected by admin';
+    }
+    data.kycStatus = electricianKycStatus(data);
+    await this.normalizeIndependentPointFields(data);
     if (data.totalPoints === undefined) {
       data.totalPoints = 0;
-      data.walletBalance = 0;
-      data.tier = this.tierService.calculateElectricianTier(0);
+      data.tier = await this.tierService.calculateElectricianTier(0);
     }
+    if (data.walletBalance === undefined) data.walletBalance = 0;
 
     const electrician = this.electricianRepository.create(data);
     const saved = (await this.electricianRepository.save(electrician as any)) as unknown as Electrician;
@@ -307,6 +303,8 @@ export class ElectricianService {
     dateFrom?: string,
     dateTo?: string,
     kycStatus?: KYCStatus,
+    dateField?: 'joined' | 'installed',
+    activityStatus?: ElectricianActivityStatus,
     includeMedia: boolean = false,
   ) {
     const skip = (page - 1) * limit;
@@ -346,6 +344,54 @@ export class ElectricianService {
       queryBuilder.andWhere('electrician.status = :status', { status });
     }
 
+    if (activityStatus && !['proactive', 'active', 'inactive'].includes(activityStatus)) {
+      throw new BadRequestException('Invalid electrician activity status');
+    }
+
+    if (activityStatus) {
+      const hasRecentScan = (days: 7 | 30) =>
+        `EXISTS (
+          SELECT 1 FROM "scans" "activityScan"
+          WHERE "activityScan"."userId" = electrician.id::text
+            AND "activityScan"."role" = :activityRole
+            AND "activityScan"."scannedAt" >= now() - interval '${days} days'
+        )`;
+      const accountAllowsActivity =
+        'electrician.status NOT IN (:...inactiveAccountStatuses)';
+
+      if (activityStatus === 'proactive') {
+        queryBuilder.andWhere(
+          `${accountAllowsActivity} AND ${hasRecentScan(7)}`,
+          {
+            activityRole: UserRole.ELECTRICIAN,
+            inactiveAccountStatuses: [UserStatus.INACTIVE, UserStatus.SUSPENDED],
+          },
+        );
+      } else if (activityStatus === 'active') {
+        queryBuilder.andWhere(
+          `${accountAllowsActivity}
+           AND NOT ${hasRecentScan(7)}
+           AND (${hasRecentScan(30)} OR electrician.joinedDate >= now() - interval '30 days')`,
+          {
+            activityRole: UserRole.ELECTRICIAN,
+            inactiveAccountStatuses: [UserStatus.INACTIVE, UserStatus.SUSPENDED],
+          },
+        );
+      } else {
+        queryBuilder.andWhere(
+          `(electrician.status IN (:...inactiveAccountStatuses)
+            OR (
+              NOT ${hasRecentScan(30)}
+              AND (electrician.joinedDate IS NULL OR electrician.joinedDate < now() - interval '30 days')
+            ))`,
+          {
+            activityRole: UserRole.ELECTRICIAN,
+            inactiveAccountStatuses: [UserStatus.INACTIVE, UserStatus.SUSPENDED],
+          },
+        );
+      }
+    }
+
     if (kycStatus) {
       queryBuilder.andWhere('electrician.kycStatus = :kycStatus', { kycStatus });
     }
@@ -374,8 +420,10 @@ export class ElectricianService {
       queryBuilder.andWhere('electrician.bankLinked = :bankLinked', { bankLinked });
     }
 
-    if (appInstalled !== undefined) {
-      queryBuilder.andWhere('electrician.appInstalled = :appInstalled', { appInstalled });
+    if (appInstalled === true) {
+      queryBuilder.andWhere('electrician.firstAppLoginAt IS NOT NULL');
+    } else if (appInstalled === false) {
+      queryBuilder.andWhere('electrician.firstAppLoginAt IS NULL');
     }
 
     if (welcomeBonus) {
@@ -397,11 +445,14 @@ export class ElectricianService {
       });
     }
 
-    // When the admin selects App Installed, date shortcuts describe the app
-    // installation date. Otherwise they continue to describe registration.
-    // Compare calendar dates in IST so Today does not drift to the previous or
-    // following day when the browser and server use different time zones.
-    const filteredDateColumn = appInstalled === true
+    // The UI sends dateField=installed for app-install shortcuts. Keep this
+    // explicit so an "All App Status" selection cannot silently switch the
+    // same date picker back to account registration date.
+    const filterByInstallDate = dateField === 'installed' || appInstalled === true;
+    if (filterByInstallDate) {
+      queryBuilder.andWhere('electrician.firstAppLoginAt IS NOT NULL');
+    }
+    const filteredDateColumn = filterByInstallDate
       ? 'electrician.firstAppLoginAt'
       : 'electrician.joinedDate';
     if (dateFrom) {
@@ -419,15 +470,19 @@ export class ElectricianService {
     }
 
     queryBuilder
-      .orderBy('electrician.joinedDate', 'DESC')
+      .orderBy(filteredDateColumn, 'DESC')
+      .addOrderBy('electrician.id', 'ASC')
       .skip(skip)
       .take(limit);
 
     const [rawData, total] = await queryBuilder.getManyAndCount();
 
-    const scanActivity = await this.getScanActivity(rawData.map(e => e.id));
+    const [scanActivity, redemptionCounts] = await Promise.all([
+      this.getScanActivity(rawData.map(e => e.id)), this.getRedemptionCounts(rawData.map(e => e.id)),
+    ]);
     const data = rawData.map(e => this.withScanActivity({
       ...e,
+      totalRedemptions: redemptionCounts.get(e.id) ?? 0,
       dealerName: (e as any).dealer?.name ?? e.fallbackDealerName ?? 'SRV Dealer',
       dealerPhone: (e as any).dealer?.phone ?? e.fallbackDealerPhone ?? null,
       dealerCode: (e as any).dealer?.dealerCode ?? e.fallbackDealerCode ?? null,
@@ -452,13 +507,25 @@ export class ElectricianService {
       throw new NotFoundException('Electrician not found');
     }
 
-    const scanActivity = await this.getScanActivity([electrician.id]);
+    const [scanActivity, redemptionCounts] = await Promise.all([
+      this.getScanActivity([electrician.id]), this.getRedemptionCounts([electrician.id]),
+    ]);
     return this.withScanActivity({
       ...electrician,
+      totalRedemptions: redemptionCounts.get(electrician.id) ?? 0,
       dealerName: (electrician as any).dealer?.name ?? electrician.fallbackDealerName ?? 'SRV Dealer',
       dealerPhone: (electrician as any).dealer?.phone ?? electrician.fallbackDealerPhone ?? null,
       dealerCode: (electrician as any).dealer?.dealerCode ?? electrician.fallbackDealerCode ?? null,
     } as Electrician & { dealerName?: string | null; dealerPhone?: string | null; dealerCode?: string | null }, scanActivity.get(electrician.id));
+  }
+
+  async approveAllKyc() {
+    const result = await this.electricianRepository.createQueryBuilder()
+      .update()
+      .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
+      .where('"kycStatus" <> :status', { status: 'verified' })
+      .execute();
+    return { approved: result.affected ?? 0 };
   }
 
   async update(id: string, updateElectricianDto: UpdateElectricianDto) {
@@ -495,9 +562,14 @@ export class ElectricianService {
       }
     }
 
-    // Keep ranking points and spendable wallet points synchronized even when
-    // admin clients submit both fields but only one was actually edited.
-    this.synchronizePoints(data, electrician);
+    if (data.kycStatus === KYCStatus.REJECTED && !data.kycRejectionReason?.trim()) {
+      data.kycRejectionReason = 'Rejected by admin';
+    }
+    // An explicit admin decision must survive unrelated profile edits.
+    if (data.kycStatus && data.kycStatus !== KYCStatus.REJECTED) {
+      data.kycRejectionReason = null;
+    }
+    await this.normalizeIndependentPointFields(data);
 
     if (passwordHash) {
       data.passwordHash = passwordHash;
@@ -1007,7 +1079,7 @@ export class ElectricianService {
           const { id, joinedDate, updatedAt, ...updateData } = mapped;
           if (updateData.totalPoints !== undefined) {
             const points = Number(updateData.totalPoints);
-            updateData.tier = this.tierService.calculateElectricianTier(points);
+            updateData.tier = await this.tierService.calculateElectricianTier(points);
           }
           await this.electricianRepository.update(existing.id, updateData);
           updated++;
@@ -1021,7 +1093,7 @@ export class ElectricianService {
             phone: data.phone,
           });
           const points = Number(data.totalPoints ?? 0);
-          data.tier = this.tierService.calculateElectricianTier(points);
+          data.tier = await this.tierService.calculateElectricianTier(points);
           const entity = this.electricianRepository.create(data);
           await this.electricianRepository.save(entity as any);
           if (data.dealerId) await this.tierService.syncDealerTier(data.dealerId);
@@ -1092,7 +1164,8 @@ export class ElectricianService {
     fallbackFrom.setDate(fallbackFrom.getDate() - 30);
     fallbackFrom.setHours(0, 0, 0, 0);
 
-    const fromDate = from ? new Date(from) : fallbackFrom;
+    const allTime = from === 'all';
+    const fromDate = allTime ? new Date(0) : from ? new Date(from) : fallbackFrom;
     const toDate = to ? new Date(to) : now;
     if (Number.isNaN(fromDate.getTime())) {
       fromDate.setTime(fallbackFrom.getTime());
@@ -1130,13 +1203,15 @@ export class ElectricianService {
     const redemptionMap = new Map(redemptionResults.map(r => [r.userId, r]));
     const allUserIds = new Set([...scanMap.keys(), ...redemptionMap.keys()]);
 
-    if (allUserIds.size === 0) return [];
+    if (!allTime && sortBy !== 'wallet' && allUserIds.size === 0) return [];
 
     const electricians = await this.electricianRepository
       .createQueryBuilder('e')
-      .where('e.id IN (:...ids)', { ids: [...allUserIds] })
+      .where(allTime || sortBy === 'wallet' ? '1=1' : 'e.id IN (:...ids)', { ids: [...allUserIds] })
       .andWhere('e.status = :status', { status: 'active' })
       .getMany();
+    const actualScanCounts = await this.getScanActivity(electricians.map((electrician) => electrician.id));
+    const actualRedemptionCounts = await this.getRedemptionCounts(electricians.map((electrician) => electrician.id));
 
     const result = electricians.map(e => {
       const s = scanMap.get(e.id);
@@ -1151,8 +1226,8 @@ export class ElectricianService {
         tier: e.tier,
         walletBalance: e.walletBalance,
         totalPoints: e.totalPoints,
-        totalScans: e.totalScans,
-        totalRedemptions: e.totalRedemptions,
+        totalScans: actualScanCounts.get(e.id)?.totalScans ?? 0,
+        totalRedemptions: actualRedemptionCounts.get(e.id) ?? 0,
         periodPoints: s ? Number(s.periodPoints) : 0,
         periodScans: s ? Number(s.periodScans) : 0,
         periodRedemptions: r ? Number(r.periodRedemptions) : 0,
@@ -1160,6 +1235,7 @@ export class ElectricianService {
     });
 
     result.sort((a, b) => {
+      if (sortBy === 'wallet') return Number(b.walletBalance) - Number(a.walletBalance);
       if (sortBy === 'scans') return b.periodScans - a.periodScans;
       if (sortBy === 'redemptions') return b.periodRedemptions - a.periodRedemptions;
       return b.periodPoints - a.periodPoints;
@@ -1187,8 +1263,8 @@ export class ElectricianService {
     const row = await this.electricianRepository
       .createQueryBuilder('e')
       .select('COUNT(*)::int', 'total')
-      .addSelect('COUNT(*) FILTER (WHERE e.appInstalled = true)::int', 'installed')
-      .addSelect('COUNT(*) FILTER (WHERE e.appInstalled = false)::int', 'notInstalled')
+      .addSelect('COUNT(*) FILTER (WHERE e.firstAppLoginAt IS NOT NULL)::int', 'installed')
+      .addSelect('COUNT(*) FILTER (WHERE e.firstAppLoginAt IS NULL)::int', 'notInstalled')
       .getRawOne();
     return {
       total: Number(row?.total ?? 0),
