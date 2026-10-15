@@ -86,8 +86,9 @@ services:
 
   admin-frontend:
     build:
-      context: ../srv-new-adminpanel
-      dockerfile: ../srv-new-app-backend/docker/frontend.Dockerfile
+      # These projects are separate Desktop folders, not repository siblings.
+      context: ../../srv_new_adminpanel/srv-new-adminpanel
+      dockerfile: ../../new backend/srv-new-app-backend/docker/frontend.Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:3001/api/v1}
         SERVER_API_URL: ${SERVER_API_URL:-http://backend:3001/api/v1}
@@ -106,8 +107,8 @@ services:
 
   mobile-app:
     build:
-      context: ../srv-new-app-frontend
-      dockerfile: ../srv-new-app-backend/docker/expo-app.Dockerfile
+      context: ../../new frontend/srv-new-app-frontend
+      dockerfile: ../../new backend/srv-new-app-backend/docker/expo-app.Dockerfile
     container_name: srv_mobile_app
     restart: unless-stopped
     environment:
