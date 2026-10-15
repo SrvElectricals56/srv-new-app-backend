@@ -85,20 +85,25 @@ export class ProductOrderService {
 
   private async getOrderOwnerMap(orders: ProductOrder[]) {
     const userIds = [...new Set(orders.map((order) => order.userId).filter(Boolean))];
-    if (!userIds.length) return new Map<string, { name: string | null; phone: string | null; code: string | null }>();
+    if (!userIds.length) return new Map<string, { name: string | null; phone: string | null; code: string | null; dealerName: string | null }>();
     const rows = await this.productOrderRepository.query(
-      `SELECT id::text, name, phone, "electricianCode" AS code, 'electrician' AS role FROM "electricians" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, name, phone, "dealerCode" AS code, 'dealer' AS role FROM "dealers" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, name, phone, "userCode" AS code, 'user' AS role FROM "app_users" WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, name, phone, "counterboyCode" AS code, 'counterboy' AS role FROM "counterboys" WHERE id::text = ANY($1::text[])`,
+      `SELECT e.id::text, e.name, e.phone, e."electricianCode" AS code,
+              COALESCE(d.name, e."fallbackDealerName") AS "dealerName", 'electrician' AS role
+       FROM "electricians" e
+       LEFT JOIN "dealers" d ON d.id::text = e."dealerId"::text
+       WHERE e.id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, name, phone, "dealerCode" AS code, name AS "dealerName", 'dealer' AS role FROM "dealers" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, name, phone, "userCode" AS code, NULL::text AS "dealerName", 'user' AS role FROM "app_users" WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT c.id::text, c.name, c.phone, c."counterboyCode" AS code, d.name AS "dealerName", 'counterboy' AS role
+       FROM "counterboys" c LEFT JOIN "dealers" d ON d.id::text = c."dealerId"::text WHERE c.id::text = ANY($1::text[])`,
       [userIds],
     );
-    return new Map<string, { name: string | null; phone: string | null; code: string | null }>(
-      rows.map((row: any) => [`${row.role}:${row.id}`, { name: row.name, phone: row.phone, code: row.code }]),
+    return new Map<string, { name: string | null; phone: string | null; code: string | null; dealerName: string | null }>(
+      rows.map((row: any) => [`${row.role}:${row.id}`, { name: row.name, phone: row.phone, code: row.code, dealerName: row.dealerName }]),
     );
   }
 
-  private mapOrder(o: ProductOrder, owner?: { name: string | null; phone: string | null; code: string | null }) {
+  private mapOrder(o: ProductOrder, owner?: { name: string | null; phone: string | null; code: string |null; dealerName: string | null }) {
     return {
       id: o.id,
       orderCode: this.getOrderCode(o.id),
@@ -107,6 +112,7 @@ export class ProductOrderService {
       userName: this.identityValue(o.userName, owner?.name) ?? 'Unknown user',
       userPhone: this.identityValue(o.userPhone, owner?.phone),
       userCode: this.identityValue(o.userCode, owner?.code),
+      dealerName: owner?.dealerName ?? null,
       productId: o.productId,
       productName: o.productName,
       productImage: o.productImage,

@@ -180,15 +180,36 @@ export class DealerController {
     return this.dealerService.remove(id);
   }
 
+  @Get('search/electricians')
+  @ApiOperation({
+    summary: 'Find electricians by searching dealer name, phone number, or dealer code',
+    description: 'Search for a dealer using their name, phone number, or dealer code and get all their associated electricians. Supports an optional electrician-level search to further filter results.',
+  })
+  @ApiResponse({ status: 200, description: 'Matching dealers and their associated electricians' })
+  getElectriciansByDealerSearch(
+    @Query('dealerSearch') dealerSearch: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') electricianSearch?: string,
+  ) {
+    return this.dealerService.getDealerElectriciansByDealerSearch(
+      dealerSearch,
+      parseInt(page),
+      parseInt(limit),
+      electricianSearch,
+    );
+  }
+
   @Get(':id/electricians')
-  @ApiOperation({ summary: 'Get dealer electricians' })
+  @ApiOperation({ summary: 'Get dealer electricians by dealer ID' })
   @ApiResponse({ status: 200, description: 'Dealer electricians' })
   getElectricians(
     @Param('id') id: string,
     @Query('page') page = '1',
     @Query('limit') limit = '20',
+    @Query('search') search?: string,
   ) {
-    return this.dealerService.getDealerElectricians(id, parseInt(page), parseInt(limit));
+    return this.dealerService.getDealerElectricians(id, parseInt(page), parseInt(limit), search);
   }
 
   @Get(':id/wallet')

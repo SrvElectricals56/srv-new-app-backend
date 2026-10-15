@@ -2,7 +2,12 @@ services:
   postgres:
     # Keep the image major version aligned with the existing postgres_data
     # volume. PostgreSQL data directories cannot be opened by a different major.
+<<<<<<< HEAD
+    image: postgres:17-alpine
+    container_name: srv_admin_postgres
+=======
     image: postgres:15-alpine
+>>>>>>> 1c86159de5d8c8a72b61ccf1ed50d30fac24075d
     restart: unless-stopped
     command:
       - postgres
@@ -111,6 +116,8 @@ services:
       timeout: 5s
       retries: 20
 
+<<<<<<< HEAD
+=======
   admin-frontend:
     build:
       context: ../srv-new-adminpanel
@@ -165,6 +172,7 @@ services:
       timeout: 10s
       retries: 20
 
+>>>>>>> 1c86159de5d8c8a72b61ccf1ed50d30fac24075d
 volumes:
   postgres_data:
   pgadmin_data:
