@@ -406,11 +406,11 @@ export class DealerService {
     }
 
     if (state) {
-      queryBuilder.andWhere('dealer.state = :state', { state });
+      queryBuilder.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
     }
 
     if (city) {
-      queryBuilder.andWhere('dealer.town = :city', { city });
+      queryBuilder.andWhere('LOWER(TRIM(dealer.town)) = LOWER(TRIM(:city))', { city });
     }
 
     if (bankLinked !== undefined) {
@@ -1035,7 +1035,7 @@ export class DealerService {
       .where('dealer.town IS NOT NULL')
       .andWhere(`TRIM(dealer.town) <> ''`);
     if (state) {
-      query.andWhere('dealer.state = :state', { state });
+      query.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
     }
     const rows = await query.orderBy('dealer.town', 'ASC').getRawMany();
     return {
