@@ -67,6 +67,7 @@ import { PlayModule } from './modules/play/play.module';
 import { AppIconModule } from './modules/app-icon/app-icon.module';
 import { CartModule } from './modules/cart/cart.module';
 import { ProductOrderModule } from './modules/product-order/product-order.module';
+import { AssistantModule } from './modules/assistant/assistant.module';
 import { CrossRolePhoneModule } from './common/services/cross-role-phone.module';
 
 function isRunningInDocker() {
@@ -217,6 +218,7 @@ function getDatabaseHost(configService: ConfigService) {
     AppIconModule,
     CartModule,
     ProductOrderModule,
+    AssistantModule,
   ],
   providers: [
     {

@@ -92,6 +92,12 @@ services:
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
       RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-astra}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_CATALOG_EGRESS: ${GROQ_CATALOG_EGRESS:-false}
+      GROQ_CHAT_MODEL: ${GROQ_CHAT_MODEL:-openai/gpt-oss-120b}
+      GROQ_TRANSCRIPTION_MODEL: ${GROQ_TRANSCRIPTION_MODEL:-whisper-large-v3-turbo}
     depends_on:
       postgres:
         condition: service_healthy
