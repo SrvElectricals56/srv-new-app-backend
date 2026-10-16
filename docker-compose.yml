@@ -1,4 +1,4 @@
-git services:
+services:
   postgres:
     # Keep the image major version aligned with the existing postgres_data
     # volume. PostgreSQL data directories cannot be opened by a different major.
@@ -82,7 +82,7 @@ git services:
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-30d}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,http://127.0.0.1:8081}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082}
       CORS_CREDENTIALS: ${CORS_CREDENTIALS:-true}
       API_PREFIX: ${API_PREFIX:-api/v1}
       BODY_LIMIT: ${BODY_LIMIT:-10mb}
@@ -111,8 +111,6 @@ git services:
       timeout: 5s
       retries: 20
 
-<<<<<<< HEAD
-=======
   admin-frontend:
     build:
       # These projects are separate Desktop folders, not repository siblings.
@@ -132,7 +130,7 @@ git services:
       backend:
         condition: service_healthy
     ports:
-      - '3000:3000'
+      - '3002:3000'
     read_only: true
     tmpfs:
       - /tmp:size=128m,mode=1777
@@ -145,14 +143,8 @@ git services:
 
   mobile-app:
     build:
-<<<<<<< HEAD
       context: ../../new frontend/srv-new-app-frontend
       dockerfile: ../../new backend/srv-new-app-backend/docker/expo-app.Dockerfile
-    container_name: srv_mobile_app
-=======
-      context: ../srv-new-app-frontend
-      dockerfile: ../srv-new-app-backend/docker/expo-app.Dockerfile
->>>>>>> d4c6bba6dfa0db8bc23a0262fdf4c99b1cdb5b58
     restart: unless-stopped
     environment:
       CI: 1
@@ -164,17 +156,16 @@ git services:
       backend:
         condition: service_healthy
     ports:
-      - '8081:8081'
-      - '19000:19000'
-      - '19001:19001'
-      - '19002:19002'
+      - '8082:8081'
+      - '19010:19000'
+      - '19011:19001'
+      - '19012:19002'
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8081').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 20s
       timeout: 10s
       retries: 20
 
->>>>>>> 1c86159de5d8c8a72b61ccf1ed50d30fac24075d
 volumes:
   postgres_data:
   pgadmin_data:
