@@ -54,4 +54,11 @@ describe('validateEnvironment', () => {
       }),
     ).toMatchObject({ APP_ENV: 'development' });
   });
+
+  it('requires an approved template and valid app hash together', () => {
+    expect(() => validateEnvironment({ APP_ENV: 'development', SMS_RETRIEVER_TEMPLATE_ID: 'approved-id' })).toThrow('must be set together');
+    expect(() => validateEnvironment({ APP_ENV: 'development', SMS_RETRIEVER_APP_HASH: 'invalid' })).toThrow('must be set together');
+    expect(() => validateEnvironment({ APP_ENV: 'development', SMS_RETRIEVER_TEMPLATE_ID: 'approved-id', SMS_RETRIEVER_APP_HASH: 'invalid' })).toThrow('11-character');
+    expect(validateEnvironment({ APP_ENV: 'development', SMS_RETRIEVER_TEMPLATE_ID: 'approved-id', SMS_RETRIEVER_APP_HASH: 'FA+9qCX9VSu' })).toMatchObject({ SMS_RETRIEVER_TEMPLATE_ID: 'approved-id' });
+  });
 });

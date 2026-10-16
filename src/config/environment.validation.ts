@@ -52,6 +52,15 @@ export function validateEnvironment(
   }
   config.APP_ENV = appEnvironment;
 
+  const retrieverTemplateId = String(config.SMS_RETRIEVER_TEMPLATE_ID ?? '').trim();
+  const retrieverAppHash = String(config.SMS_RETRIEVER_APP_HASH ?? '').trim();
+  if (Boolean(retrieverTemplateId) !== Boolean(retrieverAppHash)) {
+    throw new Error('SMS_RETRIEVER_TEMPLATE_ID and SMS_RETRIEVER_APP_HASH must be set together');
+  }
+  if (retrieverAppHash && !/^[A-Za-z0-9+/]{11}$/.test(retrieverAppHash)) {
+    throw new Error('SMS_RETRIEVER_APP_HASH must be an 11-character app hash');
+  }
+
   validateInteger(config, 'PORT', 3001, 1, 65535);
   validateInteger(config, 'TRUST_PROXY_HOPS', 0, 0, 10);
   validateInteger(config, 'DB_POOL_MIN', 1, 0, 100);

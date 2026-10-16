@@ -320,10 +320,13 @@ export class ReferralService {
        LIMIT 5`,
     );
     const summary = rows[0] ?? {};
+    const rewards = await this.electricianRepository.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_transactions WHERE "referenceType" = 'referral' AND type = 'credit'`,
+    );
     return {
       totalReferrals: Number(summary.successfulReferrals ?? 0),
       activeReferrals: Number(summary.totalReferrers ?? 0),
-      bonusGiven: Number(summary.referrerBonusGiven ?? 0) * 2,
+      bonusGiven: Number(rewards[0]?.total ?? 0),
       topReferrers,
     };
   }

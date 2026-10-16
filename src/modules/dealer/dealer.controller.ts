@@ -13,6 +13,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagg
 import { DealerService } from './dealer.service';
 import { CreateDealerDto } from './dto/create-dealer.dto';
 import { UpdateDealerDto } from './dto/update-dealer.dto';
+import { TransferSubDealerDto } from './dto/transfer-sub-dealer.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -44,6 +45,7 @@ export class DealerController {
     @Query('tier') tier?: MemberTier,
     @Query('state') state?: string,
     @Query('city') city?: string,
+    @Query('district') district?: string,
     @Query('bankLinked') bankLinked?: string,
     @Query('appInstalled') appInstalled?: string,
     @Query('dateFrom') dateFrom?: string,
@@ -53,7 +55,7 @@ export class DealerController {
   ) {
     return this.dealerService.findAll(
       parseInt(page), parseInt(limit),
-      search, status, tier, state, city,
+      search, status, tier, state, city, district,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       dateFrom, dateTo, dateField, includeMedia === 'true',
@@ -77,6 +79,12 @@ export class DealerController {
   @ApiOperation({ summary: 'Get all distinct dealer cities for filter dropdown' })
   getDistinctCities(@Query('state') state?: string) {
     return this.dealerService.getDistinctCities(state);
+  }
+
+  @Get('distinct-districts')
+  @ApiOperation({ summary: 'Get all distinct dealer districts for filter dropdown' })
+  getDistinctDistricts(@Query('state') state?: string) {
+    return this.dealerService.getDistinctDistricts(state);
   }
 
   @Get('stats')
@@ -118,11 +126,30 @@ export class DealerController {
     return this.dealerService.getSubDealerElectricians(id);
   }
 
+  @Get('sub-dealers/transfer-target')
+  @Roles(AdminRole.SUPER_ADMIN)
+  getTransferTarget(@Query('phone') phone: string) {
+    return this.dealerService.getTransferTarget(phone);
+  }
+
+  @Post('sub-dealers/:id/transfer')
+  @Roles(AdminRole.SUPER_ADMIN)
+  transferSubDealer(@Param('id') id: string, @Body() dto: TransferSubDealerDto) {
+    return this.dealerService.transferSubDealer(id, dto.phone, dto.targetId);
+  }
+
   @Delete('sub-dealers/:id')
   @Roles(AdminRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Delete an unregistered sub dealer and unlink associated electricians' })
   removeSubDealer(@Param('id') id: string) {
     return this.dealerService.removeSubDealer(id);
+  }
+
+  @Post('kyc/approve-all')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Approve all unverified KYC records across every page' })
+  approveAllKyc() {
+    return this.dealerService.approveAllKyc();
   }
 
   @Get(':id')
@@ -160,15 +187,36 @@ export class DealerController {
     return this.dealerService.remove(id);
   }
 
+  @Get('search/electricians')
+  @ApiOperation({
+    summary: 'Find electricians by searching dealer name, phone number, or dealer code',
+    description: 'Search for a dealer using their name, phone number, or dealer code and get all their associated electricians. Supports an optional electrician-level search to further filter results.',
+  })
+  @ApiResponse({ status: 200, description: 'Matching dealers and their associated electricians' })
+  getElectriciansByDealerSearch(
+    @Query('dealerSearch') dealerSearch: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') electricianSearch?: string,
+  ) {
+    return this.dealerService.getDealerElectriciansByDealerSearch(
+      dealerSearch,
+      parseInt(page),
+      parseInt(limit),
+      electricianSearch,
+    );
+  }
+
   @Get(':id/electricians')
-  @ApiOperation({ summary: 'Get dealer electricians' })
+  @ApiOperation({ summary: 'Get dealer electricians by dealer ID' })
   @ApiResponse({ status: 200, description: 'Dealer electricians' })
   getElectricians(
     @Param('id') id: string,
     @Query('page') page = '1',
     @Query('limit') limit = '20',
+    @Query('search') search?: string,
   ) {
-    return this.dealerService.getDealerElectricians(id, parseInt(page), parseInt(limit));
+    return this.dealerService.getDealerElectricians(id, parseInt(page), parseInt(limit), search);
   }
 
   @Get(':id/wallet')
