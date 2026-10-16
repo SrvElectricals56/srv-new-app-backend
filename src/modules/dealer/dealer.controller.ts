@@ -45,6 +45,7 @@ export class DealerController {
     @Query('tier') tier?: MemberTier,
     @Query('state') state?: string,
     @Query('city') city?: string,
+    @Query('district') district?: string,
     @Query('bankLinked') bankLinked?: string,
     @Query('appInstalled') appInstalled?: string,
     @Query('dateFrom') dateFrom?: string,
@@ -54,7 +55,7 @@ export class DealerController {
   ) {
     return this.dealerService.findAll(
       parseInt(page), parseInt(limit),
-      search, status, tier, state, city,
+      search, status, tier, state, city, district,
       bankLinked === 'true' ? true : bankLinked === 'false' ? false : undefined,
       appInstalled === 'true' ? true : appInstalled === 'false' ? false : undefined,
       dateFrom, dateTo, dateField, includeMedia === 'true',
@@ -78,6 +79,12 @@ export class DealerController {
   @ApiOperation({ summary: 'Get all distinct dealer cities for filter dropdown' })
   getDistinctCities(@Query('state') state?: string) {
     return this.dealerService.getDistinctCities(state);
+  }
+
+  @Get('distinct-districts')
+  @ApiOperation({ summary: 'Get all distinct dealer districts for filter dropdown' })
+  getDistinctDistricts(@Query('state') state?: string) {
+    return this.dealerService.getDistinctDistricts(state);
   }
 
   @Get('stats')

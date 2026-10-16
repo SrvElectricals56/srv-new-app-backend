@@ -360,6 +360,7 @@ export class DealerService {
     tier?: MemberTier,
     state?: string,
     city?: string,
+    district?: string,
     bankLinked?: boolean,
     appInstalled?: boolean,
     dateFrom?: string,
@@ -411,6 +412,10 @@ export class DealerService {
 
     if (city) {
       queryBuilder.andWhere('LOWER(TRIM(dealer.town)) = LOWER(TRIM(:city))', { city });
+    }
+
+    if (district) {
+      queryBuilder.andWhere('LOWER(TRIM(dealer.district)) = LOWER(TRIM(:district))', { district });
     }
 
     if (bankLinked !== undefined) {
@@ -1161,6 +1166,22 @@ export class DealerService {
             .filter((city) => city !== '' && city !== '?'),
         ),
       ).sort((a, b) => a.localeCompare(b)),
+    };
+  }
+
+  async getDistinctDistricts(state?: string): Promise<{ districts: string[] }> {
+    const query = this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select('DISTINCT dealer.district', 'district')
+      .where('dealer.district IS NOT NULL')
+      .andWhere(`TRIM(dealer.district) <> ''`);
+    if (state) {
+      query.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
+    }
+    const rows = await query.orderBy('dealer.district', 'ASC').getRawMany();
+    return {
+      districts: Array.from(new Set(rows.map((row) => String(row.district ?? '').trim()).filter((district) => district && district !== '?')))
+        .sort((a, b) => a.localeCompare(b)),
     };
   }
 
