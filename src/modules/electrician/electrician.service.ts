@@ -335,7 +335,7 @@ export class ElectricianService {
 
     if (search) {
       queryBuilder.andWhere(
-        '(electrician.name ILIKE :search OR electrician.phone ILIKE :search OR electrician.city ILIKE :search OR electrician.electricianCode ILIKE :search)',
+        '(electrician.name ILIKE :search OR electrician.phone ILIKE :search OR electrician.city ILIKE :search OR electrician.electricianCode ILIKE :search OR dealer.name ILIKE :search OR dealer.phone ILIKE :search OR dealer.dealerCode ILIKE :search OR electrician.fallbackDealerName ILIKE :search OR electrician.fallbackDealerPhone ILIKE :search OR electrician.fallbackDealerCode ILIKE :search)',
         { search: `%${search}%` }
       );
     }
@@ -401,11 +401,11 @@ export class ElectricianService {
     }
 
     if (state) {
-      queryBuilder.andWhere('electrician.state = :state', { state });
+      queryBuilder.andWhere('LOWER(TRIM(electrician.state)) = LOWER(TRIM(:state))', { state });
     }
 
     if (city) {
-      queryBuilder.andWhere('electrician.city = :city', { city });
+      queryBuilder.andWhere('LOWER(TRIM(electrician.city)) = LOWER(TRIM(:city))', { city });
     }
 
     if (dealerId) {
@@ -413,7 +413,7 @@ export class ElectricianService {
     }
 
     if (subCategory) {
-      queryBuilder.andWhere('electrician.subCategory = :subCategory', { subCategory });
+      queryBuilder.andWhere('LOWER(TRIM("electrician"."subCategory"::text)) = LOWER(TRIM(:subCategory))', { subCategory });
     }
 
     if (bankLinked !== undefined) {
@@ -1134,7 +1134,7 @@ export class ElectricianService {
       .where('electrician.city IS NOT NULL')
       .andWhere(`TRIM(electrician.city) <> ''`);
     if (state) {
-      query.andWhere('electrician.state = :state', { state });
+      query.andWhere('LOWER(TRIM(electrician.state)) = LOWER(TRIM(:state))', { state });
     }
     const rows = await query.orderBy('electrician.city', 'ASC').getRawMany();
     return {
