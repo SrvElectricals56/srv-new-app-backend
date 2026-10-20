@@ -523,7 +523,12 @@ export class ElectricianService {
     const result = await this.electricianRepository.createQueryBuilder()
       .update()
       .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
-      .where('"kycStatus" <> :status', { status: 'verified' })
+      .where('"kycStatus" = :status', { status: 'pending' })
+      .andWhere(`(
+        NULLIF(BTRIM(COALESCE("aadharFrontImage", '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE("panDocument", '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE("gstDocument", '')), '') IS NOT NULL
+      )`)
       .execute();
     return { approved: result.affected ?? 0 };
   }
