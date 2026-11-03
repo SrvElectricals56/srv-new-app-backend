@@ -19,4 +19,14 @@ describe('Admin KYC status corrections', () => {
     await service.update('test', { name: 'Corrected name' });
     expect(service.electricianRepository.update).toHaveBeenCalledWith('test', { name: 'Corrected name' });
   });
+
+  it('synchronizes the wallet when an admin changes total points', async () => {
+    const service: any = Object.create(ElectricianService.prototype);
+    service.findOne = jest.fn().mockResolvedValue({ id: 'test', electricianCode: 'PB-1', phone: '9000000000', dealerId: null });
+    service.hashPassword = jest.fn();
+    service.normalizeIndependentPointFields = jest.fn();
+    service.electricianRepository = { update: jest.fn() };
+    await service.update('test', { totalPoints: 1200, walletBalance: 0 });
+    expect(service.electricianRepository.update).toHaveBeenCalledWith('test', { totalPoints: 1200, walletBalance: 1200 });
+  });
 });

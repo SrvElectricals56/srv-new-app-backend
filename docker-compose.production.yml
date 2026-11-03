@@ -38,7 +38,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3001/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "Promise.all([fetch('http://127.0.0.1:3001/live'), fetch('http://127.0.0.1:3001/health')]).then(([live, health])=>process.exit(live.ok && health.ok ? 0 : 1)).catch(()=>process.exit(1))"
       interval: 15s
       timeout: 3s
       retries: 3

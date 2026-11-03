@@ -78,6 +78,7 @@ for attempt in $(seq 1 45); do
 done
 curl -fsS https://staging.srvelectricals.in/api-healthz >/dev/null
 curl -fsS https://staging.srvelectricals.in/ >/dev/null
+ORIGIN=https://staging.srvelectricals.in bash "$release/srv-new-app-backend/ops/deployment/check-assistant.sh"
 ln -sfn "$release" /opt/srv/staging-current
 trap - ERR
 echo "DEPLOYED $release"

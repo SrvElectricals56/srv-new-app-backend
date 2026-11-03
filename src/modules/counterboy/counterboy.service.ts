@@ -302,6 +302,12 @@ export class CounterBoyService {
     const requestedCode = this.normalizeRequestedCode(payload.counterboyCode);
     payload.dealerId = null;
     delete payload.password;
+    // Keep admin-edited reward points and the spendable wallet synchronized.
+    if (payload.totalPoints !== undefined) {
+      payload.walletBalance = payload.totalPoints;
+    } else if (payload.walletBalance !== undefined) {
+      payload.totalPoints = payload.walletBalance;
+    }
     if (Object.prototype.hasOwnProperty.call(payload, 'counterboyCode')) {
       if (requestedCode) {
         await this.ensureUniqueCounterBoyCode(requestedCode, id);

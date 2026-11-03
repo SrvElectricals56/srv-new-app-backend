@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { pointSettings } from '../../common/utils/app-settings.util';
+import { hasReachedDailyScanLimit, pointSettings } from '../../common/utils/app-settings.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, EntityManager } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
@@ -593,12 +593,17 @@ export class MobileService {
     }
 
     const network = normalizedRole === UserRole.DEALER ? await this.getDealerElectricians(userId, 1, 1) : null;
-    const balance = Number((user as any)?.walletBalance ?? 0);
     // Dealer commission is separate from the transferable points wallet.
     const isDealer = normalizedRole === UserRole.DEALER;
+    const storedBalance = Number((user as any)?.walletBalance ?? 0);
     const totalPoints = isDealer
-      ? balance
+      ? storedBalance
       : Number((user as any)?.totalPoints ?? 0);
+    // Older accounts can have reward points recorded in totalPoints while
+    // walletBalance is stale. Reward points are the spendable balance for all
+    // non-dealer roles, so expose the higher value and let the next write
+    // synchronize both columns.
+    const balance = isDealer ? storedBalance : Math.max(storedBalance, totalPoints);
 
     return {
       balance,
@@ -1469,8 +1474,16 @@ export class MobileService {
           .where('scan.userId = :userId AND scan.role = :role', { userId, role: userRole })
           .andWhere("(scan.scannedAt AT TIME ZONE 'Asia/Kolkata')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date")
           .getRawOne();
-        if (Number(earned?.points ?? 0) + points > settings.maxPointsPerDay) {
-          throw new BadRequestException(`Daily scan limit is ${settings.maxPointsPerDay} points`);
+        const earnedToday = Number(earned?.points ?? 0);
+        // QR rewards are indivisible. If one valid QR is worth more than the
+        // configured cap, rejecting it makes every code for that product look
+        // invalid. Allow the scan while the member is still below the cap,
+        // then stop any further scans for the day.
+        if (hasReachedDailyScanLimit(earnedToday, settings.maxPointsPerDay)) {
+          throw new BadRequestException({
+            message: `Daily scan limit of ${settings.maxPointsPerDay} points has been reached`,
+            code: 'QR_DAILY_LIMIT_REACHED',
+          });
         }
       }
 
@@ -1953,7 +1966,11 @@ export class MobileService {
       // bonusPoints are a separate cash-withdrawal balance and must not block
       // dealers from spending reward points shown in the Gift Store.
       const isDealerRole = normalizedRole === UserRole.DEALER;
-      const currentBalance = Number((user as any).walletBalance ?? (user as any).totalPoints ?? 0);
+      const storedBalance = Number((user as any).walletBalance ?? 0);
+      const totalPoints = isDealerRole ? storedBalance : Number((user as any).totalPoints ?? 0);
+      // Keep gift checkout consistent with the wallet response and repair
+      // legacy rows where admin-edited totalPoints exceeded walletBalance.
+      const currentBalance = isDealerRole ? storedBalance : Math.max(storedBalance, totalPoints);
 
       if (currentBalance < pointsRequired) {
         throw new BadRequestException('Insufficient points for this redemption');

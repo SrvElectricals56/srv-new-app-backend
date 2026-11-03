@@ -1,0 +1,113 @@
+b6841d0cd3cb99b9aa05ee67880f1211
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Product = void 0;
+const typeorm_1 = require("typeorm");
+const scan_entity_1 = require("./scan.entity");
+const points_config_entity_1 = require("./points-config.entity");
+const numeric_transformer_1 = require("../numeric.transformer");
+const product_variant_entity_1 = require("./product-variant.entity");
+let Product = class Product {
+};
+exports.Product = Product;
+__decorate([
+    (0, typeorm_1.PrimaryGeneratedColumn)('uuid'),
+    __metadata("design:type", String)
+], Product.prototype, "id", void 0);
+__decorate([
+    (0, typeorm_1.Column)(),
+    __metadata("design:type", String)
+], Product.prototype, "name", void 0);
+__decorate([
+    (0, typeorm_1.Column)(),
+    __metadata("design:type", String)
+], Product.prototype, "sub", void 0);
+__decorate([
+    (0, typeorm_1.Column)(),
+    __metadata("design:type", String)
+], Product.prototype, "category", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ nullable: true }),
+    __metadata("design:type", String)
+], Product.prototype, "subCategory", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ nullable: true }),
+    __metadata("design:type", String)
+], Product.prototype, "image", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', default: () => "'[]'::jsonb" }),
+    __metadata("design:type", Array)
+], Product.prototype, "images", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numeric_transformer_1.numericTransformer }),
+    __metadata("design:type", Number)
+], Product.prototype, "points", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ nullable: true }),
+    __metadata("design:type", String)
+], Product.prototype, "badge", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'decimal', precision: 10, scale: 2 }),
+    __metadata("design:type", Number)
+], Product.prototype, "price", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'decimal', precision: 10, scale: 2, nullable: true }),
+    __metadata("design:type", Number)
+], Product.prototype, "mrp", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ default: 0 }),
+    __metadata("design:type", Number)
+], Product.prototype, "stock", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ default: 0 }),
+    __metadata("design:type", Number)
+], Product.prototype, "totalScanned", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ unique: true, nullable: true }),
+    __metadata("design:type", String)
+], Product.prototype, "sku", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ nullable: true }),
+    __metadata("design:type", String)
+], Product.prototype, "weight", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'text', nullable: true }),
+    __metadata("design:type", String)
+], Product.prototype, "description", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ default: true }),
+    __metadata("design:type", Boolean)
+], Product.prototype, "isActive", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => scan_entity_1.Scan, (scan) => scan.product),
+    __metadata("design:type", Array)
+], Product.prototype, "scans", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => points_config_entity_1.PointsConfig, (config) => config.product),
+    __metadata("design:type", Array)
+], Product.prototype, "pointsConfigs", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => product_variant_entity_1.ProductVariant, (variant) => variant.product),
+    __metadata("design:type", Array)
+], Product.prototype, "variants", void 0);
+__decorate([
+    (0, typeorm_1.CreateDateColumn)({ type: 'timestamptz' }),
+    __metadata("design:type", Date)
+], Product.prototype, "createdAt", void 0);
+__decorate([
+    (0, typeorm_1.UpdateDateColumn)(),
+    __metadata("design:type", Date)
+], Product.prototype, "updatedAt", void 0);
+exports.Product = Product = __decorate([
+    (0, typeorm_1.Entity)('products')
+], Product);
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJmaWxlIjoiQzpcXFVzZXJzXFxkZWxsXFxEZXNrdG9wXFxTcnYgbmV3IGFwcFxcc3J2LW5ldy1hcHAtYmFja2VuZFxcc3JjXFxkYXRhYmFzZVxcZW50aXRpZXNcXHByb2R1Y3QuZW50aXR5LnRzIiwibWFwcGluZ3MiOiI7Ozs7Ozs7Ozs7OztBQUFBLHFDQU9pQjtBQUNqQiwrQ0FBcUM7QUFDckMsaUVBQXNEO0FBQ3RELGdFQUE0RDtBQUM1RCxxRUFBMEQ7QUFHbkQsSUFBTSxPQUFPLEdBQWIsTUFBTSxPQUFPO0NBa0VuQixDQUFBO0FBbEVZLDBCQUFPO0FBRWxCO0lBREMsSUFBQSxnQ0FBc0IsRUFBQyxNQUFNLENBQUM7O21DQUNwQjtBQUdYO0lBREMsSUFBQSxnQkFBTSxHQUFFOztxQ0FDSTtBQUdiO0lBREMsSUFBQSxnQkFBTSxHQUFFOztvQ0FDRztBQUdaO0lBREMsSUFBQSxnQkFBTSxHQUFFOzt5Q0FDUTtBQUdqQjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLFFBQVEsRUFBRSxJQUFJLEVBQUUsQ0FBQzs7NENBQ1A7QUFHcEI7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxRQUFRLEVBQUUsSUFBSSxFQUFFLENBQUM7O3NDQUNiO0FBR2Q7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxJQUFJLEVBQUUsT0FBTyxFQUFFLE9BQU8sRUFBRSxHQUFHLEVBQUUsQ0FBQyxhQUFhLEVBQUUsQ0FBQzs7dUNBQ3ZDO0FBR2pCO0lBREMsSUFBQSxnQkFBTSxFQUFDLEVBQUUsSUFBSSxFQUFFLFNBQVMsRUFBRSxTQUFTLEVBQUUsRUFBRSxFQUFFLEtBQUssRUFBRSxDQUFDLEVBQUUsT0FBTyxFQUFFLENBQUMsRUFBRSxXQUFXLEVBQUUsd0NBQWtCLEVBQUUsQ0FBQzs7dUNBQ25GO0FBR2Y7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxRQUFRLEVBQUUsSUFBSSxFQUFFLENBQUM7O3NDQUNiO0FBR2Q7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxJQUFJLEVBQUUsU0FBUyxFQUFFLFNBQVMsRUFBRSxFQUFFLEVBQUUsS0FBSyxFQUFFLENBQUMsRUFBRSxDQUFDOztzQ0FDdkM7QUFHZDtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxTQUFTLEVBQUUsU0FBUyxFQUFFLEVBQUUsRUFBRSxLQUFLLEVBQUUsQ0FBQyxFQUFFLFFBQVEsRUFBRSxJQUFJLEVBQUUsQ0FBQzs7b0NBQ3pEO0FBR1o7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxPQUFPLEVBQUUsQ0FBQyxFQUFFLENBQUM7O3NDQUNUO0FBR2Q7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxPQUFPLEVBQUUsQ0FBQyxFQUFFLENBQUM7OzZDQUNGO0FBR3JCO0lBREMsSUFBQSxnQkFBTSxFQUFDLEVBQUUsTUFBTSxFQUFFLElBQUksRUFBRSxRQUFRLEVBQUUsSUFBSSxFQUFFLENBQUM7O29DQUM3QjtBQUdaO0lBREMsSUFBQSxnQkFBTSxFQUFDLEVBQUUsUUFBUSxFQUFFLElBQUksRUFBRSxDQUFDOzt1Q0FDWjtBQUdmO0lBREMsSUFBQSxnQkFBTSxFQUFDLEVBQUUsSUFBSSxFQUFFLE1BQU0sRUFBRSxRQUFRLEVBQUUsSUFBSSxFQUFFLENBQUM7OzRDQUNyQjtBQUdwQjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLE9BQU8sRUFBRSxJQUFJLEVBQUUsQ0FBQzs7eUNBQ1I7QUFHbEI7SUFEQyxJQUFBLG1CQUFTLEVBQUMsR0FBRyxFQUFFLENBQUMsa0JBQUksRUFBRSxDQUFDLElBQUksRUFBRSxFQUFFLENBQUMsSUFBSSxDQUFDLE9BQU8sQ0FBQzs7c0NBQ2hDO0FBR2Q7SUFEQyxJQUFBLG1CQUFTLEVBQUMsR0FBRyxFQUFFLENBQUMsbUNBQVksRUFBRSxDQUFDLE1BQU0sRUFBRSxFQUFFLENBQUMsTUFBTSxDQUFDLE9BQU8sQ0FBQzs7OENBQzVCO0FBRzlCO0lBREMsSUFBQSxtQkFBUyxFQUFDLEdBQUcsRUFBRSxDQUFDLHVDQUFjLEVBQUUsQ0FBQyxPQUFPLEVBQUUsRUFBRSxDQUFDLE9BQU8sQ0FBQyxPQUFPLENBQUM7O3lDQUNuQztBQUczQjtJQURDLElBQUEsMEJBQWdCLEVBQUMsRUFBRSxJQUFJLEVBQUUsYUFBYSxFQUFFLENBQUM7OEJBQy9CLElBQUk7MENBQUM7QUFHaEI7SUFEQyxJQUFBLDBCQUFnQixHQUFFOzhCQUNSLElBQUk7MENBQUM7a0JBakVMLE9BQU87SUFEbkIsSUFBQSxnQkFBTSxFQUFDLFVBQVUsQ0FBQztHQUNOLE9BQU8sQ0FrRW5CIiwibmFtZXMiOltdLCJzb3VyY2VzIjpbIkM6XFxVc2Vyc1xcZGVsbFxcRGVza3RvcFxcU3J2IG5ldyBhcHBcXHNydi1uZXctYXBwLWJhY2tlbmRcXHNyY1xcZGF0YWJhc2VcXGVudGl0aWVzXFxwcm9kdWN0LmVudGl0eS50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQge1xyXG4gIEVudGl0eSxcclxuICBDb2x1bW4sXHJcbiAgUHJpbWFyeUdlbmVyYXRlZENvbHVtbixcclxuICBDcmVhdGVEYXRlQ29sdW1uLFxyXG4gIFVwZGF0ZURhdGVDb2x1bW4sXHJcbiAgT25lVG9NYW55LFxyXG59IGZyb20gJ3R5cGVvcm0nO1xyXG5pbXBvcnQgeyBTY2FuIH0gZnJvbSAnLi9zY2FuLmVudGl0eSc7XHJcbmltcG9ydCB7IFBvaW50c0NvbmZpZyB9IGZyb20gJy4vcG9pbnRzLWNvbmZpZy5lbnRpdHknO1xyXG5pbXBvcnQgeyBudW1lcmljVHJhbnNmb3JtZXIgfSBmcm9tICcuLi9udW1lcmljLnRyYW5zZm9ybWVyJztcclxuaW1wb3J0IHsgUHJvZHVjdFZhcmlhbnQgfSBmcm9tICcuL3Byb2R1Y3QtdmFyaWFudC5lbnRpdHknO1xyXG5cclxuQEVudGl0eSgncHJvZHVjdHMnKVxyXG5leHBvcnQgY2xhc3MgUHJvZHVjdCB7XHJcbiAgQFByaW1hcnlHZW5lcmF0ZWRDb2x1bW4oJ3V1aWQnKVxyXG4gIGlkOiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oKVxyXG4gIG5hbWU6IHN0cmluZztcclxuXHJcbiAgQENvbHVtbigpXHJcbiAgc3ViOiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oKVxyXG4gIGNhdGVnb3J5OiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oeyBudWxsYWJsZTogdHJ1ZSB9KVxyXG4gIHN1YkNhdGVnb3J5OiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oeyBudWxsYWJsZTogdHJ1ZSB9KVxyXG4gIGltYWdlOiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oeyB0eXBlOiAnanNvbmInLCBkZWZhdWx0OiAoKSA9PiBcIidbXSc6Ompzb25iXCIgfSlcclxuICBpbWFnZXM6IHN0cmluZ1tdO1xyXG5cclxuICBAQ29sdW1uKHsgdHlwZTogJ251bWVyaWMnLCBwcmVjaXNpb246IDEyLCBzY2FsZTogMiwgZGVmYXVsdDogMCwgdHJhbnNmb3JtZXI6IG51bWVyaWNUcmFuc2Zvcm1lciB9KVxyXG4gIHBvaW50czogbnVtYmVyO1xyXG5cclxuICBAQ29sdW1uKHsgbnVsbGFibGU6IHRydWUgfSlcclxuICBiYWRnZTogc3RyaW5nO1xyXG5cclxuICBAQ29sdW1uKHsgdHlwZTogJ2RlY2ltYWwnLCBwcmVjaXNpb246IDEwLCBzY2FsZTogMiB9KVxyXG4gIHByaWNlOiBudW1iZXI7XHJcblxyXG4gIEBDb2x1bW4oeyB0eXBlOiAnZGVjaW1hbCcsIHByZWNpc2lvbjogMTAsIHNjYWxlOiAyLCBudWxsYWJsZTogdHJ1ZSB9KVxyXG4gIG1ycDogbnVtYmVyO1xyXG5cclxuICBAQ29sdW1uKHsgZGVmYXVsdDogMCB9KVxyXG4gIHN0b2NrOiBudW1iZXI7XHJcblxyXG4gIEBDb2x1bW4oeyBkZWZhdWx0OiAwIH0pXHJcbiAgdG90YWxTY2FubmVkOiBudW1iZXI7XHJcblxyXG4gIEBDb2x1bW4oeyB1bmlxdWU6IHRydWUsIG51bGxhYmxlOiB0cnVlIH0pXHJcbiAgc2t1OiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oeyBudWxsYWJsZTogdHJ1ZSB9KVxyXG4gIHdlaWdodDogc3RyaW5nO1xyXG5cclxuICBAQ29sdW1uKHsgdHlwZTogJ3RleHQnLCBudWxsYWJsZTogdHJ1ZSB9KVxyXG4gIGRlc2NyaXB0aW9uOiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oeyBkZWZhdWx0OiB0cnVlIH0pXHJcbiAgaXNBY3RpdmU6IGJvb2xlYW47XHJcblxyXG4gIEBPbmVUb01hbnkoKCkgPT4gU2NhbiwgKHNjYW4pID0+IHNjYW4ucHJvZHVjdClcclxuICBzY2FuczogU2NhbltdO1xyXG5cclxuICBAT25lVG9NYW55KCgpID0+IFBvaW50c0NvbmZpZywgKGNvbmZpZykgPT4gY29uZmlnLnByb2R1Y3QpXHJcbiAgcG9pbnRzQ29uZmlnczogUG9pbnRzQ29uZmlnW107XHJcblxyXG4gIEBPbmVUb01hbnkoKCkgPT4gUHJvZHVjdFZhcmlhbnQsICh2YXJpYW50KSA9PiB2YXJpYW50LnByb2R1Y3QpXHJcbiAgdmFyaWFudHM6IFByb2R1Y3RWYXJpYW50W107XHJcblxyXG4gIEBDcmVhdGVEYXRlQ29sdW1uKHsgdHlwZTogJ3RpbWVzdGFtcHR6JyB9KVxyXG4gIGNyZWF0ZWRBdDogRGF0ZTtcclxuXHJcbiAgQFVwZGF0ZURhdGVDb2x1bW4oKVxyXG4gIHVwZGF0ZWRBdDogRGF0ZTtcclxufVxyXG4iXSwidmVyc2lvbiI6M30=

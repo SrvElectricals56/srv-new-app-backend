@@ -348,8 +348,6 @@ export class GiftService {
 
     // If rejected, restore stock and refund points via Redemption
     if (status === GiftOrderStatus.REJECTED && order.status !== GiftOrderStatus.REJECTED) {
-      await this.productRepository.increment({ id: order.giftProductId }, 'stock', 1);
-
       const redemption = await this.findLinkedRedemption(order);
       if (redemption) {
         await this.redemptionService.reject(
@@ -358,6 +356,9 @@ export class GiftService {
           extra?.processedBy || 'admin',
         );
       }
+      // Refund before restoring stock. If the refund fails, a retry must not
+      // add stock a second time while this order is still pending.
+      await this.productRepository.increment({ id: order.giftProductId }, 'stock', 1);
     }
 
     await this.giftOrderRepository.update(id, updateData);

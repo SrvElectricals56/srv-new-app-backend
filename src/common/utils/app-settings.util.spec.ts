@@ -1,4 +1,4 @@
-import { pointSettings, validateAppSetting } from './app-settings.util';
+import { hasReachedDailyScanLimit, pointSettings, validateAppSetting } from './app-settings.util';
 
 describe('App settings validation', () => {
   it.each(['-1', 'NaN', 'Infinity', ''])('rejects invalid minimum %s', value => {
@@ -14,5 +14,11 @@ describe('App settings validation', () => {
     expect(pointSettings({ pointsExpiry: '365', cashbackRate: '5' })).toMatchObject({ pointsExpiry: 0, cashbackRate: 1 });
     expect(() => validateAppSetting('pointsExpiry', '365')).toThrow();
     expect(() => validateAppSetting('cashbackRate', '5')).toThrow();
+  });
+  it('allows one indivisible QR reward while the member is still below the daily cap', () => {
+    expect(hasReachedDailyScanLimit(0, 10)).toBe(false);
+    expect(hasReachedDailyScanLimit(9, 10)).toBe(false);
+    expect(hasReachedDailyScanLimit(10, 10)).toBe(true);
+    expect(hasReachedDailyScanLimit(100, 0)).toBe(false);
   });
 });

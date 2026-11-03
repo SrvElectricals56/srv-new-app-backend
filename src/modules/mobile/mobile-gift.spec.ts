@@ -27,12 +27,12 @@ describe('Gift redemption compatibility with installed apps', () => {
   it('accepts the old app payload and saves the profile address with one debit and order', async () => {
     const { service, repos } = setup();
     const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
-    expect(result.walletBalance).toBe(400);
+    expect(result.walletBalance).toBe(550);
     expect(repos.get(GiftOrder).save).toHaveBeenCalledTimes(1);
     expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ shippingAddress: 'House 42, Main Road, Ludhiana', pointsUsed: 100, redemptionId: expect.any(String) }));
     expect(repos.get(Wallet).save).toHaveBeenCalledTimes(1);
-    expect(repos.get(Wallet).save).toHaveBeenCalledWith(expect.objectContaining({ balanceBefore: 500, balanceAfter: 400, amount: 100 }));
-    expect(service.updateUserByRole).toHaveBeenCalledWith('owner', 'electrician', expect.objectContaining({ walletBalance: 400, totalPoints: 550 }), expect.anything());
+    expect(repos.get(Wallet).save).toHaveBeenCalledWith(expect.objectContaining({ balanceBefore: 650, balanceAfter: 550, amount: 100 }));
+    expect(service.updateUserByRole).toHaveBeenCalledWith('owner', 'electrician', expect.objectContaining({ walletBalance: 550, totalPoints: 550 }), expect.anything());
     expect(repos.get(Product).decrement).toHaveBeenCalledWith({ id: 'gift' }, 'stock', 1);
     expect(repos.get(Product).findOne).toHaveBeenCalledWith(expect.objectContaining({ lock: { mode: 'pessimistic_write' } }));
   });
@@ -47,9 +47,20 @@ describe('Gift redemption compatibility with installed apps', () => {
     const { service, product, user, repos } = setup();
     product.points = 75;
     user.walletBalance = 75;
+    user.totalPoints = 75;
     const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
     expect(result.walletBalance).toBe(0);
     expect(repos.get(GiftOrder).save).toHaveBeenCalledWith(expect.objectContaining({ pointsUsed: 75 }));
+  });
+
+  it('uses recorded total points when a legacy account has a zero wallet balance', async () => {
+    const { service, user, repos } = setup();
+    user.walletBalance = 0;
+    user.totalPoints = 1200;
+    const result = await service.redeemReward('owner', 'electrician', { schemeId: 'gift' });
+    expect(result.walletBalance).toBe(1100);
+    expect(repos.get(Wallet).save).toHaveBeenCalledWith(expect.objectContaining({ balanceBefore: 1200, balanceAfter: 1100, amount: 100 }));
+    expect(service.updateUserByRole).toHaveBeenCalledWith('owner', 'electrician', expect.objectContaining({ walletBalance: 1100, totalPoints: 1100 }), expect.anything());
   });
 
   it.each(['', 'short', null])('rejects a legacy request with an incomplete profile address (%s) without debiting', async address => {
@@ -70,7 +81,7 @@ describe('Gift redemption compatibility with installed apps', () => {
   it.each(['stock', 'balance', 'role'])('preserves the %s restriction for old apps', async restriction => {
     const { service, product, user, repos } = setup();
     if (restriction === 'stock') product.stock = 0;
-    if (restriction === 'balance') user.walletBalance = 99;
+    if (restriction === 'balance') { user.walletBalance = 99; user.totalPoints = 99; }
     if (restriction === 'role') product.subCategory = 'dealer';
     await expect(service.redeemReward('owner', 'electrician', { schemeId: 'gift' })).rejects.toThrow();
     expect(service.updateUserByRole).not.toHaveBeenCalled();

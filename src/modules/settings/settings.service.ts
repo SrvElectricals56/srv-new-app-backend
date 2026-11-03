@@ -395,8 +395,25 @@ export class SettingsService {
       if (limits[0] !== 0 || limits.some((value, i) => i > 0 && value <= limits[i - 1])) {
         throw new BadRequestException('Tier thresholds must start at 0 and increase from Silver to Diamond');
       }
-      // Only fixed identifiers from the groups above are interpolated.
-      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::${group.table}_tier_enum
+      // Existing deployments can have either the original table-specific
+      // enum (for example electricians_tier_enum) or the shared MemberTier
+      // enum created by TypeORM synchronization. Resolve the real column type
+      // instead of assuming the migration-era name, otherwise PostgreSQL
+      // rejects the bulk settings transaction with SQLSTATE 42804.
+      const [tierColumn] = await manager.query(
+        `SELECT udt_name
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'tier'`,
+        [group.table],
+      );
+      const enumType = String(tierColumn?.udt_name ?? '');
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(enumType)) {
+        throw new BadRequestException(`Unable to resolve ${group.table}.tier database type`);
+      }
+
+      // Table names are fixed above; enumType is validated as a PostgreSQL
+      // identifier before interpolation.
+      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::text::"${enumType}"
         FROM (SELECT e.id, CASE WHEN ${group.metric} >= $3 THEN 'Diamond'
           WHEN ${group.metric} >= $2 THEN 'Platinum' WHEN ${group.metric} >= $1 THEN 'Gold'
           ELSE 'Silver' END AS tier FROM ${group.table} e) next

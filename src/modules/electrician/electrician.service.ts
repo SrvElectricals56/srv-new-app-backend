@@ -542,6 +542,14 @@ export class ElectricianService {
     const passwordHash = await this.hashPassword(updateElectricianDto.password);
     const data: any = { ...updateElectricianDto };
     delete data.password;
+    // Admin point edits must keep the spendable wallet in sync with the
+    // displayed reward total. Total points is the source of truth when both
+    // fields are submitted by the admin form.
+    if (data.totalPoints !== undefined) {
+      data.walletBalance = data.totalPoints;
+    } else if (data.walletBalance !== undefined) {
+      data.totalPoints = data.walletBalance;
+    }
     if (data.dealerId !== undefined && (!data.dealerId || data.dealerId.trim() === '')) {
       data.dealerId = null;
     }

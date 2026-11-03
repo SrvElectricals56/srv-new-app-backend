@@ -10,12 +10,13 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
-import { extname, join } from 'path';
+import { basename, extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import { stat, unlink, open } from 'fs/promises';
+import { stat, unlink, open, rename, readFile, writeFile } from 'fs/promises';
 import { Request } from 'express';
-import { ConfigService } from '@nestjs/config';
 const sharp: any = require('sharp');
+const convertHeic: any = require('heic-convert');
+const decodeBmp: any = require('bmp-js');
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
 const UPLOAD_DIR = join(process.cwd(), 'uploads');
@@ -25,6 +26,8 @@ const CATALOG_DIR = join(UPLOAD_DIR, 'catalog');
 const VIDEO_DIR = join(UPLOAD_DIR, 'videos');
 const PLAY_THUMBNAIL_DIR = join(UPLOAD_DIR, 'play-thumbnails');
 const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
+const KYC_MAX_FILE_SIZE = 25 * 1024 * 1024;
+const KYC_IMAGE_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif', 'tiff', 'bmp', 'heif']);
 
 // Ensure upload directories exist
 [BANNER_DIR, PRODUCT_DIR, CATALOG_DIR, VIDEO_DIR, PLAY_THUMBNAIL_DIR, AADHAR_DIR].forEach(dir => {
@@ -37,19 +40,18 @@ const AADHAR_DIR = join(UPLOAD_DIR, 'aadhar');
 @ApiBearerAuth('JWT-auth')
 @Controller('upload')
 export class UploadController {
-  constructor(private configService: ConfigService) {}
-
   private async optimizeImage(
     file: Express.Multer.File,
     maxWidth: number,
     maxHeight: number,
+    limitInputPixels?: number,
   ) {
     const baseName = file.filename.slice(0, file.filename.length - extname(file.filename).length);
     const optimizedFilename = `${baseName}-optimized.webp`;
     const optimizedPath = join(file.destination, optimizedFilename);
 
     try {
-      await sharp(file.path, { animated: true })
+      await sharp(file.path, { animated: true, limitInputPixels })
         .rotate()
         .resize({
           width: maxWidth,
@@ -73,33 +75,70 @@ export class UploadController {
   }
 
   private async prepareKycDocument(file: Express.Multer.File) {
-    if (file.mimetype === 'application/pdf') {
-      const handle = await open(file.path, 'r');
-      const header = Buffer.alloc(5);
-      try { await handle.read(header, 0, 5, 0); } finally { await handle.close(); }
-      if (header.toString() !== '%PDF-') {
-        await unlink(file.path).catch(() => undefined);
-        throw new BadRequestException('Upload a valid PDF document');
-      }
-      return { filename: file.filename, size: file.size };
+    const handle = await open(file.path, 'r');
+    const header = Buffer.alloc(5);
+    try { await handle.read(header, 0, 5, 0); } finally { await handle.close(); }
+    if (header.toString() === '%PDF-') {
+      const filename = `${basename(file.filename, extname(file.filename))}.pdf`;
+      if (filename !== file.filename) await rename(file.path, join(file.destination, filename));
+      return { filename, size: file.size };
     }
-    const result = await this.optimizeImage(file, 2400, 2400);
+    const looksLikeHeic = /\.(heic|heif)$/i.test(file.originalname || file.filename) ||
+      /^(image\/heic|image\/heif)$/i.test(file.mimetype || '');
+    const looksLikeBmp = /\.bmp$/i.test(file.originalname || file.filename) ||
+      /^image\/bmp$/i.test(file.mimetype || '');
+    let format: string | undefined;
+    try {
+      format = (await sharp(file.path, { limitInputPixels: 60_000_000 }).metadata()).format;
+    } catch {
+      // The file is neither a PDF nor an image that this server can decode.
+    }
+    if (looksLikeHeic || looksLikeBmp) {
+      // libvips builds used by Sharp do not consistently include HEIC support.
+      // Decode these iPhone documents explicitly, then run the same safe
+      // resize/normalisation path as every other raster image.
+      try {
+        const source = await readFile(file.path);
+        const bmp = looksLikeBmp ? decodeBmp.decode(source) : undefined;
+        const jpeg = looksLikeBmp
+          ? await sharp(bmp.data, {
+            raw: {
+              width: bmp.width,
+              height: bmp.height,
+              channels: 4,
+            },
+          }).jpeg({ quality: 90 }).toBuffer()
+          : await convertHeic({ buffer: source, format: 'JPEG', quality: 0.9 });
+        const convertedFilename = basename(file.filename, extname(file.filename)) + '-source.jpg';
+        const convertedPath = join(file.destination, convertedFilename);
+        await writeFile(convertedPath, jpeg);
+        await unlink(file.path).catch(() => undefined);
+        file = {
+          ...file,
+          filename: convertedFilename,
+          originalname: convertedFilename,
+          mimetype: 'image/jpeg',
+          path: convertedPath,
+          size: jpeg.length,
+        };
+        format = 'jpeg';
+      } catch {
+        format = undefined;
+      }
+    }
+    if (!format || !KYC_IMAGE_FORMATS.has(format)) {
+      await unlink(file.path).catch(() => undefined);
+      throw new BadRequestException('Choose a valid photo or PDF document.');
+    }
+    const result = await this.optimizeImage(file, 2400, 2400, 60_000_000);
     if (result.filename === file.filename) {
       await unlink(file.path).catch(() => undefined);
-      throw new BadRequestException('Unable to read this image. Please upload a valid JPG, PNG or WebP image.');
+      throw new BadRequestException('Unable to read this photo. Please choose another photo or PDF.');
     }
     return result;
   }
 
-  private getBaseUrl() {
-    const appUrl = this.configService.get<string>('APP_URL');
-    if (appUrl) return appUrl;
-    const port = this.configService.get<string>('PORT') || '3001';
-    const host = this.configService.get<string>('SERVER_HOST') || 'localhost';
-    return `http://${host}:${port}`;
-  }
-
-  // Admin endpoints return relative paths so stored URLs don't depend on server IP
+  // Store relative paths so documents work on phones and after server changes.
   private buildFileUrl(_req: Request, subPath: string): string {
     return `/uploads/${subPath}`;
   }
@@ -285,13 +324,7 @@ export class UploadController {
       destination: AADHAR_DIR,
       filename: (_req, file, cb) => cb(null, `kyc-${crypto.randomUUID()}${extname(file.originalname).toLowerCase()}`),
     }),
-    fileFilter: (_req, file, cb) => {
-      if (!/^(image\/(jpeg|jpg|png|gif|webp|heic|heif)|application\/pdf)$/.test(file.mimetype)) {
-        return cb(new BadRequestException('Upload an image or PDF document'), false);
-      }
-      cb(null, true);
-    },
-    limits: { fileSize: 10 * 1024 * 1024 },
+    limits: { fileSize: KYC_MAX_FILE_SIZE },
   }))
   async uploadKycDocument(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
@@ -320,19 +353,13 @@ export class UploadController {
           cb(null, `aadhar-${uniqueSuffix}${extname(file.originalname)}`);
         },
       }),
-      fileFilter: (_req, file, cb) => {
-        if (!file.mimetype.match(/^(image\/(jpeg|jpg|png|gif|webp|heic|heif)|application\/pdf)$/)) {
-          return cb(new BadRequestException('Only image files or PDF are allowed'), false);
-        }
-        cb(null, true);
-      },
-      limits: { fileSize: 10 * 1024 * 1024 },
+      limits: { fileSize: KYC_MAX_FILE_SIZE },
     }),
   )
   async uploadAadharImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
     const result = await this.prepareKycDocument(file);
-    const imageUrl = `${this.getBaseUrl().replace(/\/$/, '')}/uploads/aadhar/${result.filename}`;
+    const imageUrl = this.buildFileUrl(req, `aadhar/${result.filename}`);
     return { url: imageUrl, filename: result.filename, originalName: file.originalname, size: result.size };
   }
 }

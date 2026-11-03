@@ -1,6 +1,7 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
 @Entity('app_icons')
+@Index('IDX_app_icons_native_key', ['nativeKey'], { unique: true, where: '"nativeKey" IS NOT NULL' })
 export class AppIcon {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -10,6 +11,9 @@ export class AppIcon {
 
   @Column({ nullable: true })
   imageUrl: string;
+
+  @Column({ nullable: true })
+  nativeKey: string | null;
 
   @Column({ default: false })
   isActive: boolean;

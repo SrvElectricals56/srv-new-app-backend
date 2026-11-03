@@ -267,6 +267,13 @@ export class AppUserService {
     const payload = { ...data } as Partial<AppUser> & { password?: string };
     const requestedCode = this.normalizeRequestedCode(payload.userCode);
     delete payload.password;
+    // The admin points editor submits totalPoints; mirror it to the wallet so
+    // gift redemption and the app display the same available balance.
+    if (payload.totalPoints !== undefined) {
+      payload.walletBalance = payload.totalPoints;
+    } else if (payload.walletBalance !== undefined) {
+      payload.totalPoints = payload.walletBalance;
+    }
     if (Object.prototype.hasOwnProperty.call(payload, 'userCode')) {
       if (requestedCode) {
         await this.ensureUniqueUserCode(requestedCode, id);

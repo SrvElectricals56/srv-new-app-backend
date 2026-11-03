@@ -19,6 +19,10 @@ export function pointSettings(map: Record<string, string>) {
   )), pointsExpiry: 0, cashbackRate: 1 } as typeof POINT_SETTING_DEFAULTS;
 }
 
+export function hasReachedDailyScanLimit(earnedToday: number, maxPointsPerDay: number): boolean {
+  return maxPointsPerDay > 0 && earnedToday >= maxPointsPerDay;
+}
+
 export function validateAppSetting(key: string, value: unknown) {
   if (key in POINT_SETTING_DEFAULTS || /^(minimumOrderAmount|.*Min$)/.test(key)) {
     const number = Number(value);

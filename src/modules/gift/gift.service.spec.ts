@@ -52,6 +52,23 @@ describe('Gift order redemption matching', () => {
     expect(products.increment).toHaveBeenCalledWith({ id: 'gift' }, 'stock', 1);
   });
 
+  it('does not restore gift stock when the points refund fails', async () => {
+    const order = {
+      id: 'order', userId: 'member', role: UserRole.ELECTRICIAN,
+      giftProductId: 'gift', redemptionId: 'redemption', pointsUsed: 75,
+      status: GiftOrderStatus.PENDING, orderedAt: new Date(),
+    };
+    const giftOrders = { findOne: jest.fn().mockResolvedValue(order), update: jest.fn() };
+    const products = { increment: jest.fn() };
+    const redemptions = { findOne: jest.fn().mockResolvedValue({ id: 'redemption' }) };
+    const redemptionService = { reject: jest.fn().mockRejectedValue(new Error('Refund failed')) };
+    const service = new GiftService(products as any, giftOrders as any, redemptions as any, redemptionService as any);
+
+    await expect(service.updateOrderStatus(order.id, GiftOrderStatus.REJECTED)).rejects.toThrow('Refund failed');
+    expect(products.increment).not.toHaveBeenCalled();
+    expect(giftOrders.update).not.toHaveBeenCalled();
+  });
+
   it('does not delete a gift order before its points are refunded', async () => {
     const giftOrders = { findOne: jest.fn().mockResolvedValue({ status: GiftOrderStatus.PENDING }), remove: jest.fn() };
     const service = new GiftService({} as any, giftOrders as any, {} as any, {} as any);

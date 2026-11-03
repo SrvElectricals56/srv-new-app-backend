@@ -3,6 +3,7 @@ import { resolveFixedOtp } from './otp-policy.util';
 describe('resolveFixedOtp', () => {
   it('uses 1234 by default in local development', () => {
     expect(resolveFixedOtp({ nodeEnv: 'development' })).toBe('1234');
+    expect(resolveFixedOtp({ nodeEnv: 'production', appEnv: 'development' })).toBe('1234');
   });
 
   it('uses the configured code only in explicit staging test mode', () => {
@@ -25,6 +26,7 @@ describe('resolveFixedOtp', () => {
         testCode: '1234',
       }),
     ).toBeNull();
+    expect(resolveFixedOtp({ nodeEnv: 'development', appEnv: 'production' })).toBeNull();
   });
 
   it('requires an explicit test-mode flag in staging', () => {

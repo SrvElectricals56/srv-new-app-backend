@@ -1,0 +1,75 @@
+02c70ca4f0ded6659cca910d5b1b27ec
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ProductVariant = void 0;
+const typeorm_1 = require("typeorm");
+const numeric_transformer_1 = require("../numeric.transformer");
+const product_entity_1 = require("./product.entity");
+let ProductVariant = class ProductVariant {
+};
+exports.ProductVariant = ProductVariant;
+__decorate([
+    (0, typeorm_1.PrimaryGeneratedColumn)('uuid'),
+    __metadata("design:type", String)
+], ProductVariant.prototype, "id", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'bigint', unique: true, nullable: true }),
+    __metadata("design:type", String)
+], ProductVariant.prototype, "legacyId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'uuid' }),
+    __metadata("design:type", String)
+], ProductVariant.prototype, "productId", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => product_entity_1.Product, (product) => product.variants, {
+        onDelete: 'CASCADE',
+    }),
+    (0, typeorm_1.JoinColumn)({ name: 'productId' }),
+    __metadata("design:type", product_entity_1.Product)
+], ProductVariant.prototype, "product", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'integer', default: 0 }),
+    __metadata("design:type", Number)
+], ProductVariant.prototype, "measurement", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'integer', default: 0 }),
+    __metadata("design:type", Number)
+], ProductVariant.prototype, "quantity", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ nullable: true }),
+    __metadata("design:type", String)
+], ProductVariant.prototype, "unit", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numeric_transformer_1.numericTransformer }),
+    __metadata("design:type", Number)
+], ProductVariant.prototype, "discountedPrice", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numeric_transformer_1.numericTransformer }),
+    __metadata("design:type", Number)
+], ProductVariant.prototype, "originalPrice", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'integer', default: 0 }),
+    __metadata("design:type", Number)
+], ProductVariant.prototype, "stock", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'integer', default: 0 }),
+    __metadata("design:type", Number)
+], ProductVariant.prototype, "soldQuantity", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ default: true }),
+    __metadata("design:type", Boolean)
+], ProductVariant.prototype, "isActive", void 0);
+exports.ProductVariant = ProductVariant = __decorate([
+    (0, typeorm_1.Entity)('product_variants'),
+    (0, typeorm_1.Index)(['productId'])
+], ProductVariant);
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJmaWxlIjoiQzpcXFVzZXJzXFxkZWxsXFxEZXNrdG9wXFxTcnYgbmV3IGFwcFxcc3J2LW5ldy1hcHAtYmFja2VuZFxcc3JjXFxkYXRhYmFzZVxcZW50aXRpZXNcXHByb2R1Y3QtdmFyaWFudC5lbnRpdHkudHMiLCJtYXBwaW5ncyI6Ijs7Ozs7Ozs7Ozs7O0FBQUEscUNBT2lCO0FBQ2pCLGdFQUE0RDtBQUM1RCxxREFBMkM7QUFJcEMsSUFBTSxjQUFjLEdBQXBCLE1BQU0sY0FBYztDQXVDMUIsQ0FBQTtBQXZDWSx3Q0FBYztBQUV6QjtJQURDLElBQUEsZ0NBQXNCLEVBQUMsTUFBTSxDQUFDOzswQ0FDcEI7QUFHWDtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxRQUFRLEVBQUUsTUFBTSxFQUFFLElBQUksRUFBRSxRQUFRLEVBQUUsSUFBSSxFQUFFLENBQUM7O2dEQUNqQztBQUd4QjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxNQUFNLEVBQUUsQ0FBQzs7aURBQ1A7QUFNbEI7SUFKQyxJQUFBLG1CQUFTLEVBQUMsR0FBRyxFQUFFLENBQUMsd0JBQU8sRUFBRSxDQUFDLE9BQU8sRUFBRSxFQUFFLENBQUMsT0FBTyxDQUFDLFFBQVEsRUFBRTtRQUN2RCxRQUFRLEVBQUUsU0FBUztLQUNwQixDQUFDO0lBQ0QsSUFBQSxvQkFBVSxFQUFDLEVBQUUsSUFBSSxFQUFFLFdBQVcsRUFBRSxDQUFDOzhCQUN6Qix3QkFBTzsrQ0FBQztBQUdqQjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxTQUFTLEVBQUUsT0FBTyxFQUFFLENBQUMsRUFBRSxDQUFDOzttREFDcEI7QUFHcEI7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxJQUFJLEVBQUUsU0FBUyxFQUFFLE9BQU8sRUFBRSxDQUFDLEVBQUUsQ0FBQzs7Z0RBQ3ZCO0FBR2pCO0lBREMsSUFBQSxnQkFBTSxFQUFDLEVBQUUsUUFBUSxFQUFFLElBQUksRUFBRSxDQUFDOzs0Q0FDUDtBQUdwQjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxTQUFTLEVBQUUsU0FBUyxFQUFFLEVBQUUsRUFBRSxLQUFLLEVBQUUsQ0FBQyxFQUFFLE9BQU8sRUFBRSxDQUFDLEVBQUUsV0FBVyxFQUFFLHdDQUFrQixFQUFFLENBQUM7O3VEQUMxRTtBQUd4QjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxTQUFTLEVBQUUsU0FBUyxFQUFFLEVBQUUsRUFBRSxLQUFLLEVBQUUsQ0FBQyxFQUFFLE9BQU8sRUFBRSxDQUFDLEVBQUUsV0FBVyxFQUFFLHdDQUFrQixFQUFFLENBQUM7O3FEQUM1RTtBQUd0QjtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxTQUFTLEVBQUUsT0FBTyxFQUFFLENBQUMsRUFBRSxDQUFDOzs2Q0FDMUI7QUFHZDtJQURDLElBQUEsZ0JBQU0sRUFBQyxFQUFFLElBQUksRUFBRSxTQUFTLEVBQUUsT0FBTyxFQUFFLENBQUMsRUFBRSxDQUFDOztvREFDbkI7QUFHckI7SUFEQyxJQUFBLGdCQUFNLEVBQUMsRUFBRSxPQUFPLEVBQUUsSUFBSSxFQUFFLENBQUM7O2dEQUNSO3lCQXRDUCxjQUFjO0lBRjFCLElBQUEsZ0JBQU0sRUFBQyxrQkFBa0IsQ0FBQztJQUMxQixJQUFBLGVBQUssRUFBQyxDQUFDLFdBQVcsQ0FBQyxDQUFDO0dBQ1IsY0FBYyxDQXVDMUIiLCJuYW1lcyI6W10sInNvdXJjZXMiOlsiQzpcXFVzZXJzXFxkZWxsXFxEZXNrdG9wXFxTcnYgbmV3IGFwcFxcc3J2LW5ldy1hcHAtYmFja2VuZFxcc3JjXFxkYXRhYmFzZVxcZW50aXRpZXNcXHByb2R1Y3QtdmFyaWFudC5lbnRpdHkudHMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHtcclxuICBDb2x1bW4sXHJcbiAgRW50aXR5LFxyXG4gIEluZGV4LFxyXG4gIEpvaW5Db2x1bW4sXHJcbiAgTWFueVRvT25lLFxyXG4gIFByaW1hcnlHZW5lcmF0ZWRDb2x1bW4sXHJcbn0gZnJvbSAndHlwZW9ybSc7XHJcbmltcG9ydCB7IG51bWVyaWNUcmFuc2Zvcm1lciB9IGZyb20gJy4uL251bWVyaWMudHJhbnNmb3JtZXInO1xyXG5pbXBvcnQgeyBQcm9kdWN0IH0gZnJvbSAnLi9wcm9kdWN0LmVudGl0eSc7XHJcblxyXG5ARW50aXR5KCdwcm9kdWN0X3ZhcmlhbnRzJylcclxuQEluZGV4KFsncHJvZHVjdElkJ10pXHJcbmV4cG9ydCBjbGFzcyBQcm9kdWN0VmFyaWFudCB7XHJcbiAgQFByaW1hcnlHZW5lcmF0ZWRDb2x1bW4oJ3V1aWQnKVxyXG4gIGlkOiBzdHJpbmc7XHJcblxyXG4gIEBDb2x1bW4oeyB0eXBlOiAnYmlnaW50JywgdW5pcXVlOiB0cnVlLCBudWxsYWJsZTogdHJ1ZSB9KVxyXG4gIGxlZ2FjeUlkOiBzdHJpbmcgfCBudWxsO1xyXG5cclxuICBAQ29sdW1uKHsgdHlwZTogJ3V1aWQnIH0pXHJcbiAgcHJvZHVjdElkOiBzdHJpbmc7XHJcblxyXG4gIEBNYW55VG9PbmUoKCkgPT4gUHJvZHVjdCwgKHByb2R1Y3QpID0+IHByb2R1Y3QudmFyaWFudHMsIHtcclxuICAgIG9uRGVsZXRlOiAnQ0FTQ0FERScsXHJcbiAgfSlcclxuICBASm9pbkNvbHVtbih7IG5hbWU6ICdwcm9kdWN0SWQnIH0pXHJcbiAgcHJvZHVjdDogUHJvZHVjdDtcclxuXHJcbiAgQENvbHVtbih7IHR5cGU6ICdpbnRlZ2VyJywgZGVmYXVsdDogMCB9KVxyXG4gIG1lYXN1cmVtZW50OiBudW1iZXI7XHJcblxyXG4gIEBDb2x1bW4oeyB0eXBlOiAnaW50ZWdlcicsIGRlZmF1bHQ6IDAgfSlcclxuICBxdWFudGl0eTogbnVtYmVyO1xyXG5cclxuICBAQ29sdW1uKHsgbnVsbGFibGU6IHRydWUgfSlcclxuICB1bml0OiBzdHJpbmcgfCBudWxsO1xyXG5cclxuICBAQ29sdW1uKHsgdHlwZTogJ251bWVyaWMnLCBwcmVjaXNpb246IDEyLCBzY2FsZTogMiwgZGVmYXVsdDogMCwgdHJhbnNmb3JtZXI6IG51bWVyaWNUcmFuc2Zvcm1lciB9KVxyXG4gIGRpc2NvdW50ZWRQcmljZTogbnVtYmVyO1xyXG5cclxuICBAQ29sdW1uKHsgdHlwZTogJ251bWVyaWMnLCBwcmVjaXNpb246IDEyLCBzY2FsZTogMiwgZGVmYXVsdDogMCwgdHJhbnNmb3JtZXI6IG51bWVyaWNUcmFuc2Zvcm1lciB9KVxyXG4gIG9yaWdpbmFsUHJpY2U6IG51bWJlcjtcclxuXHJcbiAgQENvbHVtbih7IHR5cGU6ICdpbnRlZ2VyJywgZGVmYXVsdDogMCB9KVxyXG4gIHN0b2NrOiBudW1iZXI7XHJcblxyXG4gIEBDb2x1bW4oeyB0eXBlOiAnaW50ZWdlcicsIGRlZmF1bHQ6IDAgfSlcclxuICBzb2xkUXVhbnRpdHk6IG51bWJlcjtcclxuXHJcbiAgQENvbHVtbih7IGRlZmF1bHQ6IHRydWUgfSlcclxuICBpc0FjdGl2ZTogYm9vbGVhbjtcclxufVxyXG4iXSwidmVyc2lvbiI6M30=

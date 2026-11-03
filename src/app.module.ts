@@ -67,7 +67,9 @@ import { PlayModule } from './modules/play/play.module';
 import { AppIconModule } from './modules/app-icon/app-icon.module';
 import { CartModule } from './modules/cart/cart.module';
 import { ProductOrderModule } from './modules/product-order/product-order.module';
+import { AssistantModule } from './modules/assistant/assistant.module';
 import { CrossRolePhoneModule } from './common/services/cross-role-phone.module';
+import { RealtimeModule } from './common/realtime/realtime.module';
 
 function isRunningInDocker() {
   return process.env.RUNNING_IN_DOCKER === 'true' || existsSync('/.dockerenv');
@@ -186,6 +188,7 @@ function getDatabaseHost(configService: ConfigService) {
     ScheduleModule.forRoot(),
 
     CrossRolePhoneModule,
+    RealtimeModule,
 
     // Feature Modules
     AuthModule,
@@ -217,6 +220,7 @@ function getDatabaseHost(configService: ConfigService) {
     AppIconModule,
     CartModule,
     ProductOrderModule,
+    AssistantModule,
   ],
   providers: [
     {

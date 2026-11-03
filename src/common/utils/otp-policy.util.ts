@@ -12,7 +12,11 @@ const VALID_OTP = /^\d{4,6}$/;
  * staging deployment. Production can never enable the staging test code.
  */
 export function resolveFixedOtp(config: OtpRuntimeConfig): string | null {
-  if (config.nodeEnv === 'development') {
+  // Docker runs optimized Node builds in every tier; APP_ENV identifies the
+  // actual deployment. Never expose a fixed code when it says production.
+  if (config.appEnv === 'production') return null;
+
+  if (config.appEnv === 'development' || (!config.appEnv && config.nodeEnv === 'development')) {
     const developmentCode = config.testCode?.trim() || '1234';
     if (!VALID_OTP.test(developmentCode)) {
       throw new Error('OTP_TEST_CODE must contain 4 to 6 digits.');

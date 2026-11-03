@@ -72,6 +72,10 @@ export class AnalyticsService {
       actionableProductOrders,
       openEnquiries,
       pendingDealerApprovals,
+      bankLinkedElectricians,
+      bankLinkedDealers,
+      bankLinkedCustomers,
+      bankLinkedCounterboys,
     ] = await Promise.all([
       this.electricianRepository.count(),
       this.dealerRepository.count(),
@@ -125,6 +129,10 @@ export class AnalyticsService {
         .where('ticket.status IN (:...statuses)', { statuses: [SupportTicketStatus.OPEN, SupportTicketStatus.IN_PROGRESS] })
         .getCount(),
       this.dealerRepository.count({ where: { status: UserStatus.PENDING } }),
+      this.electricianRepository.count({ where: { bankLinked: true } }),
+      this.dealerRepository.count({ where: { bankLinked: true } }),
+      this.appUserRepository.count({ where: { bankLinked: true } }),
+      this.counterBoyRepository.count({ where: { bankLinked: true } }),
     ]);
 
     const growthRate = totalScansYesterday > 0 
@@ -168,6 +176,10 @@ export class AnalyticsService {
         pendingElectricianKyc: electricianKyc.pending,
         pendingDealerKyc: dealerKyc.pending,
         pendingDealerApprovals,
+        bankLinkedElectricians,
+        bankLinkedDealers,
+        bankLinkedCustomers,
+        bankLinkedCounterboys,
       },
     };
   }

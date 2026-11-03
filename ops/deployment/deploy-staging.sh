@@ -88,6 +88,21 @@ write_proxy_locations() {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    location = /api/v1/realtime/events {
+        limit_req zone=srv_api_per_ip burst=20 nodelay;
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        chunked_transfer_encoding off;
+    }
+
     location /api/ {
         limit_req zone=srv_api_per_ip burst=80 nodelay;
         proxy_pass http://127.0.0.1:3001;
@@ -177,4 +192,5 @@ sudo systemctl reload nginx
 
 curl --fail --silent --show-error "${PUBLIC_ORIGIN}/healthz" >/dev/null
 curl --fail --silent --show-error "${PUBLIC_ORIGIN}/api-healthz" >/dev/null
+ORIGIN="${PUBLIC_ORIGIN}" bash ops/deployment/check-assistant.sh
 echo "Staging backend and admin are healthy at ${PUBLIC_ORIGIN}."

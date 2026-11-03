@@ -1,5 +1,6 @@
-import { IsString, IsOptional, IsBoolean, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { BUNDLED_APP_ICON_KEYS } from '../app-icon.constants';
 
 export class CreateAppIconDto {
   @ApiProperty({ description: 'Icon name' })
@@ -10,6 +11,12 @@ export class CreateAppIconDto {
   @IsOptional()
   @IsString()
   imageUrl?: string;
+
+  @ApiProperty({ description: 'Bundled launcher icon key', enum: BUNDLED_APP_ICON_KEYS, required: false })
+  @IsOptional()
+  @IsString()
+  @IsIn(BUNDLED_APP_ICON_KEYS)
+  nativeKey?: string;
 
   @ApiProperty({ description: 'Whether this icon is active', required: false, default: false })
   @IsOptional()

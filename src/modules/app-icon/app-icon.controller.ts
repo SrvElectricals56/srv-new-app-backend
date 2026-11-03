@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Delete, UseGuards,
-  UseInterceptors, UploadedFile, BadRequestException,
+  UseInterceptors, UploadedFile, BadRequestException, SetMetadata,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -86,6 +86,7 @@ export class AppIconController {
   }
 
   @Get('active')
+  @SetMetadata('isPublic', true)
   @ApiOperation({ summary: 'Get currently active app icon' })
   @ApiResponse({ status: 200, description: 'Active app icon' })
   findActive() {
