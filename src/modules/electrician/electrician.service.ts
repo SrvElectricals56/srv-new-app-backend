@@ -62,11 +62,15 @@ export class ElectricianService {
     const walletProvided = data.walletBalance !== undefined;
     if (!totalProvided && !walletProvided) return;
 
-    if (totalProvided) {
-      data.totalPoints = this.parsePoints(data.totalPoints);
-      data.tier = await this.tierService.calculateElectricianTier(data.totalPoints);
-    }
-    if (walletProvided) data.walletBalance = this.parsePoints(data.walletBalance);
+    const totalPoints = totalProvided ? this.parsePoints(data.totalPoints) : undefined;
+    const walletBalance = walletProvided ? this.parsePoints(data.walletBalance) : undefined;
+    const synchronizedBalance = totalProvided ? totalPoints! : walletBalance!;
+
+    // Redemption spends walletBalance. Keep an explicit admin points/wallet
+    // edit aligned so the new balance is immediately usable on iOS/Android.
+    data.totalPoints = synchronizedBalance;
+    data.walletBalance = synchronizedBalance;
+    data.tier = await this.tierService.calculateElectricianTier(synchronizedBalance);
   }
 
   private async getRedemptionCounts(ids: string[]): Promise<Map<string, number>> {
@@ -242,7 +246,7 @@ export class ElectricianService {
       throw new ConflictException('Electrician with this code already exists');
     }
 
-    // Ranking points and spendable wallet balance are separate admin fields.
+    // Ranking and spendable points are synchronized for admin-created users.
     if (data.kycStatus === KYCStatus.REJECTED && !data.kycRejectionReason?.trim()) {
       data.kycRejectionReason = 'Rejected by admin';
     }

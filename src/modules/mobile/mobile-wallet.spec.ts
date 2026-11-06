@@ -15,6 +15,7 @@ describe('Mobile wallet scan counts for every account schema', () => {
       const summary = await service.getWalletSummary('account-id', role);
       expect(summary.totalScans).toBe(7);
       expect(summary.totalPoints).toBe(role === 'dealer' ? 40 : 60);
+      expect(summary.balance).toBe(role === 'dealer' ? 40 : 60);
       if (role === 'dealer' || role === 'user') {
         expect(service.updateUserByRole).not.toHaveBeenCalled();
       } else {

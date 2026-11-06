@@ -59,6 +59,21 @@ describe('AssistantService', () => {
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer test-key');
   });
 
+  it('asks for native Punjabi script and conversational phrasing in voice mode', async () => {
+    const config = { get: jest.fn((key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : undefined) } as unknown as ConfigService;
+    const service = new AssistantService(config, products, settings);
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ਸਤ ਸ੍ਰੀ ਅਕਾਲ' }] }],
+    }) });
+    global.fetch = fetchMock as typeof fetch;
+
+    await service.chat({ message: 'tusi kive ho', language: 'Punjabi', voiceMode: true });
+    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(request.instructions).toContain('natural Punjabi sentences');
+    expect(request.instructions).toContain('natural Gurmukhi Punjabi');
+    expect(request.instructions).toContain('avoid Hindi wording');
+  });
+
   it('prefers free Groq chat without sending catalog data for QR help', async () => {
     const config = { get: jest.fn((key: string) => ({ GROQ_API_KEY: 'groq-test', OPENAI_API_KEY: 'openai-test' })[key]) } as unknown as ConfigService;
     const service = new AssistantService(config, products, settings);

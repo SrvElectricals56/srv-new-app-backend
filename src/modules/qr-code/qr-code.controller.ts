@@ -119,6 +119,8 @@ export class QrCodeController {
     @Query('status') status?: string,
     @Query('search') search?: string,
     @Query('batchId') batchId?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
     @Query('includeDetails') includeDetails?: string,
   ) {
     // Support both isScanned=true/false and status=active/used
@@ -138,6 +140,8 @@ export class QrCodeController {
       scannedFilter,
       search,
       batchId,
+      fromDate,
+      toDate,
       includeDetails !== 'false',
     );
   }

@@ -424,11 +424,11 @@ export class QrCodeService {
     const adminId = admin?.id;
 
     const product = await this.productRepository.findOne({
-      where: { id: productId },
+      where: { id: productId, isActive: true },
     });
 
     if (!product) {
-      throw new NotFoundException('Product not found');
+      throw new NotFoundException('An active product is required to generate QR codes');
     }
 
     if (quantity <= 0 || quantity > 20000) {
@@ -686,6 +686,8 @@ export class QrCodeService {
     isScanned?: boolean,
     search?: string,
     batchId?: string,
+    fromDate?: string,
+    toDate?: string,
     includeDetails: boolean = true,
   ) {
     const safePage = Math.max(1, Number(page) || 1);
@@ -811,6 +813,24 @@ export class QrCodeService {
       }
     }
 
+    const fromRange = fromDate ? this.parseQrSearchDate(fromDate) : null;
+    const toRange = toDate ? this.parseQrSearchDate(toDate) : null;
+    if (fromDate && !fromRange) {
+      throw new BadRequestException('fromDate must use the YYYY-MM-DD format');
+    }
+    if (toDate && !toRange) {
+      throw new BadRequestException('toDate must use the YYYY-MM-DD format');
+    }
+    if (fromRange && toRange && fromRange.start > toRange.start) {
+      throw new BadRequestException('fromDate cannot be after toDate');
+    }
+    if (fromRange) {
+      queryBuilder.andWhere('"qrCode"."createdAt" >= :generatedFrom', { generatedFrom: fromRange.start });
+    }
+    if (toRange) {
+      queryBuilder.andWhere('"qrCode"."createdAt" < :generatedTo', { generatedTo: toRange.end });
+    }
+
     queryBuilder
       .orderBy('qrCode.batchNo', 'DESC', 'NULLS LAST')
       .addOrderBy('qrCode.sequenceNo', 'ASC', 'NULLS LAST')
@@ -818,7 +838,7 @@ export class QrCodeService {
       .skip(skip)
       .take(safeLimit);
 
-    const hasFilters = Boolean(productId || isScanned !== undefined || trimmedSearch || batchId);
+    const hasFilters = Boolean(productId || isScanned !== undefined || trimmedSearch || batchId || fromRange || toRange);
     let data: QrCode[];
     let total: number;
     if (hasFilters) {
@@ -1039,10 +1059,10 @@ export class QrCodeService {
 
     if (body.productId) {
       product = await this.productRepository.findOne({
-        where: { id: body.productId },
+        where: { id: body.productId, isActive: true },
       });
       if (!product) {
-        throw new NotFoundException('Product not found');
+        throw new NotFoundException('An active product is required for a QR batch');
       }
       params.push(product.id, product.name);
       assignments.push(`"productId" = $${params.length - 1}`, `"productName" = $${params.length}`);

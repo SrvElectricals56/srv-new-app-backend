@@ -395,8 +395,26 @@ export class SettingsService {
       if (limits[0] !== 0 || limits.some((value, i) => i > 0 && value <= limits[i - 1])) {
         throw new BadRequestException('Tier thresholds must start at 0 and increase from Silver to Diamond');
       }
-      // Only fixed identifiers from the groups above are interpolated.
-      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::${group.table}_tier_enum
+      // TypeORM installations created at different times can use either the
+      // legacy table-specific enum name or the shared "MemberTier" enum name.
+      // Read the real column type instead of casting to a stale hard-coded
+      // name, which caused PostgreSQL 42804 when App Settings were saved.
+      const [column] = await manager.query(
+        `SELECT c.udt_schema AS schema, c.udt_name AS name
+           FROM information_schema.columns c
+          WHERE c.table_schema = current_schema()
+            AND c.table_name = $1
+            AND c.column_name = 'tier'`,
+        [group.table],
+      );
+      if (!column?.name) {
+        throw new BadRequestException(`Tier column is not configured for ${group.table}`);
+      }
+      const quoteIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+      const enumType = `${quoteIdentifier(column.schema || 'public')}.${quoteIdentifier(column.name)}`;
+
+      // Only fixed table/metric identifiers from the groups above are interpolated.
+      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::${enumType}
         FROM (SELECT e.id, CASE WHEN ${group.metric} >= $3 THEN 'Diamond'
           WHEN ${group.metric} >= $2 THEN 'Platinum' WHEN ${group.metric} >= $1 THEN 'Gold'
           ELSE 'Silver' END AS tier FROM ${group.table} e) next

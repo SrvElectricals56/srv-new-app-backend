@@ -9,6 +9,7 @@ import { Dealer } from '../../database/entities/dealer.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { CounterBoy } from '../../database/entities/counterboy.entity';
 import { TransactionType, TransactionSource, UserRole } from '../../common/enums';
+import { resolveSpendableRewardBalance } from '../../common/utils/reward-balance.util';
 
 @Injectable()
 export class WalletService {
@@ -125,7 +126,11 @@ export class WalletService {
 
     // Get current balance
     const user = await this.getUser(userId, userRole);
-    const currentBalance = user.walletBalance || 0;
+    const currentBalance = resolveSpendableRewardBalance(
+      user.walletBalance,
+      (user as any).totalPoints,
+      userRole === UserRole.DEALER,
+    );
     const newBalance = currentBalance + amount;
 
     // Create transaction record
@@ -159,7 +164,11 @@ export class WalletService {
 
     // Get current balance
     const user = await this.getUser(userId, userRole);
-    const currentBalance = user.walletBalance || 0;
+    const currentBalance = resolveSpendableRewardBalance(
+      user.walletBalance,
+      (user as any).totalPoints,
+      userRole === UserRole.DEALER,
+    );
 
     if (currentBalance < amount) {
       throw new BadRequestException('Insufficient wallet balance');

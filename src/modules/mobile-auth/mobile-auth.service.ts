@@ -29,6 +29,7 @@ import { CrossRolePhoneService } from '../../common/services/cross-role-phone.se
 import { resolveFixedOtp } from '../../common/utils/otp-policy.util';
 import { buildSmsRetrieverMessage } from '../../common/utils/sms-retriever-message.util';
 import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
+import { resolveSpendableRewardBalance } from '../../common/utils/reward-balance.util';
 
 // In-memory OTP store (production mein Redis use karein)
 const otpStore = new Map<
@@ -1435,7 +1436,7 @@ export class MobileAuthService {
   // ── Format User Profile ────────────────────────────────────────────────────
 
   private getEffectivePoints(user: any) {
-    return Number(user?.totalPoints ?? user?.walletBalance ?? 0);
+    return resolveSpendableRewardBalance(user?.walletBalance, user?.totalPoints);
   }
 
   formatUserProfile(user: any, role: string) {

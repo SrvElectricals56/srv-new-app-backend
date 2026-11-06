@@ -26,4 +26,17 @@ describe('KYC survives mobile profile updates', () => {
     await service.updateProfile('id', 'electrician', { aadharFrontImage: '/uploads/a.jpg' });
     expect(service.electricianRepository.update).toHaveBeenCalledWith('id', expect.objectContaining({ kycStatus: 'pending' }));
   });
+
+  it('accepts a PAN-only first KYC submission for review', async () => {
+    const service = setup('not_submitted');
+    service.getProfile.mockResolvedValue({ kycStatus: 'not_submitted', aadharFrontImage: null, panDocument: null });
+
+    await service.updateProfile('id', 'electrician', { panDocument: '/uploads/pan-only.jpg' });
+
+    expect(service.electricianRepository.update).toHaveBeenCalledWith('id', {
+      panDocument: '/uploads/pan-only.jpg',
+      kycStatus: 'pending',
+      kycRejectionReason: null,
+    });
+  });
 });

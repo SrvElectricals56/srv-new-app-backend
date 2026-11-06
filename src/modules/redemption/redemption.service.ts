@@ -12,6 +12,7 @@ import { Settings } from '../../database/entities/settings.entity';
 import { numericSetting } from '../../common/utils/app-settings.util';
 import { NotificationStatus, RedemptionStatus, TransactionSource, TransactionType, UserRole } from '../../common/enums';
 import { Notification } from '../../database/entities/notification.entity';
+import { resolveSpendableRewardBalance } from '../../common/utils/reward-balance.util';
 
 @Injectable()
 export class RedemptionService {
@@ -91,9 +92,13 @@ export class RedemptionService {
       redemption.role === UserRole.DEALER &&
       (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
 
-    const balanceBefore = Number(
-      isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
-    );
+    const balanceBefore = isDealerBonus
+      ? Number((user as any).bonusPoints ?? 0)
+      : resolveSpendableRewardBalance(
+          (user as any).walletBalance,
+          (user as any).totalPoints,
+          redemption.role === UserRole.DEALER,
+        );
     const refundPoints = Number(redemption.points ?? 0);
     const balanceAfter = balanceBefore + refundPoints;
 
@@ -104,7 +109,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Number((user as any).totalPoints ?? 0) + refundPoints, manager) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, balanceAfter, manager) as any,
       );
     }
 
@@ -140,9 +145,13 @@ export class RedemptionService {
       redemption.role === UserRole.DEALER &&
       (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
 
-    const balanceBefore = Number(
-      isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
-    );
+    const balanceBefore = isDealerBonus
+      ? Number((user as any).bonusPoints ?? 0)
+      : resolveSpendableRewardBalance(
+          (user as any).walletBalance,
+          (user as any).totalPoints,
+          redemption.role === UserRole.DEALER,
+        );
     const lockedPoints = Number(redemption.points ?? 0);
 
     if (balanceBefore < lockedPoints) {
@@ -162,7 +171,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Math.max(0, Number((user as any).totalPoints ?? 0) - lockedPoints), manager) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, balanceAfter, manager) as any,
       );
     }
 
