@@ -1,7 +1,21 @@
-import { RedemptionService } from './redemption.service';
+import { currentRedemptionPaymentDetails, RedemptionService } from './redemption.service';
 import { RedemptionStatus, UserRole } from '../../common/enums';
 
 describe('Redemption status correction', () => {
+  it('shows the latest uploaded UPI QR while preserving the redemption snapshot as fallback', () => {
+    const snapshot = { upiQrCodeImage: '/uploads/old-qr.jpg', bankAccount: '9000000000' };
+    expect(currentRedemptionPaymentDetails(snapshot, {
+      upiQrCodeImage: '/uploads/current-qr.jpg',
+      bankAccount: '9888888888',
+    })).toEqual(expect.objectContaining({
+      upiQrCodeImage: '/uploads/current-qr.jpg',
+      bankAccount: '9888888888',
+    }));
+    expect(currentRedemptionPaymentDetails(snapshot)).toEqual(expect.objectContaining({
+      upiQrCodeImage: '/uploads/old-qr.jpg',
+      bankAccount: '9000000000',
+    }));
+  });
   function setup(status: RedemptionStatus) {
     const service: any = Object.create(RedemptionService.prototype);
     const row = { id: 'request', status, role: UserRole.ELECTRICIAN };
