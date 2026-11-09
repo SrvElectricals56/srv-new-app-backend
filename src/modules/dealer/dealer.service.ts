@@ -15,6 +15,7 @@ import { UserStatus, MemberTier, UserRole } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
+import { electricianKycStatus } from '../../common/utils/electrician-kyc.util';
 
 @Injectable()
 export class DealerService {
@@ -73,7 +74,7 @@ export class DealerService {
       `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "electricianCount"
        FROM "dealers" d
        LEFT JOIN "electricians" e ON (
-         e."dealerId" = d."id"
+         e."dealerId"::text = d."id"::text
          OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
              AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
          OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
@@ -347,6 +348,7 @@ export class DealerService {
     const data: any = { ...createDealerDto };
     data.electricianCount = 0;
     data.tier = MemberTier.SILVER;
+    data.kycStatus = electricianKycStatus(data);
 
     const dealer = this.dealerRepository.create(data);
     return this.dealerRepository.save(dealer);
@@ -360,6 +362,7 @@ export class DealerService {
     tier?: MemberTier,
     state?: string,
     city?: string,
+    district?: string,
     bankLinked?: boolean,
     appInstalled?: boolean,
     dateFrom?: string,
@@ -406,11 +409,15 @@ export class DealerService {
     }
 
     if (state) {
-      queryBuilder.andWhere('dealer.state = :state', { state });
+      queryBuilder.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
     }
 
     if (city) {
-      queryBuilder.andWhere('dealer.town = :city', { city });
+      queryBuilder.andWhere('LOWER(TRIM(dealer.town)) = LOWER(TRIM(:city))', { city });
+    }
+
+    if (district) {
+      queryBuilder.andWhere('LOWER(TRIM(dealer.district)) = LOWER(TRIM(:district))', { district });
     }
 
     if (bankLinked !== undefined) {
@@ -498,7 +505,12 @@ export class DealerService {
     const result = await this.dealerRepository.createQueryBuilder()
       .update()
       .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
-      .where('"kycStatus" <> :status', { status: 'verified' })
+      .where('"kycStatus" = :status', { status: 'pending' })
+      .andWhere(`(
+        NULLIF(BTRIM(COALESCE("aadharFrontImage", '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE("panDocument", '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE("gstDocument", '')), '') IS NOT NULL
+      )`)
       .execute();
     return { approved: result.affected ?? 0 };
   }
@@ -555,22 +567,137 @@ export class DealerService {
     return { message: 'Dealer deleted successfully' };
   }
 
-  async getDealerElectricians(id: string, page: number = 1, limit: number = 20) {
+  async getDealerElectricians(id: string, page: number = 1, limit: number = 20, search?: string) {
     const skip = (page - 1) * limit;
     const dealer = await this.dealerRepository.findOne({ where: { id } });
     if (!dealer) throw new NotFoundException('Dealer not found');
     const query = this.electricianRepository.createQueryBuilder('electrician')
       .where(`(
-        electrician.dealerId = :dealerId
+        electrician."dealerId"::text = :dealerId
         OR (electrician.dealerId IS NULL AND upper(btrim(electrician.fallbackDealerCode)) = upper(btrim(:dealerCode)))
         OR (electrician.dealerId IS NULL AND RIGHT(regexp_replace(COALESCE(electrician.fallbackDealerPhone, ''), '\\D', '', 'g'), 10)
           = RIGHT(regexp_replace(COALESCE(:dealerPhone, ''), '\\D', '', 'g'), 10))
-      )`, { dealerId: id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' })
-      .orderBy('electrician.joinedDate', 'DESC')
-      .skip(skip)
-      .take(limit);
+      )`, { dealerId: id, dealerCode: dealer.dealerCode ?? '', dealerPhone: dealer.phone ?? '' });
+
+    if (search?.trim()) {
+      query.andWhere(
+        `(electrician.name ILIKE :search
+          OR electrician.phone ILIKE :search
+          OR electrician.electricianCode ILIKE :search
+          OR electrician.city ILIKE :search)`,
+        { search: `%${search.trim()}%` },
+      );
+    }
+
+    query.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
     const [data, total] = await query.getManyAndCount();
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getDealerElectriciansByDealerSearch(
+    dealerSearch: string,
+    page: number = 1,
+    limit: number = 20,
+    electricianSearch?: string,
+  ) {
+    const trimmed = dealerSearch?.trim();
+    if (!trimmed) {
+      return {
+        dealers: [],
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        message: 'Please provide a dealer name, phone number, or dealer code to search',
+      };
+    }
+
+    // Find matching dealers by name, phone, or dealerCode
+    const dealers = await this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select([
+        'dealer.id', 'dealer.name', 'dealer.phone', 'dealer.dealerCode',
+        'dealer.town', 'dealer.state', 'dealer.tier', 'dealer.status',
+      ])
+      .where(
+        `(dealer.name ILIKE :search
+          OR dealer.phone ILIKE :search
+          OR dealer.dealerCode ILIKE :search)`,
+        { search: `%${trimmed}%` },
+      )
+      .orderBy('dealer.name', 'ASC')
+      .getMany();
+
+    if (dealers.length === 0) {
+      return {
+        dealers: [],
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        searchedBy: dealerSearch,
+        message: 'No dealer found matching the provided name, phone number, or dealer code',
+      };
+    }
+
+    // Build combined WHERE covering all matched dealers
+    const skip = (page - 1) * limit;
+    const query = this.electricianRepository.createQueryBuilder('electrician');
+
+    const conditions = dealers.map(
+      (_, i) =>
+        `(electrician."dealerId"::text = :dealerId${i}
+          OR (electrician."dealerId" IS NULL
+              AND NULLIF(btrim(:dealerCode${i}), '') IS NOT NULL
+              AND upper(btrim(electrician."fallbackDealerCode")) = upper(btrim(:dealerCode${i})))
+          OR (electrician."dealerId" IS NULL
+              AND RIGHT(regexp_replace(COALESCE(electrician."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)
+                = RIGHT(regexp_replace(COALESCE(:dealerPhone${i}, ''), '\\D', '', 'g'), 10))
+        )`,
+    );
+
+    const params: Record<string, string> = {};
+    dealers.forEach((d, i) => {
+      params[`dealerId${i}`] = d.id;
+      params[`dealerCode${i}`] = d.dealerCode ?? '';
+      params[`dealerPhone${i}`] = d.phone ?? '';
+    });
+
+    query.where(`(${conditions.join(' OR ')})`, params);
+
+    if (electricianSearch?.trim()) {
+      query.andWhere(
+        `(electrician.name ILIKE :eSearch
+          OR electrician.phone ILIKE :eSearch
+          OR electrician.electricianCode ILIKE :eSearch
+          OR electrician.city ILIKE :eSearch)`,
+        { eSearch: `%${electricianSearch.trim()}%` },
+      );
+    }
+
+    query.orderBy('electrician.joinedDate', 'DESC').skip(skip).take(limit);
+    const [data, total] = await query.getManyAndCount();
+
+    return {
+      dealers: dealers.map((d) => ({
+        id: d.id,
+        name: d.name,
+        phone: d.phone,
+        dealerCode: d.dealerCode,
+        town: d.town,
+        state: d.state,
+        tier: d.tier,
+        status: d.status,
+      })),
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      searchedBy: dealerSearch,
+    };
   }
 
   async getDealerWallet(id: string, page: number = 1, limit: number = 20) {
@@ -1035,7 +1162,7 @@ export class DealerService {
       .where('dealer.town IS NOT NULL')
       .andWhere(`TRIM(dealer.town) <> ''`);
     if (state) {
-      query.andWhere('dealer.state = :state', { state });
+      query.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
     }
     const rows = await query.orderBy('dealer.town', 'ASC').getRawMany();
     return {
@@ -1046,6 +1173,22 @@ export class DealerService {
             .filter((city) => city !== '' && city !== '?'),
         ),
       ).sort((a, b) => a.localeCompare(b)),
+    };
+  }
+
+  async getDistinctDistricts(state?: string): Promise<{ districts: string[] }> {
+    const query = this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select('DISTINCT dealer.district', 'district')
+      .where('dealer.district IS NOT NULL')
+      .andWhere(`TRIM(dealer.district) <> ''`);
+    if (state) {
+      query.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
+    }
+    const rows = await query.orderBy('dealer.district', 'ASC').getRawMany();
+    return {
+      districts: Array.from(new Set(rows.map((row) => String(row.district ?? '').trim()).filter((district) => district && district !== '?')))
+        .sort((a, b) => a.localeCompare(b)),
     };
   }
 
@@ -1069,7 +1212,7 @@ export class DealerService {
       `SELECT d."id"::text AS "dealerId", COUNT(DISTINCT e."id")::int AS "periodElectricians"
        FROM "dealers" d
        JOIN "electricians" e ON (
-         e."dealerId" = d."id"
+         e."dealerId"::text = d."id"::text
          OR (e."dealerId" IS NULL AND NULLIF(btrim(d."dealerCode"), '') IS NOT NULL
              AND upper(btrim(e."fallbackDealerCode")) = upper(btrim(d."dealerCode")))
          OR (e."dealerId" IS NULL AND RIGHT(regexp_replace(COALESCE(e."fallbackDealerPhone", ''), '\\D', '', 'g'), 10)

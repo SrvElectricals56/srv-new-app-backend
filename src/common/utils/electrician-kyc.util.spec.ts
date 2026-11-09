@@ -9,4 +9,10 @@ describe('Manual KYC review', () => {
   it('does not approve a document automatically', () => {
     expect(electricianKycStatus({ aadharFrontImage: '/uploads/a.jpg' })).toBe(KYCStatus.PENDING);
   });
+  it('marks an account without KYC evidence as not submitted', () => {
+    expect(electricianKycStatus({})).toBe(KYCStatus.NOT_SUBMITTED);
+  });
+  it.each(['panDocument', 'gstDocument'] as const)('marks an account with %s as pending', field => {
+    expect(electricianKycStatus({ [field]: '/uploads/document.jpg' })).toBe(KYCStatus.PENDING);
+  });
 });

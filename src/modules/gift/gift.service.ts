@@ -195,15 +195,16 @@ export class GiftService {
 
     const userIds = [...new Set(data.map((order) => order.userId).filter(Boolean))];
     const owners = userIds.length ? await this.productRepository.query(
-      `SELECT e.id::text, e.phone, 'electrician' AS role, COALESCE(d.name, e."fallbackDealerName") AS "dealerName"
-       FROM electricians e LEFT JOIN dealers d ON d.id = e."dealerId" WHERE e.id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'dealer', name FROM dealers WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT id::text, phone, 'user', NULL FROM app_users WHERE id::text = ANY($1::text[])
-       UNION ALL SELECT c.id::text, c.phone, 'counterboy', d.name FROM counterboys c
+      `SELECT e.id::text, e.phone, e."electricianCode" AS code, 'electrician' AS role, COALESCE(d.name, e."fallbackDealerName") AS "dealerName"
+       FROM electricians e LEFT JOIN dealers d ON d.id::text = e."dealerId"::text WHERE e.id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, "dealerCode" AS code, 'dealer', name FROM dealers WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT id::text, phone, "userCode" AS code, 'user', NULL::text FROM app_users WHERE id::text = ANY($1::text[])
+       UNION ALL SELECT c.id::text, c.phone, c."counterboyCode" AS code, 'counterboy', d.name FROM counterboys c
        LEFT JOIN dealers d ON d.id::text = c."dealerId"::text WHERE c.id::text = ANY($1::text[])`,
       [userIds],
     ) : [];
     const phoneMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.phone]));
+    const codeMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.code]));
     const dealerMap = new Map(owners.map((owner: any) => [`${owner.role}:${owner.id}`, owner.dealerName]));
 
     return {
@@ -212,7 +213,7 @@ export class GiftService {
         type: o.role === ('user' as any) ? 'customer' : o.role,
         userName: o.userName,
         userPhone: phoneMap.get(`${o.role}:${o.userId}`) ?? null,
-        userCode: o.userCode ?? '',
+        userCode: o.userCode || codeMap.get(`${o.role}:${o.userId}`) || '',
         dealerName: dealerMap.get(`${o.role}:${o.userId}`) || o.dealerName || '—',
         giftName: o.giftName,
         giftImage: o.giftImage ?? '',
