@@ -4,13 +4,23 @@ import { join } from 'path';
 import {
   invalidKycDocumentMessage,
   matchesKycDocumentText,
+  shutdownKycOcrWorker,
   validateKycDocumentFile,
+  warmKycOcrWorker,
 } from './kyc-document-validator';
 const sharp = require('sharp');
 
 jest.setTimeout(60_000);
 
 describe('KYC document content validation', () => {
+  beforeAll(async () => {
+    await warmKycOcrWorker();
+  });
+
+  afterAll(async () => {
+    await shutdownKycOcrWorker();
+  });
+
   it('accepts Aadhaar text and rejects an unrelated photo caption', () => {
     expect(matchesKycDocumentText('Government of India AADHAAR 1234 5678 9012', 'aadhar-front')).toBe(true);
     expect(matchesKycDocumentText('Birthday picnic at the park', 'aadhar-front')).toBe(false);
@@ -38,6 +48,9 @@ describe('KYC document content validation', () => {
       </svg>`);
     try {
       await sharp(svg).png().toFile(imagePath);
+      await expect(validateKycDocumentFile(imagePath, 'image/png', 'pan')).resolves.toBe(true);
+      // A second upload uses the already initialized worker instead of paying
+      // the Tesseract language/worker startup cost again.
       await expect(validateKycDocumentFile(imagePath, 'image/png', 'pan')).resolves.toBe(true);
     } finally {
       await rm(directory, { recursive: true, force: true });

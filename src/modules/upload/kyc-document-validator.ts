@@ -1,8 +1,47 @@
 import { readFile } from 'fs/promises';
 import { PDFParse } from 'pdf-parse';
-import { createWorker } from 'tesseract.js';
+import { createWorker, type Worker } from 'tesseract.js';
 const sharp: any = require('sharp');
 const englishLanguageData: { langPath: string; gzip: boolean } = require('@tesseract.js-data/eng');
+
+let ocrWorkerPromise: Promise<Worker> | null = null;
+let ocrQueue: Promise<void> = Promise.resolve();
+
+async function createOcrWorker() {
+  return createWorker('eng', 1, {
+    langPath: englishLanguageData.langPath,
+    gzip: englishLanguageData.gzip,
+  });
+}
+
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    const pendingWorker = createOcrWorker();
+    ocrWorkerPromise = pendingWorker;
+    void pendingWorker.catch(() => {
+      if (ocrWorkerPromise === pendingWorker) ocrWorkerPromise = null;
+    });
+  }
+  return ocrWorkerPromise;
+}
+
+function runOcrJob<T>(job: (worker: Worker) => Promise<T>) {
+  const result = ocrQueue.then(async () => job(await getOcrWorker()));
+  ocrQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+export async function warmKycOcrWorker() {
+  await getOcrWorker();
+}
+
+export async function shutdownKycOcrWorker() {
+  await ocrQueue.catch(() => undefined);
+  const pendingWorker = ocrWorkerPromise;
+  ocrWorkerPromise = null;
+  const worker = await pendingWorker?.catch(() => null);
+  await worker?.terminate().catch(() => undefined);
+}
 
 export type KycDocumentType = 'aadhar-front' | 'aadhar-back' | 'pan' | 'gst';
 
@@ -48,47 +87,59 @@ export function invalidKycDocumentMessage(documentType: KycDocumentType) {
 }
 
 async function recognizeImage(image: string | Buffer) {
-  const worker = await createWorker('eng', 1, {
-    langPath: englishLanguageData.langPath,
-    gzip: englishLanguageData.gzip,
+  return runOcrJob(async (worker) => {
+    try {
+      const result = await worker.recognize(image);
+      return result.data.text || '';
+    } catch {
+      // Recover once from a crashed native/WASM worker instead of making all
+      // later uploads fail until the backend process is restarted.
+      if (ocrWorkerPromise) ocrWorkerPromise = null;
+      await worker.terminate().catch(() => undefined);
+      const replacement = await getOcrWorker();
+      const result = await replacement.recognize(image);
+      return result.data.text || '';
+    }
   });
-  try {
-    const result = await worker.recognize(image);
-    return result.data.text || '';
-  } finally {
-    await worker.terminate();
-  }
 }
 
-async function recognizePreparedImage(path: string) {
+async function recognizePreparedImage(path: string, width: number) {
   const prepared = await sharp(path)
     .rotate()
-    .resize({ width: 1800, withoutEnlargement: false })
+    .resize({ width, withoutEnlargement: true })
     .grayscale()
     .normalize()
     .sharpen()
-    .png()
+    .png({ compressionLevel: 1 })
     .toBuffer();
   return recognizeImage(prepared);
 }
 
-async function recognizePdf(path: string, documentType: KycDocumentType) {
+async function validatePdf(path: string, documentType: KycDocumentType) {
   const parser = new PDFParse({ data: await readFile(path) });
   try {
     const textResult = await parser.getText({ first: 1 });
-    if (matchesKycDocumentText(textResult.text || '', documentType)) return textResult.text || '';
+    if (matchesKycDocumentText(textResult.text || '', documentType)) return true;
 
-    const screenshot = await parser.getScreenshot({ first: 1, desiredWidth: 1800, imageDataUrl: false, imageBuffer: true });
-    const firstPage = screenshot.pages[0]?.data;
-    return firstPage ? recognizeImage(Buffer.from(firstPage)) : textResult.text || '';
+    // Most clear scans validate quickly at 900px. Only retry at a higher
+    // resolution when the fast pass cannot find enough document signals.
+    for (const desiredWidth of [900, 1400]) {
+      const screenshot = await parser.getScreenshot({ first: 1, desiredWidth, imageDataUrl: false, imageBuffer: true });
+      const firstPage = screenshot.pages[0]?.data;
+      if (firstPage && matchesKycDocumentText(await recognizeImage(Buffer.from(firstPage)), documentType)) return true;
+    }
+    return false;
   } finally {
     await parser.destroy();
   }
 }
 
 export async function validateKycDocumentFile(path: string, mimeType: string, documentType: KycDocumentType) {
-  const text = mimeType === 'application/pdf'
-    ? await recognizePdf(path, documentType)
-    : await recognizePreparedImage(path);
-  return matchesKycDocumentText(text, documentType);
+  if (mimeType === 'application/pdf') return validatePdf(path, documentType);
+
+  const fastText = await recognizePreparedImage(path, 900);
+  if (matchesKycDocumentText(fastText, documentType)) return true;
+
+  const highQualityText = await recognizePreparedImage(path, 1400);
+  return matchesKycDocumentText(highQualityText, documentType);
 }

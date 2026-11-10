@@ -6,6 +6,8 @@ import {
   UseGuards,
   BadRequestException,
   Req,
+  type OnModuleDestroy,
+  type OnModuleInit,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -21,8 +23,10 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
 import {
   invalidKycDocumentMessage,
+  shutdownKycOcrWorker,
   type KycDocumentType,
   validateKycDocumentFile,
+  warmKycOcrWorker,
 } from './kyc-document-validator';
 const UPLOAD_DIR = join(process.cwd(), 'uploads');
 const BANNER_DIR = join(UPLOAD_DIR, 'banners');
@@ -44,12 +48,24 @@ const KYC_IMAGE_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif', 'tiff', 'bmp', 
 @ApiTags('Upload')
 @ApiBearerAuth('JWT-auth')
 @Controller('upload')
-export class UploadController {
+export class UploadController implements OnModuleInit, OnModuleDestroy {
+  constructor(private configService: ConfigService) {}
+
+  onModuleInit() {
+    // Load OCR language data in the background during server startup so the
+    // first user upload does not pay the several-second worker startup cost.
+    void warmKycOcrWorker().catch(() => undefined);
+  }
+
+  async onModuleDestroy() {
+    await shutdownKycOcrWorker();
+  }
+
   private async optimizeImage(
     file: Express.Multer.File,
     maxWidth: number,
     maxHeight: number,
-    limitInputPixels?: number,
+    effort = 4,
   ) {
     const baseName = file.filename.slice(0, file.filename.length - extname(file.filename).length);
     const optimizedFilename = `${baseName}-optimized.webp`;
@@ -64,7 +80,7 @@ export class UploadController {
           fit: 'inside',
           withoutEnlargement: true,
         })
-        .webp({ quality: 80, effort: 4, smartSubsample: true })
+        .webp({ quality: 80, effort, smartSubsample: true })
         .toFile(optimizedPath);
       const optimizedStat = await stat(optimizedPath);
       await unlink(file.path);
@@ -88,54 +104,7 @@ export class UploadController {
       if (filename !== file.filename) await rename(file.path, join(file.destination, filename));
       return { filename, size: file.size };
     }
-    const looksLikeHeic = /\.(heic|heif)$/i.test(file.originalname || file.filename) ||
-      /^(image\/heic|image\/heif)$/i.test(file.mimetype || '');
-    const looksLikeBmp = /\.bmp$/i.test(file.originalname || file.filename) ||
-      /^image\/bmp$/i.test(file.mimetype || '');
-    let format: string | undefined;
-    try {
-      format = (await sharp(file.path, { limitInputPixels: 60_000_000 }).metadata()).format;
-    } catch {
-      // The file is neither a PDF nor an image that this server can decode.
-    }
-    if (looksLikeHeic || looksLikeBmp) {
-      // libvips builds used by Sharp do not consistently include HEIC support.
-      // Decode these iPhone documents explicitly, then run the same safe
-      // resize/normalisation path as every other raster image.
-      try {
-        const source = await readFile(file.path);
-        const bmp = looksLikeBmp ? decodeBmp.decode(source) : undefined;
-        const jpeg = looksLikeBmp
-          ? await sharp(bmp.data, {
-            raw: {
-              width: bmp.width,
-              height: bmp.height,
-              channels: 4,
-            },
-          }).jpeg({ quality: 90 }).toBuffer()
-          : await convertHeic({ buffer: source, format: 'JPEG', quality: 0.9 });
-        const convertedFilename = basename(file.filename, extname(file.filename)) + '-source.jpg';
-        const convertedPath = join(file.destination, convertedFilename);
-        await writeFile(convertedPath, jpeg);
-        await unlink(file.path).catch(() => undefined);
-        file = {
-          ...file,
-          filename: convertedFilename,
-          originalname: convertedFilename,
-          mimetype: 'image/jpeg',
-          path: convertedPath,
-          size: jpeg.length,
-        };
-        format = 'jpeg';
-      } catch {
-        format = undefined;
-      }
-    }
-    if (!format || !KYC_IMAGE_FORMATS.has(format)) {
-      await unlink(file.path).catch(() => undefined);
-      throw new BadRequestException('Choose a valid photo or PDF document.');
-    }
-    const result = await this.optimizeImage(file, 2400, 2400, 60_000_000);
+    const result = await this.optimizeImage(file, 1800, 1800, 1);
     if (result.filename === file.filename) {
       await unlink(file.path).catch(() => undefined);
       throw new BadRequestException('Unable to read this photo. Please choose another photo or PDF.');
