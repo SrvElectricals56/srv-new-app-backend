@@ -101,7 +101,7 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
     if (header.toString() === '%PDF-') {
       const filename = `${basename(file.filename, extname(file.filename))}.pdf`;
       if (filename !== file.filename) await rename(file.path, join(file.destination, filename));
-      return { filename, size: file.size };
+      return { filename, size: file.size, mimeType: 'application/pdf' };
     }
 
     const looksLikeHeic = /\.(heic|heif)$/i.test(file.originalname || file.filename) ||
@@ -153,7 +153,7 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
       await unlink(file.path).catch(() => undefined);
       throw new BadRequestException('Unable to read this photo. Please choose another photo or PDF.');
     }
-    return result;
+    return { ...result, mimeType: 'image/webp' };
   }
 
   private requestedKycDocumentType(req: Request): KycDocumentType | null {
@@ -166,7 +166,7 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
 
   private async validatePreparedKycDocument(
     file: Express.Multer.File,
-    prepared: { filename: string; size: number },
+    prepared: { filename: string; size: number; mimeType: string },
     req: Request,
   ) {
     const documentType = this.requestedKycDocumentType(req);
@@ -175,7 +175,7 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
     const preparedPath = join(file.destination, prepared.filename);
     let valid = false;
     try {
-      valid = await validateKycDocumentFile(preparedPath, file.mimetype, documentType);
+      valid = await validateKycDocumentFile(preparedPath, prepared.mimeType, documentType);
     } catch {
       await unlink(preparedPath).catch(() => undefined);
       throw new BadRequestException('Unable to validate this document. Please use a clear image or PDF and try again.');

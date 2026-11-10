@@ -8,10 +8,19 @@ let ocrWorkerPromise: Promise<Worker> | null = null;
 let ocrQueue: Promise<void> = Promise.resolve();
 
 async function createOcrWorker() {
-  return createWorker('eng', 1, {
+  const worker = await createWorker('eng', 1, {
     langPath: englishLanguageData.langPath,
     gzip: englishLanguageData.gzip,
   });
+  // Identity cards contain several short text regions rather than one large
+  // paragraph. Sparse-text mode is both faster and more reliable for those
+  // layouts than Tesseract's default full-page analysis.
+  await worker.setParameters({
+    tessedit_pageseg_mode: '11',
+    preserve_interword_spaces: '1',
+    user_defined_dpi: '150',
+  } as any);
+  return worker;
 }
 
 function getOcrWorker() {
@@ -121,9 +130,9 @@ async function validatePdf(path: string, documentType: KycDocumentType) {
     const textResult = await parser.getText({ first: 1 });
     if (matchesKycDocumentText(textResult.text || '', documentType)) return true;
 
-    // Most clear scans validate quickly at 900px. Only retry at a higher
+    // Most clear scans validate quickly at 760px. Only retry at a higher
     // resolution when the fast pass cannot find enough document signals.
-    for (const desiredWidth of [900, 1400]) {
+    for (const desiredWidth of [760, 1200]) {
       const screenshot = await parser.getScreenshot({ first: 1, desiredWidth, imageDataUrl: false, imageBuffer: true });
       const firstPage = screenshot.pages[0]?.data;
       if (firstPage && matchesKycDocumentText(await recognizeImage(Buffer.from(firstPage)), documentType)) return true;
@@ -137,9 +146,9 @@ async function validatePdf(path: string, documentType: KycDocumentType) {
 export async function validateKycDocumentFile(path: string, mimeType: string, documentType: KycDocumentType) {
   if (mimeType === 'application/pdf') return validatePdf(path, documentType);
 
-  const fastText = await recognizePreparedImage(path, 900);
+  const fastText = await recognizePreparedImage(path, 760);
   if (matchesKycDocumentText(fastText, documentType)) return true;
 
-  const highQualityText = await recognizePreparedImage(path, 1400);
+  const highQualityText = await recognizePreparedImage(path, 1200);
   return matchesKycDocumentText(highQualityText, documentType);
 }

@@ -56,4 +56,23 @@ describe('KYC document content validation', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('accepts an Aadhaar image in the Aadhaar field but not in the PAN field', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'srv-kyc-aadhaar-'));
+    const imagePath = join(directory, 'aadhaar.png');
+    const svg = Buffer.from(`
+      <svg width="1400" height="850" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="white"/>
+        <text x="80" y="180" font-size="72" font-family="Arial" fill="black">GOVERNMENT OF INDIA</text>
+        <text x="80" y="340" font-size="82" font-family="Arial" fill="black">AADHAAR</text>
+        <text x="80" y="520" font-size="90" font-family="Arial" fill="black">1234 5678 9012</text>
+      </svg>`);
+    try {
+      await sharp(svg).png().toFile(imagePath);
+      await expect(validateKycDocumentFile(imagePath, 'image/png', 'aadhar-front')).resolves.toBe(true);
+      await expect(validateKycDocumentFile(imagePath, 'image/png', 'pan')).resolves.toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
