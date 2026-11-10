@@ -15,6 +15,7 @@ import { UserStatus, MemberTier, UserRole } from '../../common/enums';
 import { TierService } from '../../common/services/tier.service';
 import { CrossRolePhoneService } from '../../common/services/cross-role-phone.service';
 import { hasRecordedAppInstall } from '../../common/utils/app-install.util';
+import { electricianKycStatus } from '../../common/utils/electrician-kyc.util';
 
 @Injectable()
 export class DealerService {
@@ -347,6 +348,7 @@ export class DealerService {
     const data: any = { ...createDealerDto };
     data.electricianCount = 0;
     data.tier = MemberTier.SILVER;
+    data.kycStatus = electricianKycStatus(data);
 
     const dealer = this.dealerRepository.create(data);
     return this.dealerRepository.save(dealer);
@@ -360,6 +362,7 @@ export class DealerService {
     tier?: MemberTier,
     state?: string,
     city?: string,
+    district?: string,
     bankLinked?: boolean,
     appInstalled?: boolean,
     dateFrom?: string,
@@ -411,6 +414,10 @@ export class DealerService {
 
     if (city) {
       queryBuilder.andWhere('LOWER(TRIM(dealer.town)) = LOWER(TRIM(:city))', { city });
+    }
+
+    if (district) {
+      queryBuilder.andWhere('LOWER(TRIM(dealer.district)) = LOWER(TRIM(:district))', { district });
     }
 
     if (bankLinked !== undefined) {
@@ -498,7 +505,12 @@ export class DealerService {
     const result = await this.dealerRepository.createQueryBuilder()
       .update()
       .set({ kycStatus: 'verified' as any, kycRejectionReason: null })
-      .where('"kycStatus" <> :status', { status: 'verified' })
+      .where('"kycStatus" = :status', { status: 'pending' })
+      .andWhere(`(
+        NULLIF(BTRIM(COALESCE("aadharFrontImage", '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE("panDocument", '')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE("gstDocument", '')), '') IS NOT NULL
+      )`)
       .execute();
     return { approved: result.affected ?? 0 };
   }
@@ -1161,6 +1173,22 @@ export class DealerService {
             .filter((city) => city !== '' && city !== '?'),
         ),
       ).sort((a, b) => a.localeCompare(b)),
+    };
+  }
+
+  async getDistinctDistricts(state?: string): Promise<{ districts: string[] }> {
+    const query = this.dealerRepository
+      .createQueryBuilder('dealer')
+      .select('DISTINCT dealer.district', 'district')
+      .where('dealer.district IS NOT NULL')
+      .andWhere(`TRIM(dealer.district) <> ''`);
+    if (state) {
+      query.andWhere('LOWER(TRIM(dealer.state)) = LOWER(TRIM(:state))', { state });
+    }
+    const rows = await query.orderBy('dealer.district', 'ASC').getRawMany();
+    return {
+      districts: Array.from(new Set(rows.map((row) => String(row.district ?? '').trim()).filter((district) => district && district !== '?')))
+        .sort((a, b) => a.localeCompare(b)),
     };
   }
 
