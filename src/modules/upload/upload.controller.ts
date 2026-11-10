@@ -49,8 +49,6 @@ const KYC_IMAGE_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif', 'tiff', 'bmp', 
 @ApiBearerAuth('JWT-auth')
 @Controller('upload')
 export class UploadController implements OnModuleInit, OnModuleDestroy {
-  constructor(private configService: ConfigService) {}
-
   onModuleInit() {
     // Load OCR language data in the background during server startup so the
     // first user upload does not pay the several-second worker startup cost.
@@ -66,6 +64,7 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
     maxWidth: number,
     maxHeight: number,
     effort = 4,
+    limitInputPixels?: number,
   ) {
     const baseName = file.filename.slice(0, file.filename.length - extname(file.filename).length);
     const optimizedFilename = `${baseName}-optimized.webp`;
@@ -104,7 +103,52 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
       if (filename !== file.filename) await rename(file.path, join(file.destination, filename));
       return { filename, size: file.size };
     }
-    const result = await this.optimizeImage(file, 1800, 1800, 1);
+
+    const looksLikeHeic = /\.(heic|heif)$/i.test(file.originalname || file.filename) ||
+      /^(image\/heic|image\/heif)$/i.test(file.mimetype || '');
+    const looksLikeBmp = /\.bmp$/i.test(file.originalname || file.filename) ||
+      /^image\/bmp$/i.test(file.mimetype || '');
+    let format: string | undefined;
+    try {
+      format = (await sharp(file.path, { limitInputPixels: 60_000_000 }).metadata()).format;
+    } catch {
+      // Explicit converters below handle formats that the installed libvips
+      // build cannot decode directly (notably HEIC on some deployments).
+    }
+
+    if (looksLikeHeic || looksLikeBmp) {
+      try {
+        const source = await readFile(file.path);
+        const bmp = looksLikeBmp ? decodeBmp.decode(source) : undefined;
+        const jpeg = looksLikeBmp
+          ? await sharp(bmp.data, {
+            raw: { width: bmp.width, height: bmp.height, channels: 4 },
+          }).jpeg({ quality: 90 }).toBuffer()
+          : await convertHeic({ buffer: source, format: 'JPEG', quality: 0.9 });
+        const convertedFilename = `${basename(file.filename, extname(file.filename))}-source.jpg`;
+        const convertedPath = join(file.destination, convertedFilename);
+        await writeFile(convertedPath, jpeg);
+        await unlink(file.path).catch(() => undefined);
+        file = {
+          ...file,
+          filename: convertedFilename,
+          originalname: convertedFilename,
+          mimetype: 'image/jpeg',
+          path: convertedPath,
+          size: jpeg.length,
+        };
+        format = 'jpeg';
+      } catch {
+        format = undefined;
+      }
+    }
+
+    if (!format || !KYC_IMAGE_FORMATS.has(format)) {
+      await unlink(file.path).catch(() => undefined);
+      throw new BadRequestException('Choose a valid photo or PDF document.');
+    }
+
+    const result = await this.optimizeImage(file, 1800, 1800, 1, 60_000_000);
     if (result.filename === file.filename) {
       await unlink(file.path).catch(() => undefined);
       throw new BadRequestException('Unable to read this photo. Please choose another photo or PDF.');
@@ -140,14 +184,6 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
       await unlink(preparedPath).catch(() => undefined);
       throw new BadRequestException(invalidKycDocumentMessage(documentType));
     }
-  }
-
-  private getBaseUrl() {
-    const appUrl = this.configService.get<string>('APP_URL');
-    if (appUrl) return appUrl;
-    const port = this.configService.get<string>('PORT') || '3001';
-    const host = this.configService.get<string>('SERVER_HOST') || 'localhost';
-    return `http://${host}:${port}`;
   }
 
   // Admin endpoints return relative paths so stored URLs don't depend on server IP
@@ -373,7 +409,7 @@ export class UploadController implements OnModuleInit, OnModuleDestroy {
     if (!file) throw new BadRequestException('No file uploaded');
     const result = await this.prepareKycDocument(file);
     await this.validatePreparedKycDocument(file, result, req);
-    const imageUrl = `${this.getBaseUrl().replace(/\/$/, '')}/uploads/aadhar/${result.filename}`;
+    const imageUrl = this.buildFileUrl(req, `aadhar/${result.filename}`);
     return { url: imageUrl, filename: result.filename, originalName: file.originalname, size: result.size };
   }
 }
