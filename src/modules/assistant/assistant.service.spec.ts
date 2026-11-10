@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { Product } from '../../database/entities/product.entity';
 import { Settings } from '../../database/entities/settings.entity';
-import { AssistantService, extractAssistantText, getLanguageInstructions } from './assistant.service';
+import { AssistantService, extractAssistantText } from './assistant.service';
 
 describe('AssistantService', () => {
   const query = {
@@ -34,13 +34,6 @@ describe('AssistantService', () => {
     ])).toBe('Hello from SRV');
   });
 
-  it('requires native scripts and natural wording for Hindi and Punjabi replies', () => {
-    expect(getLanguageInstructions('Hindi')).toContain('Devanagari');
-    expect(getLanguageInstructions('Hindi')).toContain('even when the user types Hindi with English letters');
-    expect(getLanguageInstructions('Punjabi')).toContain('Gurmukhi');
-    expect(getLanguageInstructions('Punjabi')).toContain('conversational Punjabi commonly spoken in Punjab');
-  });
-
   it('explains setup when the server has no API key', async () => {
     const config = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
     const service = new AssistantService(config, products, settings);
@@ -64,6 +57,21 @@ describe('AssistantService', () => {
     expect(request.instructions).toContain('Punjabi');
     expect(request.store).toBe(false);
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer test-key');
+  });
+
+  it('asks for native Punjabi script and conversational phrasing in voice mode', async () => {
+    const config = { get: jest.fn((key: string) => key === 'OPENAI_API_KEY' ? 'test-key' : undefined) } as unknown as ConfigService;
+    const service = new AssistantService(config, products, settings);
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ਸਤ ਸ੍ਰੀ ਅਕਾਲ' }] }],
+    }) });
+    global.fetch = fetchMock as typeof fetch;
+
+    await service.chat({ message: 'tusi kive ho', language: 'Punjabi', voiceMode: true });
+    const request = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(request.instructions).toContain('natural Punjabi sentences');
+    expect(request.instructions).toContain('natural Gurmukhi Punjabi');
+    expect(request.instructions).toContain('avoid Hindi wording');
   });
 
   it('prefers free Groq chat without sending catalog data for QR help', async () => {
@@ -121,12 +129,10 @@ describe('AssistantService', () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ text: 'ਸਤ ਸ੍ਰੀ ਅਕਾਲ' }) });
     global.fetch = fetchMock as typeof fetch;
 
-    const result = await service.transcribe({ buffer: Buffer.from('audio'), originalname: 'voice.m4a', mimetype: 'audio/mp4' } as Express.Multer.File, 'Punjabi');
+    const result = await service.transcribe({ buffer: Buffer.from('audio'), originalname: 'voice.m4a', mimetype: 'audio/mp4' } as Express.Multer.File);
     expect(result.text).toBe('ਸਤ ਸ੍ਰੀ ਅਕਾਲ');
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.groq.com/openai/v1/audio/transcriptions');
     expect((fetchMock.mock.calls[0][1].body as FormData).get('model')).toBe('whisper-large-v3-turbo');
-    expect((fetchMock.mock.calls[0][1].body as FormData).get('language')).toBe('pa');
-    expect((fetchMock.mock.calls[0][1].body as FormData).get('prompt')).toContain('ਕਿਊ ਆਰ');
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer groq-test');
   });
 });

@@ -7,6 +7,15 @@ describe('extractQrCodeCandidates', () => {
     ]);
   });
 
+  it('accepts an SRV backend ID decoded from Code 39', () => {
+    expect(extractQrCodeCandidates('BC000K00001B339C7000')).toEqual([
+      'BC000K00001B339C7000',
+    ]);
+    expect(extractQrCodeCandidates('*BC000K00001B339C7000*')).toEqual([
+      'BC000K00001B339C7000',
+    ]);
+  });
+
   it('accepts legacy QR image filenames', () => {
     expect(extractQrCodeCandidates('jMA8391758613990308.png')).toEqual([
       'jMA8391758613990308',

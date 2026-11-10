@@ -12,6 +12,17 @@ import { Settings } from '../../database/entities/settings.entity';
 import { numericSetting } from '../../common/utils/app-settings.util';
 import { NotificationStatus, RedemptionStatus, TransactionSource, TransactionType, UserRole } from '../../common/enums';
 import { Notification } from '../../database/entities/notification.entity';
+import { resolveSpendableRewardBalance } from '../../common/utils/reward-balance.util';
+
+export function currentRedemptionPaymentDetails(row: any, user?: any) {
+  return {
+    upiId: user?.upiId || row.upiId || null,
+    upiQrCodeImage: user?.upiQrCodeImage || row.upiQrCodeImage || null,
+    bankAccount: user?.bankAccount || row.bankAccount || null,
+    ifsc: user?.ifsc || row.ifsc || null,
+    accountHolderName: user?.accountHolderName || row.accountHolderName || null,
+  };
+}
 
 @Injectable()
 export class RedemptionService {
@@ -91,9 +102,13 @@ export class RedemptionService {
       redemption.role === UserRole.DEALER &&
       (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
 
-    const balanceBefore = Number(
-      isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
-    );
+    const balanceBefore = isDealerBonus
+      ? Number((user as any).bonusPoints ?? 0)
+      : resolveSpendableRewardBalance(
+          (user as any).walletBalance,
+          (user as any).totalPoints,
+          redemption.role === UserRole.DEALER,
+        );
     const refundPoints = Number(redemption.points ?? 0);
     const balanceAfter = balanceBefore + refundPoints;
 
@@ -104,7 +119,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Number((user as any).totalPoints ?? 0) + refundPoints, manager) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, balanceAfter, manager) as any,
       );
     }
 
@@ -140,9 +155,13 @@ export class RedemptionService {
       redemption.role === UserRole.DEALER &&
       (redemption.type === 'dealer_bonus_bank_transfer' || redemption.type === 'bonus_withdrawal');
 
-    const balanceBefore = Number(
-      isDealerBonus ? (user as any).bonusPoints ?? 0 : (user as any).walletBalance ?? 0,
-    );
+    const balanceBefore = isDealerBonus
+      ? Number((user as any).bonusPoints ?? 0)
+      : resolveSpendableRewardBalance(
+          (user as any).walletBalance,
+          (user as any).totalPoints,
+          redemption.role === UserRole.DEALER,
+        );
     const lockedPoints = Number(redemption.points ?? 0);
 
     if (balanceBefore < lockedPoints) {
@@ -162,7 +181,7 @@ export class RedemptionService {
     } else {
       await this.getUserRepositoryByRole(redemption.role, manager).update(
         redemption.userId,
-        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, Math.max(0, Number((user as any).totalPoints ?? 0) - lockedPoints), manager) as any,
+        await this.buildUserBalanceUpdate(redemption.role, balanceAfter, balanceAfter, manager) as any,
       );
     }
 
@@ -264,27 +283,47 @@ export class RedemptionService {
     }
     const [electricians, dealers, appUsers, counterboys, statusRows] = await Promise.all([
       idsByRole.get(UserRole.ELECTRICIAN)?.length
-        ? this.electricianRepository.find({ where: { id: In(idsByRole.get(UserRole.ELECTRICIAN)!) }, select: ['id', 'name', 'phone', 'electricianCode'] })
+        ? this.electricianRepository.find({ where: { id: In(idsByRole.get(UserRole.ELECTRICIAN)!) }, select: ['id', 'name', 'phone', 'electricianCode', 'upiId', 'upiQrCodeImage', 'bankAccount', 'ifsc', 'accountHolderName'] })
         : Promise.resolve([]),
       idsByRole.get(UserRole.DEALER)?.length
-        ? this.dealerRepository.find({ where: { id: In(idsByRole.get(UserRole.DEALER)!) }, select: ['id', 'name', 'phone', 'dealerCode'] })
+        ? this.dealerRepository.find({ where: { id: In(idsByRole.get(UserRole.DEALER)!) }, select: ['id', 'name', 'phone', 'dealerCode', 'upiId', 'upiQrCodeImage', 'bankAccount', 'ifsc', 'accountHolderName'] })
         : Promise.resolve([]),
       idsByRole.get(UserRole.USER)?.length
-        ? this.appUserRepository.find({ where: { id: In(idsByRole.get(UserRole.USER)!) }, select: ['id', 'name', 'phone', 'userCode'] })
+        ? this.appUserRepository.find({ where: { id: In(idsByRole.get(UserRole.USER)!) }, select: ['id', 'name', 'phone', 'userCode', 'upiId', 'upiQrCodeImage', 'bankAccount', 'ifsc', 'accountHolderName'] })
         : Promise.resolve([]),
       idsByRole.get(UserRole.COUNTERBOY)?.length
-        ? this.counterboyRepository.find({ where: { id: In(idsByRole.get(UserRole.COUNTERBOY)!) }, select: ['id', 'name', 'phone', 'counterboyCode'] })
+        ? this.counterboyRepository.find({ where: { id: In(idsByRole.get(UserRole.COUNTERBOY)!) }, select: ['id', 'name', 'phone', 'counterboyCode', 'upiId', 'upiQrCodeImage', 'bankAccount', 'ifsc', 'accountHolderName'] })
         : Promise.resolve([]),
       summaryQuery.select('redemption.status', 'status')
         .addSelect('COUNT(*)::int', 'count')
         .addSelect('COALESCE(SUM(redemption.amount), 0)', 'amount')
         .groupBy('redemption.status').getRawMany(),
     ]);
-    const userMap = new Map<string, { name: string; phone: string; code?: string | null }>();
-    electricians.forEach((user) => userMap.set(`${UserRole.ELECTRICIAN}:${user.id}`, { name: user.name, phone: user.phone, code: user.electricianCode }));
-    dealers.forEach((user) => userMap.set(`${UserRole.DEALER}:${user.id}`, { name: user.name, phone: user.phone, code: user.dealerCode }));
-    appUsers.forEach((user) => userMap.set(`${UserRole.USER}:${user.id}`, { name: user.name, phone: user.phone, code: user.userCode }));
-    counterboys.forEach((user) => userMap.set(`${UserRole.COUNTERBOY}:${user.id}`, { name: user.name, phone: user.phone, code: user.counterboyCode }));
+    type CurrentPaymentProfile = {
+      name: string;
+      phone: string;
+      code?: string | null;
+      upiId?: string | null;
+      upiQrCodeImage?: string | null;
+      bankAccount?: string | null;
+      ifsc?: string | null;
+      accountHolderName?: string | null;
+    };
+    const paymentProfile = (user: any, code?: string | null): CurrentPaymentProfile => ({
+      name: user.name,
+      phone: user.phone,
+      code,
+      upiId: user.upiId ?? null,
+      upiQrCodeImage: user.upiQrCodeImage ?? null,
+      bankAccount: user.bankAccount ?? null,
+      ifsc: user.ifsc ?? null,
+      accountHolderName: user.accountHolderName ?? null,
+    });
+    const userMap = new Map<string, CurrentPaymentProfile>();
+    electricians.forEach((user) => userMap.set(`${UserRole.ELECTRICIAN}:${user.id}`, paymentProfile(user, user.electricianCode)));
+    dealers.forEach((user) => userMap.set(`${UserRole.DEALER}:${user.id}`, paymentProfile(user, user.dealerCode)));
+    appUsers.forEach((user) => userMap.set(`${UserRole.USER}:${user.id}`, paymentProfile(user, user.userCode)));
+    counterboys.forEach((user) => userMap.set(`${UserRole.COUNTERBOY}:${user.id}`, paymentProfile(user, user.counterboyCode)));
     const enrichedData = data.map((row) => {
       const user = userMap.get(`${row.role}:${row.userId}`);
       return {
@@ -292,6 +331,7 @@ export class RedemptionService {
         userName: row.userName || user?.name || 'Unknown user',
         userPhone: user?.phone ?? null,
         userCode: user?.code ?? null,
+        ...currentRedemptionPaymentDetails(row, user),
       };
     });
     const summary = { approved: { count: 0, amount: 0 }, pending: { count: 0, amount: 0 }, rejected: { count: 0, amount: 0 }, processing: { count: 0, amount: 0 }, completed: { count: 0, amount: 0 } } as Record<string, { count: number; amount: number }>;

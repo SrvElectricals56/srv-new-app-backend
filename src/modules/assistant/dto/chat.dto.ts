@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
 
 export class ChatTurnDto {
   @IsIn(['user', 'assistant'])
@@ -25,6 +25,10 @@ export class ChatDto {
   @ValidateNested({ each: true })
   @Type(() => ChatTurnDto)
   history?: ChatTurnDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  voiceMode?: boolean;
 }
 
 export class SpeechDto {
@@ -32,12 +36,6 @@ export class SpeechDto {
   @MaxLength(1200)
   text: string;
 
-  @IsOptional()
-  @IsIn(['English', 'Hindi', 'Punjabi'])
-  language?: 'English' | 'Hindi' | 'Punjabi';
-}
-
-export class TranscriptionDto {
   @IsOptional()
   @IsIn(['English', 'Hindi', 'Punjabi'])
   language?: 'English' | 'Hindi' | 'Punjabi';

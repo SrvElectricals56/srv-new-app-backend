@@ -34,6 +34,7 @@ import { TierService } from '../../common/services/tier.service';
 import { extractQrCodeCandidates } from '../../common/utils/qr-code.util';
 import { hasBankTransferDestination } from '../../common/utils/bank-transfer.util';
 import { isQrRedeemable } from '../../common/utils/qr-eligibility.util';
+import { resolveSpendableRewardBalance } from '../../common/utils/reward-balance.util';
 
 const PRODUCT_ORDER_STATUS_LABELS: Record<ProductOrderStatus, string> = {
   [ProductOrderStatus.PENDING]: 'Pending',
@@ -398,6 +399,20 @@ export class MobileService {
     const exactMatch = await exactQuery.getOne();
     if (exactMatch) return exactMatch;
 
+    const uuidCandidates = qrCandidates.filter((candidate) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate),
+    );
+    if (uuidCandidates.length) {
+      const idQuery = manager
+        .getRepository(QrCode)
+        .createQueryBuilder('qr')
+        .innerJoinAndSelect('qr.product', 'product')
+        .where('qr.id IN (:...qrIds)', { qrIds: uuidCandidates });
+      if (lock) idQuery.setLock('pessimistic_write');
+      const idMatch = await idQuery.getOne();
+      if (idMatch) return idMatch;
+    }
+
     if (numericCandidates.length) {
       const legacyIdQuery = manager
         .getRepository(QrCode)
@@ -458,14 +473,14 @@ export class MobileService {
     user: any,
     role: UserRole,
     newBalance: number,
-    pointsDelta: number,
+    _pointsDelta: number,
   ) {
     const updateData: Record<string, any> = {
       walletBalance: newBalance,
     };
 
     if (role !== UserRole.DEALER) {
-      const syncedPoints = Math.max(0, Number(user.totalPoints ?? 0) + pointsDelta);
+      const syncedPoints = Math.max(0, Number(newBalance ?? 0));
       updateData.totalPoints = syncedPoints;
 
       if (role === UserRole.ELECTRICIAN) {
@@ -593,17 +608,14 @@ export class MobileService {
     }
 
     const network = normalizedRole === UserRole.DEALER ? await this.getDealerElectricians(userId, 1, 1) : null;
+    const balance = resolveSpendableRewardBalance(
+      (user as any)?.walletBalance,
+      (user as any)?.totalPoints,
+      normalizedRole === UserRole.DEALER,
+    );
     // Dealer commission is separate from the transferable points wallet.
     const isDealer = normalizedRole === UserRole.DEALER;
-    const storedBalance = Number((user as any)?.walletBalance ?? 0);
-    const totalPoints = isDealer
-      ? storedBalance
-      : Number((user as any)?.totalPoints ?? 0);
-    // Older accounts can have reward points recorded in totalPoints while
-    // walletBalance is stale. Reward points are the spendable balance for all
-    // non-dealer roles, so expose the higher value and let the next write
-    // synchronize both columns.
-    const balance = isDealer ? storedBalance : Math.max(storedBalance, totalPoints);
+    const totalPoints = balance;
 
     return {
       balance,
@@ -1521,11 +1533,15 @@ export class MobileService {
 
       await manager.getRepository(Product).increment({ id: effectiveProduct.id }, 'totalScanned', 1);
 
-      const balanceBefore = Number(userRecord.walletBalance ?? 0);
+      const balanceBefore = resolveSpendableRewardBalance(
+        userRecord.walletBalance,
+        userRecord.totalPoints,
+        userRole === UserRole.DEALER,
+      );
       const newScans = Number(userRecord.totalScans ?? 0) + 1;
       const newWallet = balanceBefore + points;
       const updateData: Record<string, any> = {
-        totalPoints: Number(userRecord.totalPoints ?? 0) + points,
+        totalPoints: newWallet,
         totalScans: newScans,
         walletBalance: newWallet,
         lastActivityAt: new Date(),
@@ -1860,7 +1876,10 @@ export class MobileService {
         throw new BadRequestException('Please add bank details before requesting transfer');
       }
 
-      const currentBalance = Number((user as any).walletBalance ?? 0);
+      const currentBalance = resolveSpendableRewardBalance(
+        (user as any).walletBalance,
+        (user as any).totalPoints,
+      );
       if (currentBalance < amount) {
         throw new BadRequestException('Insufficient points balance');
       }
@@ -1966,11 +1985,11 @@ export class MobileService {
       // bonusPoints are a separate cash-withdrawal balance and must not block
       // dealers from spending reward points shown in the Gift Store.
       const isDealerRole = normalizedRole === UserRole.DEALER;
-      const storedBalance = Number((user as any).walletBalance ?? 0);
-      const totalPoints = isDealerRole ? storedBalance : Number((user as any).totalPoints ?? 0);
-      // Keep gift checkout consistent with the wallet response and repair
-      // legacy rows where admin-edited totalPoints exceeded walletBalance.
-      const currentBalance = isDealerRole ? storedBalance : Math.max(storedBalance, totalPoints);
+      const currentBalance = resolveSpendableRewardBalance(
+        (user as any).walletBalance,
+        (user as any).totalPoints,
+        isDealerRole,
+      );
 
       if (currentBalance < pointsRequired) {
         throw new BadRequestException('Insufficient points for this redemption');
@@ -2096,7 +2115,11 @@ export class MobileService {
       const sender = await this.getUserByRoleForUpdate(userId, role, manager);
       if (!sender) throw new NotFoundException('Sender not found');
 
-      const senderBalanceBefore = Number((sender as any).walletBalance ?? 0);
+      const senderBalanceBefore = resolveSpendableRewardBalance(
+        (sender as any).walletBalance,
+        (sender as any).totalPoints,
+        normalizedRole === UserRole.DEALER,
+      );
       if (senderBalanceBefore < data.points) {
         throw new BadRequestException('Insufficient balance');
       }
@@ -2124,7 +2147,11 @@ export class MobileService {
       );
       if (!receiver) throw new NotFoundException('Receiver not found');
 
-      const receiverBalanceBefore = Number((receiver as any).walletBalance ?? 0);
+      const receiverBalanceBefore = resolveSpendableRewardBalance(
+        (receiver as any).walletBalance,
+        (receiver as any).totalPoints,
+        receiverData.role === UserRole.DEALER,
+      );
       const senderNewBalance = senderBalanceBefore - data.points;
       const receiverNewBalance = receiverBalanceBefore + data.points;
 

@@ -20,6 +20,13 @@ function cleanCandidate(value: unknown): string | null {
     candidate = candidate.slice(1, -1).trim();
   }
 
+  // Some Code 39 readers include the start/stop asterisks in the decoded
+  // value. SRV reward IDs never contain those sentinels, so remove only a
+  // matching outer pair and preserve the actual backend ID unchanged.
+  if (candidate.length > 2 && candidate.startsWith('*') && candidate.endsWith('*')) {
+    candidate = candidate.slice(1, -1).trim();
+  }
+
   candidate = candidate
     .replace(/[?#].*$/, '')
     .replace(/\.(?:png|jpe?g|webp)$/i, '')

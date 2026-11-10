@@ -22,19 +22,16 @@ describe('ElectricianService admin point fields', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
-  it('updates total points without changing wallet balance', async () => {
+  it('makes an admin total-points update immediately spendable', async () => {
     const data: Record<string, unknown> = { totalPoints: 1500 };
     await normalize(data);
-    expect(data).toEqual({ totalPoints: 1500, tier: 'Gold' });
-    expect(data).not.toHaveProperty('walletBalance');
+    expect(data).toEqual({ totalPoints: 1500, walletBalance: 1500, tier: 'Gold' });
   });
 
-  it('updates wallet balance without changing total points or tier', async () => {
+  it('keeps points and tier aligned when wallet balance is edited', async () => {
     const data: Record<string, unknown> = { walletBalance: 275 };
     await normalize(data);
-    expect(data).toEqual({ walletBalance: 275 });
-    expect(data).not.toHaveProperty('totalPoints');
-    expect(data).not.toHaveProperty('tier');
+    expect(data).toEqual({ walletBalance: 275, totalPoints: 275, tier: 'Silver' });
   });
 
   it('rejects negative values independently', async () => {

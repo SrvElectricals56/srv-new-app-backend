@@ -395,25 +395,26 @@ export class SettingsService {
       if (limits[0] !== 0 || limits.some((value, i) => i > 0 && value <= limits[i - 1])) {
         throw new BadRequestException('Tier thresholds must start at 0 and increase from Silver to Diamond');
       }
-      // Existing deployments can have either the original table-specific
-      // enum (for example electricians_tier_enum) or the shared MemberTier
-      // enum created by TypeORM synchronization. Resolve the real column type
-      // instead of assuming the migration-era name, otherwise PostgreSQL
-      // rejects the bulk settings transaction with SQLSTATE 42804.
-      const [tierColumn] = await manager.query(
-        `SELECT udt_name
-           FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'tier'`,
+      // TypeORM installations created at different times can use either the
+      // legacy table-specific enum name or the shared "MemberTier" enum name.
+      // Read the real column type instead of casting to a stale hard-coded
+      // name, which caused PostgreSQL 42804 when App Settings were saved.
+      const [column] = await manager.query(
+        `SELECT c.udt_schema AS schema, c.udt_name AS name
+           FROM information_schema.columns c
+          WHERE c.table_schema = current_schema()
+            AND c.table_name = $1
+            AND c.column_name = 'tier'`,
         [group.table],
       );
-      const enumType = String(tierColumn?.udt_name ?? '');
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(enumType)) {
-        throw new BadRequestException(`Unable to resolve ${group.table}.tier database type`);
+      if (!column?.name) {
+        throw new BadRequestException(`Tier column is not configured for ${group.table}`);
       }
+      const quoteIdentifier = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+      const enumType = `${quoteIdentifier(column.schema || 'public')}.${quoteIdentifier(column.name)}`;
 
-      // Table names are fixed above; enumType is validated as a PostgreSQL
-      // identifier before interpolation.
-      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::text::"${enumType}"
+      // Only fixed table/metric identifiers from the groups above are interpolated.
+      await manager.query(`UPDATE ${group.table} e SET tier = next.tier::${enumType}
         FROM (SELECT e.id, CASE WHEN ${group.metric} >= $3 THEN 'Diamond'
           WHEN ${group.metric} >= $2 THEN 'Platinum' WHEN ${group.metric} >= $1 THEN 'Gold'
           ELSE 'Silver' END AS tier FROM ${group.table} e) next

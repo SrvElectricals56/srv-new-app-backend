@@ -3,7 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AssistantService } from './assistant.service';
-import { ChatDto, SpeechDto, TranscriptionDto } from './dto/chat.dto';
+import { ChatDto, SpeechDto } from './dto/chat.dto';
 
 @ApiTags('SRV Chat')
 @Controller('mobile/assistant')
@@ -23,8 +23,8 @@ export class AssistantController {
   @Throttle({ default: { limit: 4, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   @ApiOperation({ summary: 'Transcribe a short SRV Chat voice message' })
-  transcribe(@UploadedFile() file: Express.Multer.File | undefined, @Body() body: TranscriptionDto) {
-    return this.assistant.transcribe(file, body.language);
+  transcribe(@UploadedFile() file?: Express.Multer.File) {
+    return this.assistant.transcribe(file);
   }
 
   @Post('speech')

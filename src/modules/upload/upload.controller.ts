@@ -19,6 +19,11 @@ const convertHeic: any = require('heic-convert');
 const decodeBmp: any = require('bmp-js');
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { MobileJwtGuard } from '../mobile-auth/mobile-jwt.guard';
+import {
+  invalidKycDocumentMessage,
+  type KycDocumentType,
+  validateKycDocumentFile,
+} from './kyc-document-validator';
 const UPLOAD_DIR = join(process.cwd(), 'uploads');
 const BANNER_DIR = join(UPLOAD_DIR, 'banners');
 const PRODUCT_DIR = join(UPLOAD_DIR, 'products');
@@ -138,7 +143,45 @@ export class UploadController {
     return result;
   }
 
-  // Store relative paths so documents work on phones and after server changes.
+  private requestedKycDocumentType(req: Request): KycDocumentType | null {
+    const raw = req.headers?.['x-document-type'];
+    const value = String(Array.isArray(raw) ? raw[0] : raw || '').toLowerCase();
+    return ['aadhar-front', 'aadhar-back', 'pan', 'gst'].includes(value)
+      ? value as KycDocumentType
+      : null;
+  }
+
+  private async validatePreparedKycDocument(
+    file: Express.Multer.File,
+    prepared: { filename: string; size: number },
+    req: Request,
+  ) {
+    const documentType = this.requestedKycDocumentType(req);
+    if (!documentType) return;
+
+    const preparedPath = join(file.destination, prepared.filename);
+    let valid = false;
+    try {
+      valid = await validateKycDocumentFile(preparedPath, file.mimetype, documentType);
+    } catch {
+      await unlink(preparedPath).catch(() => undefined);
+      throw new BadRequestException('Unable to validate this document. Please use a clear image or PDF and try again.');
+    }
+    if (!valid) {
+      await unlink(preparedPath).catch(() => undefined);
+      throw new BadRequestException(invalidKycDocumentMessage(documentType));
+    }
+  }
+
+  private getBaseUrl() {
+    const appUrl = this.configService.get<string>('APP_URL');
+    if (appUrl) return appUrl;
+    const port = this.configService.get<string>('PORT') || '3001';
+    const host = this.configService.get<string>('SERVER_HOST') || 'localhost';
+    return `http://${host}:${port}`;
+  }
+
+  // Admin endpoints return relative paths so stored URLs don't depend on server IP
   private buildFileUrl(_req: Request, subPath: string): string {
     return `/uploads/${subPath}`;
   }
@@ -329,6 +372,7 @@ export class UploadController {
   async uploadKycDocument(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
     const result = await this.prepareKycDocument(file);
+    await this.validatePreparedKycDocument(file, result, req);
     return { url: this.buildFileUrl(req, `aadhar/${result.filename}`), filename: result.filename };
   }
 
@@ -359,7 +403,8 @@ export class UploadController {
   async uploadAadharImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('No file uploaded');
     const result = await this.prepareKycDocument(file);
-    const imageUrl = this.buildFileUrl(req, `aadhar/${result.filename}`);
+    await this.validatePreparedKycDocument(file, result, req);
+    const imageUrl = `${this.getBaseUrl().replace(/\/$/, '')}/uploads/aadhar/${result.filename}`;
     return { url: imageUrl, filename: result.filename, originalName: file.originalname, size: result.size };
   }
 }

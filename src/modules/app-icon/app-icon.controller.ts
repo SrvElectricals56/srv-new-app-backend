@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminRole } from '../../common/enums';
+import { Public } from '../../common/decorators/public.decorator';
 const ICON_UPLOAD_DIR = join(process.cwd(), 'uploads', 'icons');
 if (!existsSync(ICON_UPLOAD_DIR)) {
   mkdirSync(ICON_UPLOAD_DIR, { recursive: true });
@@ -86,7 +87,7 @@ export class AppIconController {
   }
 
   @Get('active')
-  @SetMetadata('isPublic', true)
+  @Public()
   @ApiOperation({ summary: 'Get currently active app icon' })
   @ApiResponse({ status: 200, description: 'Active app icon' })
   findActive() {
