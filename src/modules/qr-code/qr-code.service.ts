@@ -446,16 +446,17 @@ export class QrCodeService {
     // ── Generate all codes in-memory (pure CPU, no async) ─────────────────
     const codes: string[] = [];
     const seen = new Set<string>();
-    const batchNoStr = batchNo.toString(36).padStart(4, '0').toUpperCase();
 
     for (let i = 0; i < quantity; i++) {
       let code: string;
       let attempts = 0;
       do {
-        // Fast: no crypto hash — combine batch+seq+random hex suffix
-        const seq = (i + 1).toString(36).padStart(5, '0').toUpperCase();
-        const rand = randomBytes(3).toString('hex').toUpperCase(); // 6 chars
-        code = `${batchNoStr}${seq}${rand}`.substring(0, 20).padEnd(20, '0');
+        // Keep the original production QR format: a full 20-character
+        // identifier with no artificial zero padding. The previous compact
+        // batch/sequence implementation produced values such as
+        // `0010000018BDF6700000`, which made newly generated QRs appear to
+        // contain only zeroes in the admin preview and printed labels.
+        code = this.generateFixedLengthQrCode(batchNo, i + 1);
         attempts++;
       } while (seen.has(code) && attempts < 10);
       seen.add(code);
