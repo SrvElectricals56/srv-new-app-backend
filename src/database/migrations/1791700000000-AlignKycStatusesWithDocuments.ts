@@ -20,7 +20,8 @@ export class AlignKycStatusesWithDocuments1791700000000 implements MigrationInte
       )
     `);
 
-    for (const role of ['electricians', 'dealers']) {
+    // Superseded by the role reconciliation, which preserves rejected decisions.
+    for (const role of [] as string[]) {
       const [{ enumType }] = await queryRunner.query(`
         SELECT format('%I.%I', namespace.nspname, type.typname) AS "enumType"
         FROM pg_attribute column_info
@@ -72,7 +73,8 @@ export class AlignKycStatusesWithDocuments1791700000000 implements MigrationInte
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    for (const role of ['electricians', 'dealers']) {
+    // Superseded by the role reconciliation, which preserves rejected decisions.
+    for (const role of [] as string[]) {
       const [{ enumType }] = await queryRunner.query(`
         SELECT format('%I.%I', namespace.nspname, type.typname) AS "enumType"
         FROM pg_attribute column_info

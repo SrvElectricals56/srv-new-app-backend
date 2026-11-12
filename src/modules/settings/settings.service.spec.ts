@@ -16,7 +16,7 @@ describe('SettingsService tier synchronization', () => {
         ]),
       }),
       query: jest.fn()
-        .mockResolvedValueOnce([{ udt_name: 'MemberTier' }])
+        .mockResolvedValueOnce([{ schema: 'public', name: 'MemberTier' }])
         .mockResolvedValueOnce([]),
     };
 
@@ -29,7 +29,7 @@ describe('SettingsService tier synchronization', () => {
     );
     expect(manager.query).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('tier = next.tier::text::"MemberTier"'),
+      expect.stringContaining('tier = next.tier::"public"."MemberTier"'),
       [1001, 5001, 10001],
     );
   });
@@ -40,7 +40,7 @@ describe('SettingsService tier synchronization', () => {
         find: jest.fn().mockResolvedValue([]),
       }),
       query: jest.fn()
-        .mockResolvedValueOnce([{ udt_name: 'dealers_tier_enum' }])
+        .mockResolvedValueOnce([{ schema: 'public', name: 'dealers_tier_enum' }])
         .mockResolvedValueOnce([]),
     };
 
@@ -48,7 +48,7 @@ describe('SettingsService tier synchronization', () => {
 
     expect(manager.query).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('tier = next.tier::text::"dealers_tier_enum"'),
+      expect.stringContaining('tier = next.tier::"public"."dealers_tier_enum"'),
       [11, 26, 51],
     );
   });
